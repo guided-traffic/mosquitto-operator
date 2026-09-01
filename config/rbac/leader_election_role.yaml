@@ -6,8 +6,15 @@
 #
 # This is a namespaced Role rather than a ClusterRole because the Lease named
 # mosquitto-operator.mko.gtrfc.com (LeaderElectionID in cmd/main.go) lives in
-# the operator's own namespace. The Helm chart grants the same leases access
-# through its ClusterRole instead, guarded by leaderElection.enabled.
+# the operator's own namespace: cmd/main.go sets no LeaderElectionNamespace, so
+# controller-runtime takes the in-cluster namespace.
+#
+# The Helm chart mirrors this rule for rule in its own templates/leader-election.yaml,
+# also as a namespaced Role, also gated on leaderElection.enabled. It used to grant
+# leases cluster-wide through the ClusterRole instead - two install paths with
+# different authority that nobody had decided. test/rbacparity now compares what both
+# paths render, keyed on (kind, apiGroup, resource), so a Role and a ClusterRole
+# carrying the same verbs no longer read as the same grant.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
