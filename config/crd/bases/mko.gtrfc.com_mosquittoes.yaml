@@ -1,0 +1,299 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: mosquittoes.mko.gtrfc.com
+spec:
+  group: mko.gtrfc.com
+  names:
+    kind: Mosquitto
+    listKind: MosquittoList
+    plural: mosquittoes
+    shortNames:
+    - mq
+    singular: mosquitto
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: Desired number of broker pods
+      jsonPath: .spec.replicas
+      name: Replicas
+      type: integer
+    - description: Number of ready broker pods
+      jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
+    - description: Current phase
+      jsonPath: .status.phase
+      name: Phase
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: Mosquitto is the Schema for the mosquittoes API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              MosquittoSpec defines the desired state of a Mosquitto broker.
+
+              Authentication posture, because this is the surprising part: the generated
+              configuration accepts anonymous clients. Mosquitto 2.x rejects every client on
+              a listener that has no configured authentication, and this API models none, so
+              the generated mosquitto.conf sets "allow_anonymous true" — without it the
+              default resource would serve nobody. Anything that can route to the broker's
+              ClusterIP Service can therefore publish and subscribe.
+
+              Setting tls does not change that. It encrypts the listener and authenticates
+              the broker to its clients; it authenticates no client to the broker, because
+              the generated configuration sets no require_certificate.
+
+              Until this API models authentication, config is where it goes: on the pinned
+              Mosquitto 2.1 image that means the password-file and acl-file plugins, whose
+              password_file and acl_file predecessors are deprecated there and removed in
+              3.0.
+            properties:
+              antiAffinity:
+                default: "off"
+                description: |-
+                  AntiAffinity controls how broker pods are spread over nodes.
+                  "off" adds nothing, "soft" is a scheduler preference, "hard" guarantees
+                  one pod per node (surplus pods stay Pending).
+                enum:
+                - "off"
+                - soft
+                - hard
+                type: string
+              config:
+                description: |-
+                  Config is extra mosquitto.conf content appended to the generated base
+                  configuration. It is written into the ConfigMap verbatim.
+
+                  The broker reads it after everything the operator generates, so a global
+                  option repeated here wins over the generated one, and a listener line here
+                  adds a listener the operator neither models nor exposes as a container or
+                  Service port. Bridges and extra log destinations are equally possible.
+                  Nothing here is validated: the broker sees it first at startup, so a
+                  rejected file is a CrashLoopBackOff rather than a rejected resource.
+                type: string
+              image:
+                description: |-
+                  Image is the Mosquitto container image. Empty means the operator default
+                  (see internal/builder for the pinned default).
+                type: string
+              replicas:
+                default: 1
+                description: Replicas is the number of broker pods in the StatefulSet.
+                format: int32
+                maximum: 9
+                minimum: 1
+                type: integer
+              resources:
+                description: Resources are the broker container resource requirements.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
+              storage:
+                description: |-
+                  Storage requests a PersistentVolumeClaim for the broker persistence
+                  directory. Empty means emptyDir.
+                properties:
+                  size:
+                    description: Size is the PVC size, e.g. "1Gi".
+                    minLength: 1
+                    type: string
+                  storageClassName:
+                    description: StorageClassName selects the storage class; empty
+                      uses the cluster default.
+                    type: string
+                required:
+                - size
+                type: object
+              tls:
+                description: |-
+                  TLS mounts an existing TLS secret into the broker pods and switches the
+                  listener to MQTTS on port 8883. The secret must carry tls.crt and tls.key
+                  (the layout cert-manager writes). The operator does NOT create or renew
+                  the secret; it only consumes one.
+
+                  It encrypts the connection and proves the broker's identity to its clients.
+                  It does not authenticate clients: see the type documentation.
+                properties:
+                  secretName:
+                    description: |-
+                      SecretName is the name of the TLS secret in the same namespace. It carries
+                      tls.crt and tls.key, which is what both ways of provisioning it produce and
+                      neither of them is this operator:
+
+                       1. Create it by hand: kubectl create secret tls <name> --cert=... --key=...
+                       2. Let cert-manager issue it, on clusters that already run cert-manager.
+                          The administrator owns the Certificate object; this operator has no
+                          cert-manager dependency and installs nothing.
+
+                      The operator does not watch this Secret. Renewing or replacing the
+                      certificate changes the Secret, but running broker pods keep serving the
+                      material they started with, so a rotation only takes effect once the pods
+                      restart (for example kubectl rollout restart statefulset/<name>).
+                    minLength: 1
+                    type: string
+                required:
+                - secretName
+                type: object
+            type: object
+          status:
+            description: MosquittoStatus is the observed state of a Mosquitto broker.
+            properties:
+              conditions:
+                description: |-
+                  Conditions follows the standard Kubernetes condition convention.
+                  Type "Ready" is always present once a pass completed.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation the operator
+                  last acted on.
+                format: int64
+                type: integer
+              phase:
+                description: 'Phase is a coarse rollout state: Pending, Progressing,
+                  Ready, Failed.'
+                type: string
+              readyReplicas:
+                description: ReadyReplicas mirrors the StatefulSet's ready replica
+                  count.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}

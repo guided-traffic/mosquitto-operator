@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mosquitto-operator
+  namespace: system
+  labels:
+    app.kubernetes.io/name: mosquitto-operator
+    app.kubernetes.io/managed-by: mko.gtrfc.com
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: mosquitto-operator
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: mosquitto-operator
+    spec:
+      # This block and the container securityContext below are the same hardening
+      # the Helm chart applies in deploy/helm/mosquitto-operator/templates/deployment.yaml.
+      # Both are shipped install paths for the same image, so they must not
+      # produce materially different pods. runAsNonRoot, the seccompProfile,
+      # allowPrivilegeEscalation and the dropped capabilities are what the
+      # restricted Pod Security Standard demands, so this Deployment also admits
+      # into a namespace labelled pod-security.kubernetes.io/enforce=restricted;
+      # readOnlyRootFilesystem goes beyond it and is safe here because the
+      # manager writes nothing outside its own memory.
+      # seccompProfile sits at pod level so a future sidecar inherits it.
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        # The image name stays "controller" so `make deploy` can rewrite it with
+        # `kustomize edit set image controller=$(IMG)`.
+        - name: manager
+          image: controller:latest
+          args:
+            # Leader election needs the Lease and Event permissions in
+            # config/rbac/leader_election_role.yaml. Without that Role the
+            # manager starts, fails to acquire the Lease, and retries forever
+            # without ever running the reconciler - it does not crash, so the
+            # symptom is a Ready pod that reconciles nothing.
+            - --leader-elect
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          ports:
+            - containerPort: 8080
+              name: metrics
+            - containerPort: 8081
+              name: health
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+          resources:
+            limits:
+              cpu: 500m
+              memory: 128Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+      serviceAccountName: mosquitto-operator
+      terminationGracePeriodSeconds: 10

@@ -1,0 +1,17 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: mosquitto-operator
+# roleRef names the ClusterRole exactly as controller-gen emits it
+# (rbac:roleName=mosquitto-operator-role in the manifests target). Kustomize only
+# rewrites a reference whose name matches a resource in the same kustomization,
+# so a mismatch here would silently leave the binding pointing at a ClusterRole
+# that the namePrefix has already renamed.
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: mosquitto-operator-role
+subjects:
+  - kind: ServiceAccount
+    name: mosquitto-operator
+    namespace: system

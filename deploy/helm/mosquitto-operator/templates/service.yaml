@@ -1,0 +1,33 @@
+{{- if .Values.metrics.enabled -}}
+{{/*
+A stable name in front of the operator's own metrics endpoint. It gives the
+container's :8080/metrics port a DNS name and a selector; it grants no reach
+that a route to the operator pod does not already grant. Rendered only while
+metrics.enabled is true, which is the same value that decides whether the
+Deployment starts the metrics server at all.
+
+Security note: the endpoint is plain HTTP with no authentication or
+authorization filter, so anything that can route to the operator pod reads it -
+with this Service or without it. Only metrics.enabled=false closes the port.
+This chart ships no NetworkPolicy on purpose: a policy that fits one cluster's
+CNI and monitoring topology fits few others, so restricting ingress to the
+operator namespace is left to the cluster administrator and is the documented
+mitigation.
+*/}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "mosquitto-operator.fullname" . }}-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mosquitto-operator.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "mosquitto-operator.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP
+{{- end }}

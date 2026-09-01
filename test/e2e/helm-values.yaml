@@ -1,0 +1,25 @@
+# Helm values for the E2E installation of the operator.
+#
+# pullPolicy: Never is what makes the image the workflow imported into every Kind
+# node the one that runs. With the default IfNotPresent a node that happens to
+# have an older tag of the same name would keep it, and with Always the pod would
+# try to reach a registry that has no such image at all.
+replicaCount: 1
+
+image:
+  repository: mosquitto-operator
+  pullPolicy: Never
+  tag: test
+
+resources:
+  limits:
+    cpu: 500m
+    memory: 256Mi
+  requests:
+    cpu: 10m
+    memory: 64Mi
+
+# One replica needs no lease, and leader election would only add an election
+# round to every operator restart during the suite.
+leaderElection:
+  enabled: false

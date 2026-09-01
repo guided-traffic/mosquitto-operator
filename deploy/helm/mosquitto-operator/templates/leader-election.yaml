@@ -1,0 +1,61 @@
+{{- if .Values.leaderElection.enabled }}
+{{/*
+Leader election permissions for the manager.
+
+Namespaced, not cluster-wide: the Lease named by LeaderElectionID in cmd/main.go
+lives in the release namespace, so a ClusterRole covering every Lease in the
+cluster would grant reach the manager never uses. This mirrors
+config/rbac/leader_election_role.yaml rule for rule, so the Helm and kustomize
+install paths hand out the same authority - a difference between them is a
+difference nobody decided.
+
+Rendered only while leaderElection.enabled is true; with it off the manager takes
+no Lease and needs neither rule.
+*/}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "mosquitto-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mosquitto-operator.labels" . | nindent 4 }}
+rules:
+  - apiGroups:
+      - coordination.k8s.io
+    resources:
+      - leases
+    verbs:
+      - create
+      - delete
+      - get
+      - list
+      - patch
+      - update
+      - watch
+  # client-go's LeaseLock records a "LeaderElection" Event on the Lease every
+  # time leadership is acquired or released. A missing permission here costs
+  # only that Event and a log line, not the election itself.
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "mosquitto-operator.fullname" . }}-leader-election
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "mosquitto-operator.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "mosquitto-operator.fullname" . }}-leader-election
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "mosquitto-operator.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- end }}

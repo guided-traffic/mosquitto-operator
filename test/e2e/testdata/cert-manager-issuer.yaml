@@ -1,0 +1,44 @@
+# Self-signed CA chain for the E2E suite.
+#
+# cert-manager is never shipped by this project: the chart has no dependency on
+# it and the operator has no cert-manager import. It is installed by the E2E job
+# only so the TLS test can exercise the second of the two supported ways of
+# filling spec.tls.secretName -- an administrator-owned cert-manager Certificate
+# -- against a real issuer instead of a hand-made Secret.
+---
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: selfsigned-issuer
+spec:
+  selfSigned: {}
+---
+# CA certificate issued by the self-signed issuer.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: e2e-ca
+  namespace: cert-manager
+spec:
+  isCA: true
+  commonName: e2e-ca
+  secretName: e2e-ca-secret
+  duration: 87600h # 10 years
+  privateKey:
+    algorithm: ECDSA
+    size: 256
+  issuerRef:
+    name: selfsigned-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
+---
+# ClusterIssuer backed by that CA. The E2E TLS test names it in the issuerRef of
+# the Certificate it creates, so the broker secret carries a ca.crt the client
+# can verify against.
+apiVersion: cert-manager.io/v1
+kind: ClusterIssuer
+metadata:
+  name: e2e-ca-issuer
+spec:
+  ca:
+    secretName: e2e-ca-secret

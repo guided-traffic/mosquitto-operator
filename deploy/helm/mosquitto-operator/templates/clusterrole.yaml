@@ -1,0 +1,84 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "mosquitto-operator.fullname" . }}
+  labels:
+    {{- include "mosquitto-operator.labels" . | nindent 4 }}
+{{/*
+The rules below mirror the kubebuilder RBAC markers on the reconciler in
+internal/controller/mosquitto_controller.go, which is what config/rbac/role.yaml
+is generated from. Nothing regenerates this template and nothing compares it
+against config/rbac/role.yaml, so a new marker has to be added here by hand -
+anything the reconciler writes without a rule here fails 403 on every pass.
+
+The leases rule below is the one intended difference from config/rbac/role.yaml:
+leader election belongs to the manager, not to the reconciler, so no kubebuilder
+marker produces it.
+*/}}
+rules:
+  # The Mosquitto resources themselves, their status subresource and their
+  # finalizers. The reconciler only reads Mosquitto objects - it never creates,
+  # updates or deletes one - so the spec verbs stop at get/list/watch, and the
+  # status subresource carries update alone because Status().Update() is a PUT
+  # and nothing reads status on its own.
+  #
+  # No patch anywhere below: nothing in the reconciler patches. list and watch
+  # are not direct calls either - they are what the informer cache needs to cache
+  # a type at all.
+  - apiGroups:
+      - mko.gtrfc.com
+    resources:
+      - mosquittoes
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - mko.gtrfc.com
+    resources:
+      - mosquittoes/status
+    verbs:
+      - update
+  # The owner references the reconciler writes carry blockOwnerDeletion, and the
+  # OwnerReferencesPermissionEnforcement admission plugin - off by default, on in
+  # some managed distributions - rejects such a reference unless the writer may
+  # update the owner's finalizers.
+  - apiGroups:
+      - mko.gtrfc.com
+    resources:
+      - mosquittoes/finalizers
+    verbs:
+      - update
+  # The ConfigMap holding mosquitto.conf, plus the headless and the client
+  # Service, written for every Mosquitto resource. No delete: the objects are
+  # owned by the Mosquitto resource, so garbage collection removes them.
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+      - services
+    verbs:
+      - create
+      - get
+      - list
+      - update
+      - watch
+  # The broker StatefulSet. Its status is also where .status.readyReplicas comes
+  # from, so read access is not optional.
+  - apiGroups:
+      - apps
+    resources:
+      - statefulsets
+    verbs:
+      - create
+      - get
+      - list
+      - update
+      - watch
+  # No rule for secrets: spec.tls.secretName is mounted into the broker pods by
+  # the kubelet, so the operator never reads the TLS material itself.
+  # No leader-election rule here on purpose. The Lease lives in the operator's
+  # own namespace, so cluster-wide access to every Lease in the cluster is more
+  # than the manager needs; leader-election.yaml grants it as a namespaced Role
+  # instead, which is also what config/rbac/leader_election_role.yaml does. The
+  # two install paths therefore hand out the same authority.

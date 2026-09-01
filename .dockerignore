@@ -1,0 +1,54 @@
+# Git metadata. The Containerfile does `COPY . .`, and actions/checkout writes
+# the job credential into .git/config as an http.<url>.extraheader. Without this
+# line that header lands in the builder layer, which outlives the job in the
+# build cache. The build needs no git metadata: the version, commit and build
+# time all arrive as --build-arg.
+.git/
+.gitignore
+
+# CI definitions, docs and manifests. None of them are compiled into the binary,
+# and every file in the context is a file the builder stage can read.
+.github/
+docs/
+deploy/
+config/
+test/
+
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+bin/
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+cover.out
+coverage.html
+coverage/
+
+# Go workspace file
+go.work
+
+# Dependency directories (remove the comment below to include it)
+vendor/
+
+# Node.js dependencies (only used by the release tooling check)
+node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
