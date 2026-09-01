@@ -5,11 +5,20 @@ on:
   schedule:
     - cron: '0 2 * * *'
       timezone: "Europe/Berlin"
-  # After every push to main
-  push:
-    branches:
-      - main
-  # Manual trigger
+  # Deliberately NOT on push to main. Renovate carries prConcurrentLimit: 0 and
+  # prHourlyLimit: 0, so one run opens every update it finds at once - fourteen
+  # pull requests on 2026-09-01, each queueing a full Test and Release on the
+  # self-hosted runners, which serialise. Overnight that is fine and the whole
+  # point of the unlimited setting. Triggered by every merge it is not: during
+  # active development each merge starts another wave that blocks the pipeline
+  # for the work that caused it.
+  #
+  # The cost of leaving it out: after a dependency pull request merges, the
+  # remaining open ones are not refreshed until the next nightly run. That is
+  # cheap here, because rebaseWhen is "conflicted" - Renovate rebases the ones
+  # that actually stopped applying, and the rest were already correct.
+  #
+  # Manual trigger, for when a refresh is wanted before 02:00
   workflow_dispatch:
     inputs:
       logLevel:
