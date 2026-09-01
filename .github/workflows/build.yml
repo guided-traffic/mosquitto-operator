@@ -1,0 +1,265 @@
+name: Release Docker & Helm
+on:
+  release:
+    types: [published]
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  GO_VERSION: '1.27.0'
+
+# Two releases published close together would otherwise run this workflow twice at
+# once, and both runs rebase the same gh-pages index.yaml. Serialising them (and
+# never cancelling a run in flight, which could leave a half-published chart) makes
+# the merge below the only writer at any moment.
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Docker Image
+    runs-on: self-hosted
+    # contents: write is for the SBOM upload to the release; nothing in this job
+    # touches Pages, attestations or the OIDC token.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # This job builds a container from the checked-out tree, and the
+          # Containerfile does `COPY . .`. Leaving credentials persisted would put
+          # the job token into .git/config and from there into the build context.
+          # .dockerignore excludes .git/ as well - both halves, because either one
+          # alone is a single point of failure. Nothing here pushes with git.
+          persist-credentials: false
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        id: buildx
+        uses: docker/setup-buildx-action@v4
+        with:
+          driver-opts: |
+            image=moby/buildkit:v0.12.0
+            network=host
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: guidedtraffic
+          password: ${{ secrets.DOCKERHUB_PAT }}
+
+      - name: Docker meta
+        id: tag_names
+        uses: docker/metadata-action@v6
+        with:
+          images: |
+            guidedtraffic/mosquitto-operator
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=pr
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=sha
+            type=raw,value=latest,enable=${{ github.ref == format('refs/heads/{0}', 'main') }}
+          labels: |
+            org.opencontainers.image.title=Mosquitto Operator
+            org.opencontainers.image.description=A Kubernetes operator for provisioning highly available Mosquitto MQTT brokers
+            org.opencontainers.image.vendor=Guided Traffic
+            org.opencontainers.image.licenses=Apache-2.0
+            org.opencontainers.image.documentation=https://github.com/guided-traffic/mosquitto-operator
+            org.opencontainers.image.source=https://github.com/guided-traffic/mosquitto-operator
+
+      - name: Get current epoch time
+        id: time
+        run: echo "epoch=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Extract version without v prefix
+        id: version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Extracted version: ${VERSION}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        id: build
+        with:
+          file: Containerfile
+          context: .
+          build-args: |
+            BUILD_NUMBER=${{ steps.version.outputs.version }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.time.outputs.epoch }}
+          platforms: linux/amd64  # ,linux/arm64
+          push: true
+          tags: ${{ steps.tag_names.outputs.tags }}
+          labels: ${{ steps.tag_names.outputs.labels }}
+          # The GitHub Actions build cache stays off: no release has been built from
+          # this repository yet, so there is no measured behaviour of the cache
+          # backend against these self-hosted runners to justify it. Re-enable both
+          # lines once a build has run and the cache is known to help.
+          # cache-from: type=gha
+          # cache-to: type=gha,mode=max
+          # Security features for better Docker Hub score
+          provenance: true
+          sbom: true
+          # Enable attestation features
+          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=Mosquitto Operator
+
+      - name: Generate and upload SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: guidedtraffic/mosquitto-operator:${{ steps.version.outputs.version }}
+          format: spdx-json
+          upload-artifact: true
+          upload-release-assets: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload SBOM to release
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            ${{ github.workspace }}/guidedtraffic-mosquitto-operator_*.spdx.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Docker Scout scan
+        uses: docker/scout-action@v1
+        with:
+          command: cves
+          image: guidedtraffic/mosquitto-operator:${{ steps.version.outputs.version }}
+          sarif-file: scout-report.sarif
+          summary: true
+          dockerhub-user: guidedtraffic
+          dockerhub-password: ${{ secrets.DOCKERHUB_PAT }}
+
+  release-helm-gh:
+    name: Release Helm Chart to GitHub Pages
+    needs: build
+    runs-on: self-hosted
+    # The chart is published by committing to the gh-pages branch, so contents:
+    # write is the whole permission set. pages: write would only be needed to drive
+    # the Pages deployment API, which this job never calls.
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: v4.2.4
+
+      # Regenerate CRDs + DeepCopy and sync them into the Helm chart, then fail
+      # loudly if the working tree is dirty. This guarantees the released chart
+      # always carries the CRD that matches the Go API types — a stale checked-in
+      # CRD cannot reach end-user clusters.
+      - name: Regenerate CRDs and sync to Helm chart
+        run: make generate-all
+
+      - name: Verify generated artifacts are committed
+        run: |
+          # Untracked files count too: a newly generated artifact that was never
+          # committed - a second CRD base, say - is invisible to `git diff` and
+          # would ship missing from the chart. release.yml's equivalent guard
+          # tests both, and these two must not diverge.
+          if ! git diff --quiet || [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+            echo "::error::Generated CRDs / DeepCopy / Helm chart CRD are out of sync with api/v1/."
+            echo "Run 'make generate-all' locally and commit the result before releasing."
+            git --no-pager diff --stat
+            git --no-pager diff
+            git status --porcelain
+            exit 1
+          fi
+
+      - name: Update Chart Version
+        run: |
+          # Take the version from the release tag (without the 'v' prefix)
+          VERSION=${GITHUB_REF_NAME#v}
+          # Update chart and app version
+          sed -i "s/^version:.*$/version: ${VERSION}/" deploy/helm/mosquitto-operator/Chart.yaml
+          sed -i "s/^appVersion:.*$/appVersion: \"${VERSION}\"/" deploy/helm/mosquitto-operator/Chart.yaml
+          # Update the image tag in values.yaml
+          sed -i "s/^  tag:.*$/  tag: \"${VERSION}\"/" deploy/helm/mosquitto-operator/values.yaml
+
+      - name: Create Helm Package
+        run: |
+          cd deploy/helm
+          helm package mosquitto-operator/
+          mkdir -p repo
+          mv *.tgz repo/
+          # Build a temporary index for the new chart
+          helm repo index repo/ --url https://guided-traffic.github.io/mosquitto-operator/
+          cd ../..
+
+      - name: Configure Git
+        run: |
+          git config user.name "$GITHUB_ACTOR"
+          git config user.email "$GITHUB_ACTOR@users.noreply.github.com"
+
+      - name: Save Chart Package
+        run: |
+          mkdir -p /tmp/helm-charts
+          cp -r deploy/helm/repo/* /tmp/helm-charts/
+
+      - name: Checkout gh-pages branch
+        uses: actions/checkout@v7
+        with:
+          ref: gh-pages
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish to GitHub Pages
+        run: |
+          # Copy the new charts into the root directory
+          cp /tmp/helm-charts/*.tgz .
+
+          # Merge with the existing index.yaml if there is one
+          if [ -f index.yaml ]; then
+            # Temporary folder for the merge
+            mkdir -p temp-repo
+            cp *.tgz temp-repo/
+            # Merge with the existing index
+            helm repo index temp-repo/ --url https://guided-traffic.github.io/mosquitto-operator/ --merge index.yaml
+            cp temp-repo/index.yaml .
+            rm -rf temp-repo
+          else
+            # No index yet: create a new one
+            helm repo index . --url https://guided-traffic.github.io/mosquitto-operator/
+          fi
+
+          git add --force *.tgz index.yaml
+          git commit -m "Release Helm chart for $GITHUB_REF_NAME"
+          # Deliberately not --force: the index merged above is built from the
+          # index.yaml this job checked out, so a push that is rejected as
+          # non-fast-forward means someone published in between and this run would
+          # overwrite their chart entry. Failing here is the correct outcome.
+          git push origin gh-pages
+
+      - name: Update Release Assets
+        uses: softprops/action-gh-release@v3
+        with:
+          files: |
+            *.tgz
+            index.yaml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

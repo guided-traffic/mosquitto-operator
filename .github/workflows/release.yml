@@ -1,0 +1,1283 @@
+name: Test and Release
+
+# Accepted risk, recorded so a reader meets it here rather than deducing it:
+# this repository is public and every job below runs on `self-hosted` runners, so
+# a pull request opened from a fork executes fork-authored code on that
+# infrastructure. Repository secrets are NOT exposed to a fork run - GitHub passes
+# only a read-only GITHUB_TOKEN - so the exposure is code execution on the runner,
+# not disclosure of DOCKERHUB_PAT or BOT_PAT. The maintainers accept this and gate
+# it outside the repository, under Settings > Actions > General > "Fork pull
+# request workflows from outside collaborators", set to "Require approval for all
+# outside collaborators"; no fork guard belongs in this file.
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Least privilege for the default job token: only `coverage-report` (sticky PR
+# comment) and `semantic-release` (tag, release, badge commit) need more, and both
+# raise it in their own job-level `permissions:` block.
+permissions:
+  contents: read
+
+env:
+  GO_VERSION: '1.27.0'
+  KUBERNETES_VERSION: '1.33.4'
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  e2e-tests:
+    name: E2E Tests (${{ matrix.topology }})
+    runs-on: self-hosted
+    timeout-minutes: 60
+    strategy:
+      # The legs run in parallel: each lands on its own ephemeral ARC runner pod,
+      # and the distinct cluster names keep them collision-free even if two pods
+      # are ever scheduled onto the same node.
+      fail-fast: false
+      matrix:
+        include:
+          # Single-node leg: the full suite on a one-node cluster. It carries no
+          # -run filter, so every scenario that does not need a second node runs
+          # here. The cluster keeps the Makefile default name; the worker count does
+          # not (KIND_WORKERS defaults to 3 there), so reproducing this leg locally
+          # is `make e2e-local KIND_WORKERS=0`.
+          - topology: single-node
+            workers: 0
+            cluster: mosquitto-operator-test
+            run_filter: ""
+            require_multi_node: "false"
+          # Multi-node leg: re-runs only the scenarios whose outcome depends on the
+          # node count - hard anti-affinity spread.
+          # Three workers, not two: Kind keeps the control-plane NoSchedule taint on
+          # multi-node clusters, so spreading three replicas needs three workers.
+          - topology: multi-node
+            workers: 3
+            cluster: mosquitto-operator-test-multinode
+            run_filter: TestE2E_AntiAffinity
+            require_multi_node: "true"
+    env:
+      KIND_CLUSTER: ${{ matrix.cluster }}
+      KIND_WORKERS: ${{ matrix.workers }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: guidedtraffic
+          password: ${{ secrets.DOCKERHUB_PAT }}
+
+      - name: Prepare host for DinD networking
+        run: |
+          # kube-proxy in iptables mode requires specific kernel modules.
+          # On self-hosted DinD runners these may not be loaded, causing
+          # kube-proxy to crash with "Error" immediately.
+          for mod in br_netfilter nf_conntrack nf_conntrack_ipv4 xt_conntrack \
+                     ip_tables ip6_tables iptable_nat iptable_filter; do
+            sudo modprobe "$mod" 2>/dev/null || true
+          done
+          sudo sysctl -w net.bridge.bridge-nf-call-iptables=1  2>/dev/null || true
+          sudo sysctl -w net.bridge.bridge-nf-call-ip6tables=1 2>/dev/null || true
+          sudo sysctl -w net.ipv4.ip_forward=1                 2>/dev/null || true
+          echo "Loaded kernel modules:"
+          lsmod | grep -E 'br_netfilter|nf_conntrack|ip_tables|ip6_tables' || true
+
+      - name: Create Kind config for DinD
+        run: |
+          set -euo pipefail
+          {
+            cat << EOF
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          name: ${KIND_CLUSTER}
+          networking:
+            kubeProxyMode: "iptables"
+          nodes:
+          - role: control-plane
+          EOF
+            # One worker line per matrix worker; the single-node leg emits none.
+            worker=0
+            while [ "${worker}" -lt "${KIND_WORKERS}" ]; do
+              echo "- role: worker"
+              worker=$((worker + 1))
+            done
+            cat << EOF
+          # Use native snapshotter to avoid nested overlay issues in DinD
+          containerdConfigPatches:
+          - |-
+            [plugins."io.containerd.grpc.v1.cri".containerd]
+              snapshotter = "native"
+              disable_snapshot_annotations = false
+          EOF
+          } > kind-config.yaml
+          echo "=== kind-config.yaml ==="
+          cat kind-config.yaml
+
+      - name: Setup kubectl
+        uses: azure/setup-kubectl@v5
+        with:
+          version: 'v${{ env.KUBERNETES_VERSION }}'
+
+      - name: Create Kind cluster
+        id: kind-cluster
+        uses: helm/kind-action@v1.14.0
+        with:
+          version: v0.30.0
+          node_image: kindest/node:v${{ env.KUBERNETES_VERSION }}
+          cluster_name: ${{ matrix.cluster }}
+          wait: 300s
+          ignore_failed_clean: true
+          config: kind-config.yaml
+
+      - name: Verify Kind cluster
+        run: |
+          set -euo pipefail
+          kubectl cluster-info
+          kubectl wait --for=condition=Ready nodes --all --timeout=180s
+          kubectl get nodes
+          # The multi-node leg is only worth running with the nodes it asked for:
+          # a cluster that silently came up smaller would turn its assertions into
+          # skips, which is exactly the blind spot this leg exists to close.
+          expected=$(( KIND_WORKERS + 1 ))
+          actual=$(kubectl get nodes --no-headers | wc -l | tr -d ' ')
+          if [ "$actual" -ne "$expected" ]; then
+            echo "ERROR: the ${{ matrix.topology }} leg expects ${expected} nodes, cluster has ${actual}"
+            exit 1
+          fi
+
+      - name: Fix inotify limits inside Kind nodes
+        run: |
+          set -euo pipefail
+          # Since Linux 5.13, inotify limits are user-namespace-aware.
+          # Host sysctl settings are NOT inherited by containers.
+          # kube-proxy crashes with "too many open files" without this.
+          # Applied per node: every worker of the multi-node leg runs its own kube-proxy.
+          for node in $(kind get nodes --name "${KIND_CLUSTER}"); do
+            docker exec "$node" sysctl -w fs.inotify.max_user_watches=1048576
+            docker exec "$node" sysctl -w fs.inotify.max_user_instances=8192
+          done
+
+      - name: Wait for kube-system pods
+        run: |
+          set -euo pipefail
+          echo "=== kube-system pod status before wait ==="
+          kubectl -n kube-system get pods -o wide
+          echo ""
+          echo "=== containerd info inside Kind node ==="
+          docker exec "${KIND_CLUSTER}-control-plane" ctr version || true
+          echo ""
+
+          # ---------- helper: resilient daemonset wait ----------
+          # kube-proxy can crash on DinD runners when iptables kernel modules
+          # are slow to initialise. This helper detects Error/CrashLoopBackOff
+          # pods, collects logs for diagnosis, deletes them so the DaemonSet
+          # controller recreates them, and retries.
+          wait_daemonset() {
+            local ds_name="$1" label="$2" max_attempts=5
+            for attempt in $(seq 1 $max_attempts); do
+              echo "[${ds_name}] attempt ${attempt}/${max_attempts}"
+              if kubectl -n kube-system rollout status daemonset/"${ds_name}" --timeout=60s 2>/dev/null; then
+                echo "[${ds_name}] ready."
+                return 0
+              fi
+              # Collect diagnostics from broken pods
+              bad_pods=$(kubectl -n kube-system get pods -l "${label}" --no-headers 2>/dev/null \
+                         | grep -E 'Error|CrashLoopBackOff|Init:Error' | awk '{print $1}') || true
+              if [ -n "$bad_pods" ]; then
+                for pod in $bad_pods; do
+                  echo "[${ds_name}] logs from ${pod}:"
+                  kubectl -n kube-system logs "$pod" --tail=30 2>&1 || true
+                  echo "[${ds_name}] deleting ${pod} to trigger recreation..."
+                  kubectl -n kube-system delete pod "$pod" --force --grace-period=0 2>/dev/null || true
+                done
+                sleep 10
+              else
+                echo "[${ds_name}] no error pods found, pods may still be starting..."
+                sleep 15
+              fi
+            done
+            echo "ERROR: daemonset ${ds_name} not ready after ${max_attempts} attempts"
+            kubectl -n kube-system describe daemonset/"${ds_name}" || true
+            kubectl -n kube-system describe pods -l "${label}" || true
+            return 1
+          }
+
+          wait_daemonset "kube-proxy" "k8s-app=kube-proxy"
+          wait_daemonset "kindnet"    "app=kindnet"
+
+          echo "Waiting for coredns..."
+          kubectl -n kube-system rollout status deployment/coredns --timeout=120s
+
+          echo ""
+          echo "=== Final pod status ==="
+          kubectl -n kube-system get pods -o wide
+          echo "kube-system pods ready."
+
+      - name: Verify in-cluster API connectivity
+        run: |
+          # kube-proxy pods being Ready does NOT mean their iptables DNAT rules for
+          # ClusterIPs (e.g. kubernetes.default.svc -> 10.96.0.1:443) are applied yet.
+          # In DinD this race causes "dial tcp 10.96.0.1:443: i/o timeout" inside pods.
+          # Fix: probe from inside the cluster; if it fails, restart kube-proxy to force
+          # a full iptables resync, then verify again.
+          echo "Probing in-cluster kubernetes service connectivity..."
+          PROBE_OK=false
+          for attempt in 1 2 3; do
+            kubectl run api-probe -n default \
+              --image=busybox:1.36 \
+              --restart=Never \
+              -- sleep 60
+            kubectl wait -n default --for=condition=Ready pod/api-probe --timeout=60s
+
+            if kubectl exec -n default api-probe -- \
+                timeout 20 sh -c \
+                'until nc -z -w 2 kubernetes.default.svc 443 2>/dev/null; do sleep 2; done'; then
+              echo "In-cluster API connectivity OK (attempt ${attempt})"
+              PROBE_OK=true
+              kubectl delete -n default pod api-probe --force --grace-period=0
+              break
+            fi
+
+            echo "Connectivity check failed on attempt ${attempt} — restarting kube-proxy to force iptables resync..."
+            kubectl delete -n default pod api-probe --force --grace-period=0 || true
+            kubectl -n kube-system rollout restart daemonset/kube-proxy
+            kubectl -n kube-system rollout status daemonset/kube-proxy --timeout=60s
+          done
+
+          if [ "$PROBE_OK" = "false" ]; then
+            echo "ERROR: In-cluster API connectivity could not be established after 3 attempts"
+            exit 1
+          fi
+
+      - name: Build and load operator image
+        run: |
+          set -euo pipefail
+          make docker-build IMG=mosquitto-operator:test
+          # Manual ctr import without --all-platforms/--snapshotter flags
+          # to avoid "no unpack platforms defined" error with native snapshotter in DinD.
+          # Imported into every node: the operator Deployment runs with
+          # pullPolicy: Never (test/e2e/helm-values.yaml) and may land on any worker.
+          mkdir -p tmp
+          docker save mosquitto-operator:test -o tmp/mosquitto-operator-test.tar
+          for node in $(kind get nodes --name "${KIND_CLUSTER}"); do
+            echo "Importing operator image into ${node}..."
+            docker exec -i "$node" ctr --namespace=k8s.io images import - < tmp/mosquitto-operator-test.tar
+          done
+          rm -f tmp/mosquitto-operator-test.tar
+
+      # The broker image is pulled by the kubelet inside the Kind nodes, and those
+      # nodes carry no registry credential - only the runner host is logged in. Left
+      # alone, every node pulls eclipse-mosquitto anonymously from the shared runner
+      # IP and counts against the anonymous Docker Hub rate limit. Preloading it the
+      # same way the operator image is loaded makes the pull happen once, on the
+      # authenticated host. The broker tag is not `latest`, so the kubelet's default
+      # IfNotPresent policy uses what is already there.
+      #
+      # The tag is read out of test/testimages/images.go rather than written here: a
+      # second copy of the pin would lag behind a Renovate bump and preload an image
+      # the suite no longer provisions, which looks exactly like a working cache.
+      - name: Preload the pinned broker image into the Kind nodes
+        run: |
+          set -euo pipefail
+          BROKER_IMAGE=$(sed -n 's/^[[:space:]]*MosquittoImage = "\(.*\)".*$/\1/p' test/testimages/images.go)
+          if [ -z "${BROKER_IMAGE}" ]; then
+            echo "ERROR: could not read MosquittoImage from test/testimages/images.go"
+            exit 1
+          fi
+          echo "Broker image pin: ${BROKER_IMAGE}"
+          mkdir -p tmp
+          docker pull "${BROKER_IMAGE}"
+          docker save "${BROKER_IMAGE}" -o tmp/mosquitto-broker.tar
+          for node in $(kind get nodes --name "${KIND_CLUSTER}"); do
+            echo "Importing ${BROKER_IMAGE} into ${node}..."
+            docker exec -i "$node" ctr --namespace=k8s.io images import - < tmp/mosquitto-broker.tar
+          done
+          rm -f tmp/mosquitto-broker.tar
+
+      - name: Verify image in cluster
+        run: |
+          set -euo pipefail
+          echo "=== Verifying image is available on every Kind node ==="
+          for node in $(kind get nodes --name "${KIND_CLUSTER}"); do
+            docker exec "$node" crictl images | grep -E 'mosquitto-operator\s+test|mosquitto-operator:test' || {
+              echo "ERROR: Image not found on ${node}!"
+              echo "Available images:"
+              docker exec "$node" crictl images
+              exit 1
+            }
+          done
+
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v4.2.4'
+
+      - name: Debug cluster state
+        run: |
+          echo "=== Cluster info ==="
+          kubectl cluster-info
+          echo "=== Nodes ==="
+          kubectl get nodes -o wide
+          echo "=== Namespaces ==="
+          kubectl get namespaces
+          echo "=== Storage classes ==="
+          kubectl get storageclass
+
+      - name: Install cert-manager
+        run: |
+          kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.17.2/cert-manager.yaml
+          echo "Waiting for cert-manager deployments to be available..."
+          kubectl wait --for=condition=Available deployment/cert-manager -n cert-manager --timeout=300s
+          kubectl wait --for=condition=Available deployment/cert-manager-cainjector -n cert-manager --timeout=300s
+          kubectl wait --for=condition=Available deployment/cert-manager-webhook -n cert-manager --timeout=300s
+          echo "Waiting for all cert-manager pods to be Ready..."
+          kubectl -n cert-manager wait --for=condition=Ready pods --all --timeout=300s
+          echo "Creating self-signed ClusterIssuer..."
+          # Retry in case the webhook TLS isn't fully initialised yet
+          ISSUER_OK=false
+          for i in 1 2 3 4 5; do
+            if kubectl apply -f test/e2e/testdata/cert-manager-issuer.yaml; then
+              echo "ClusterIssuer created successfully on attempt $i"
+              ISSUER_OK=true
+              break
+            fi
+            echo "Attempt $i failed, retrying in 10s..."
+            sleep 10
+          done
+
+          # Without this branch the loop exits 0 after five failures and the missing
+          # ClusterIssuer only surfaces minutes later, inside the TLS E2E, as a
+          # certificate that never becomes ready.
+          if [ "$ISSUER_OK" = "false" ]; then
+            echo "ERROR: the self-signed ClusterIssuer could not be created after 5 attempts"
+            kubectl -n cert-manager get pods -o wide || true
+            exit 1
+          fi
+
+      - name: Install operator via Helm
+        id: helm-install
+        continue-on-error: true
+        run: |
+          helm install mosquitto-operator deploy/helm/mosquitto-operator \
+            --namespace mosquitto-operator-system \
+            --create-namespace \
+            --values test/e2e/helm-values.yaml \
+            --set image.repository=mosquitto-operator \
+            --set image.tag=test \
+            --wait \
+            --timeout 180s \
+            --debug
+
+      - name: Debug Helm install failure
+        if: steps.helm-install.outcome == 'failure'
+        run: |
+          echo "=== Helm install failed, collecting diagnostics ==="
+          echo "=== Pods in operator namespace ==="
+          kubectl -n mosquitto-operator-system get pods -o wide || true
+
+          echo ""
+          echo "=== Get Pod Names ==="
+          POD_NAME=$(kubectl -n mosquitto-operator-system get pods -l app.kubernetes.io/name=mosquitto-operator -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || echo "")
+          echo "Pod name: ${POD_NAME}"
+
+          if [ -n "$POD_NAME" ]; then
+            echo ""
+            echo "=== Operator logs (current attempt) ==="
+            kubectl -n mosquitto-operator-system logs "$POD_NAME" --tail=100 2>&1 || echo "No current logs available"
+
+            echo ""
+            echo "=== Operator logs (previous crash) ==="
+            kubectl -n mosquitto-operator-system logs "$POD_NAME" --previous --tail=100 2>&1 || echo "No previous logs available"
+          fi
+
+          echo ""
+          echo "=== Describe pods ==="
+          kubectl -n mosquitto-operator-system describe pods || true
+
+          echo ""
+          echo "=== Events ==="
+          kubectl -n mosquitto-operator-system get events --sort-by='.lastTimestamp' || true
+
+          echo ""
+          echo "=== ConfigMap content ==="
+          kubectl -n mosquitto-operator-system get configmap -l app.kubernetes.io/name=mosquitto-operator -o yaml || true
+
+          echo ""
+          echo "=== ServiceAccount ==="
+          kubectl -n mosquitto-operator-system get serviceaccount mosquitto-operator -o yaml || true
+
+          echo ""
+          echo "=== RBAC ==="
+          kubectl get clusterrolebinding | grep mosquitto-operator || true
+          kubectl describe clusterrolebinding mosquitto-operator || true
+
+          exit 1
+
+      - name: Wait for operator
+        run: kubectl -n mosquitto-operator-system wait --for=condition=available --timeout=120s deployment/mosquitto-operator
+
+      - name: Run E2E tests
+        run: |
+          set -euo pipefail
+          mkdir -p tmp
+          make test-e2e E2E_RUN="${E2E_RUN}" 2>&1 | tee "tmp/e2e-${{ matrix.topology }}.log"
+          # A -run filter that stopped matching (renamed test, moved file) would leave
+          # this leg green without executing anything, so the filtered leg proves the
+          # scenario it exists for actually ran.
+          if [ -n "${E2E_RUN}" ]; then
+            guard=TestE2E_AntiAffinity_HardSpreadsAcrossNodes
+            grep -q -- "--- PASS: ${guard}" "tmp/e2e-${{ matrix.topology }}.log" || {
+              echo "ERROR: ${guard} did not run - E2E_RUN='${E2E_RUN}' no longer matches it"
+              exit 1
+            }
+          fi
+        env:
+          E2E_RUN: ${{ matrix.run_filter }}
+          # Turns "not enough nodes" from a skip into a failure on the multi-node leg.
+          E2E_REQUIRE_MULTI_NODE: ${{ matrix.require_multi_node }}
+
+      - name: Collect logs on failure
+        if: failure()
+        run: |
+          # A short tail is not enough here: the operator logs one line per
+          # reconcile pass and per CR, so the message of the failing pass scrolls
+          # out of a small window and leaves only the stack trace behind it.
+          echo "=== Operator logs ==="
+          kubectl -n mosquitto-operator-system logs -l app.kubernetes.io/name=mosquitto-operator --tail=2000 || true
+          echo "=== Describe pods ==="
+          kubectl -n mosquitto-operator-system describe pods || true
+          echo "=== Events ==="
+          kubectl -n mosquitto-operator-system get events --sort-by='.lastTimestamp' || true
+          # Pod logs of the test namespaces. A defect that lives inside the broker
+          # pod - a generated mosquitto.conf the broker refuses to load, a TLS file
+          # it cannot read - leaves nothing in the operator log, so collecting only
+          # the operator would leave it without an artifact at all. --previous is the
+          # half that carries the crashed attempt once the restart is up.
+          # Node conditions first: a pod that lost its process to an eviction or to a
+          # failing probe leaves its reason here and nowhere else, and the failure
+          # that motivated this collection could not be told apart from an operator
+          # decision without it.
+          echo "=== Nodes ==="
+          kubectl get nodes -o wide || true
+          kubectl describe nodes | grep -E '^(Name:|  Ready|  MemoryPressure|  DiskPressure|  PIDPressure)' || true
+          echo "=== Test namespace pod logs ==="
+          for ns in $(kubectl get ns -o name | sed 's|namespace/||' | grep '^e2e-'); do
+            echo "--- $ns pods ---"
+            kubectl -n "$ns" get pods -o wide || true
+            # Events outlive the pods they describe, so they answer "was it killed,
+            # evicted or unhealthy" even for a pod the test already tore down. On the
+            # multi-node leg they also carry the scheduler's reason for a Pending pod,
+            # which is what a failed hard-anti-affinity spread looks like.
+            echo "--- $ns events ---"
+            kubectl -n "$ns" get events --sort-by='.lastTimestamp' || true
+            for pod in $(kubectl -n "$ns" get pods -o name | sed 's|pod/||'); do
+              echo "--- $ns/$pod (current) ---"
+              kubectl -n "$ns" logs "$pod" --all-containers --prefix --tail=300 2>&1 || true
+              echo "--- $ns/$pod (previous) ---"
+              kubectl -n "$ns" logs "$pod" --all-containers --prefix --previous --tail=300 2>&1 || true
+            done
+          done
+
+      - name: Cleanup Kind cluster
+        if: always()
+        run: kind delete cluster --name "${KIND_CLUSTER}" || true
+
+  # Branch protection requires the status context "E2E Tests". The matrix legs
+  # report as "E2E Tests (<topology>)" - one context per leg, renamed whenever a
+  # leg is - so this gate job carries the stable context and fails unless every
+  # leg succeeded. Keeps the required check independent of matrix reshaping.
+  e2e-gate:
+    name: E2E Tests
+    runs-on: self-hosted
+    needs: [e2e-tests]
+    if: always()
+    steps:
+      - name: Require all matrix legs to succeed
+        run: |
+          result="${{ needs.e2e-tests.result }}"
+          echo "E2E matrix result: ${result}"
+          [ "${result}" = "success" ]
+
+  linter:
+    name: Code Linting
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Run linting
+        run: make lint
+
+  gosec:
+    name: GoSec Security Scan
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Run GoSec security scan
+        timeout-minutes: 10
+        run: make gosec
+
+
+  malware-scan:
+    name: Malware Scan (Source Code)
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Install ClamAV
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clamav clamav-daemon
+
+      - name: Update ClamAV database
+        run: |
+          sudo systemctl stop clamav-freshclam || true
+          sudo freshclam
+
+      - name: Run ClamAV scan on source code
+        run: |
+          echo "🔍 Scanning source code for malware..."
+          clamscan --recursive --infected --exclude-dir=.git --exclude-dir=node_modules --exclude-dir=vendor . | tee clamav-report.txt
+
+          # Check if any infected files were found
+          if grep -q "Infected files: 0" clamav-report.txt; then
+            echo "✅ No malware detected in source code"
+          else
+            echo "❌ MALWARE DETECTED! Blocking release."
+            cat clamav-report.txt
+            exit 1
+          fi
+
+      - name: Upload ClamAV report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: clamav-report
+          path: clamav-report.txt
+          retention-days: 30
+
+  unit-tests:
+    name: Unit Tests
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Run unit tests with coverage
+        run: make test-unit-coverage
+
+      - name: Upload unit coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: unit-coverage
+          path: coverage/unit.out
+          retention-days: 7
+
+  # The operator does not build the Mosquitto image, it configures one: the
+  # generated mosquitto.conf, the config, TLS and data paths the pod mounts, and
+  # the broker binary the container command starts. This job asks the pinned image
+  # whether it still carries them. It needs docker and no cluster, so it answers in
+  # seconds and names what is missing - instead of surfacing in the E2E job minutes
+  # later as a cluster that will not converge.
+  mosquitto-image-tools:
+    name: Mosquitto Image Tools
+    runs-on: self-hosted
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      # The self-hosted runner image ships no make, so every job that enters the
+      # Makefile installs it. Leaving it out fails at the first target with
+      # "make: command not found", not at a missing tool inside the target.
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      # Docker Hub rate-limits anonymous pulls, and this job pulls the pinned
+      # broker image on every run.
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: guidedtraffic
+          password: ${{ secrets.DOCKERHUB_PAT }}
+
+      - name: Check the pinned Mosquitto image
+        run: make test-image-tools
+
+  govulncheck:
+    name: Vulnerability Check
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Run vulnerability check
+        run: make vuln
+
+  cyclomatic-complexity:
+    name: Cyclomatic Complexity
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Run cyclomatic complexity check
+        run: make cyclo
+
+      - name: Generate complexity report
+        if: always()
+        run: |
+          echo "## 📊 Cyclomatic Complexity Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Top 20 most complex functions:" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          gocyclo -top 20 . >> $GITHUB_STEP_SUMMARY || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "> Threshold: 15 (functions above this are flagged)" >> $GITHUB_STEP_SUMMARY
+
+  generated-manifests:
+    name: Generated Manifests Up To Date
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      # Needed by the RBAC parity check below, which renders the chart.
+      - name: Install Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: 'v4.2.4'
+
+      # Runs the generator itself, so the kubebuilder markers in the Go sources are
+      # compared against the checked-in manifests. build.yml runs the same check, but
+      # only on `release: published`; this job moves it to every push and PR, where a
+      # stale config/rbac/role.yaml is still cheap to fix.
+      - name: Regenerate CRDs, RBAC and DeepCopy
+        run: make generate-all
+
+      - name: Verify generated artifacts are committed
+        run: |
+          if ! git diff --quiet || [ -n "$(git status --porcelain --untracked-files=normal)" ]; then
+            echo "::error::Generated CRDs / RBAC role / DeepCopy / Helm chart CRD are out of sync with the Go sources."
+            echo "Run 'make generate-all' locally and commit the result."
+            git --no-pager diff --stat
+            git --no-pager diff
+            git status --porcelain
+            exit 1
+          fi
+
+      # The generator above keeps config/rbac/role.yaml honest against the markers.
+      # Nothing keeps the chart's ClusterRole honest against either - it is written
+      # by hand - so a narrowed marker would leave chart users with authority the
+      # code no longer asks for, or a widened one would 403 them on every pass.
+      # This compares what both install paths actually render.
+      - name: Verify both install paths grant the same RBAC
+        run: make verify-rbac-parity
+
+  integration-tests:
+    name: Integration Tests (envtest)
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Install dependencies
+        run: go mod download
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      - name: Run integration tests with coverage
+        run: make test-integration-coverage
+
+      - name: Upload integration coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: integration-coverage
+          path: coverage/integration.out
+          retention-days: 7
+
+  coverage-report:
+    name: Combined Coverage Report
+    runs-on: self-hosted
+    needs: [unit-tests, integration-tests]
+    if: always() && (needs.unit-tests.result == 'success' || needs.integration-tests.result == 'success')
+    permissions:
+      contents: read  # Read only - semantic-release will commit the badge
+      pull-requests: write  # Needed to comment on PRs
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Download unit test coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: unit-coverage
+        continue-on-error: true
+
+      - name: Download integration test coverage
+        uses: actions/download-artifact@v8
+        with:
+          name: integration-coverage
+        continue-on-error: true
+
+      - name: Merge coverage reports
+        id: merge-coverage
+        run: |
+          echo "Merging coverage reports..."
+
+          # Check which coverage files exist
+          COVERAGE_FILES=""
+          if [ -f "unit.out" ]; then
+            echo "✓ Unit test coverage found"
+            COVERAGE_FILES="$COVERAGE_FILES unit.out"
+          fi
+          if [ -f "integration.out" ]; then
+            echo "✓ Integration test coverage found"
+            COVERAGE_FILES="$COVERAGE_FILES integration.out"
+          fi
+
+          if [ -z "$COVERAGE_FILES" ]; then
+            echo "ERROR: No coverage files found"
+            exit 1
+          fi
+
+          # Merge coverage files
+          echo "mode: set" > coverage-merged.out
+          grep -h -v "^mode:" $COVERAGE_FILES >> coverage-merged.out || true
+
+          # Generate reports
+          mkdir -p coverage
+          go tool cover -func=coverage-merged.out > coverage/coverage.txt
+          go tool cover -html=coverage-merged.out -o coverage/coverage.html
+
+          # Extract total coverage
+          TOTAL_COVERAGE=$(grep "total:" coverage/coverage.txt | awk '{print $3}' | sed 's/%//')
+          echo "percentage=$TOTAL_COVERAGE" >> $GITHUB_OUTPUT
+          echo ""
+          echo "========================================"
+          echo "📊 Combined Coverage: ${TOTAL_COVERAGE}%"
+          echo "========================================"
+
+          # Coverage per package, aggregated from the profile rather than from the
+          # per-function report: coverage.txt has one line per *function*, which is
+          # far too much to inline, and an unweighted mean over it would be wrong
+          # anyway. Aggregating statements out of the profile gives one line per
+          # package and the correct number.
+          #
+          # Blocks are deduplicated by location before summing: the merge above simply
+          # concatenates the unit and integration profiles, so every block that both runs
+          # touched appears twice. Under "mode: set" a block counts as covered when any
+          # run covered it, which is the max of the two counts.
+          python3 - <<'PY' > coverage/summary.txt
+          import collections
+
+          blocks = {}
+          with open("coverage-merged.out") as fh:
+              next(fh, None)  # drop the "mode:" line
+              for line in fh:
+                  line = line.strip()
+                  if not line:
+                      continue
+                  loc, num_stmt, count = line.rsplit(" ", 2)
+                  prev = blocks.get(loc)
+                  count = int(count)
+                  if prev is None or count > prev[1]:
+                      blocks[loc] = (int(num_stmt), count)
+
+          per_pkg = collections.defaultdict(lambda: [0, 0])
+          for loc, (num_stmt, count) in blocks.items():
+              pkg = loc.rsplit(":", 1)[0].rsplit("/", 1)[0]
+              per_pkg[pkg][0] += num_stmt
+              if count > 0:
+                  per_pkg[pkg][1] += num_stmt
+
+          print("| Package | Coverage | Statements |")
+          print("|---|---:|---:|")
+          for pkg in sorted(per_pkg):
+              total, covered = per_pkg[pkg]
+              pct = (100.0 * covered / total) if total else 0.0
+              print(f"| `{pkg}` | {pct:.1f}% | {covered}/{total} |")
+          PY
+
+          # Add to step summary
+          echo "## Combined Coverage Report" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          cat coverage/coverage.txt >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+      - name: Upload combined coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-combined
+          path: coverage/
+
+      - name: Create coverage badge
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          COVERAGE="${{ steps.merge-coverage.outputs.percentage }}"
+
+          # Determine badge color based on coverage using Python (more reliable than bc)
+          COLOR=$(python3 -c "
+          coverage = float('$COVERAGE')
+          if coverage >= 90:
+              print('brightgreen')
+          elif coverage >= 80:
+              print('green')
+          elif coverage >= 70:
+              print('yellow')
+          elif coverage >= 60:
+              print('orange')
+          else:
+              print('red')
+          ")
+
+          # Create JSON for shields.io endpoint badge
+          mkdir -p .github/badges
+          cat > .github/badges/coverage.json << EOF
+          {
+            "schemaVersion": 1,
+            "label": "coverage",
+            "message": "${COVERAGE}%",
+            "color": "${COLOR}"
+          }
+          EOF
+
+          echo "Coverage badge created: ${COVERAGE}% (${COLOR})"
+
+      - name: Upload coverage badge as artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-badge
+          path: .github/badges/coverage.json
+
+      - name: Get main branch coverage
+        if: github.event_name == 'pull_request'
+        id: main-coverage
+        continue-on-error: true
+        run: |
+          # Try to fetch coverage from main branch badge
+          MAIN_COVERAGE="N/A"
+          MAIN_BADGE_URL="https://raw.githubusercontent.com/${{ github.repository }}/main/.github/badges/coverage.json"
+
+          echo "Fetching main branch coverage from: $MAIN_BADGE_URL"
+
+          if curl -f -s "$MAIN_BADGE_URL" -o main-coverage.json; then
+            MAIN_COVERAGE=$(jq -r '.message' main-coverage.json | sed 's/%//')
+            echo "Main branch coverage: ${MAIN_COVERAGE}%"
+          else
+            echo "Could not fetch main branch coverage badge"
+          fi
+
+          echo "percentage=$MAIN_COVERAGE" >> $GITHUB_OUTPUT
+
+      - name: Calculate coverage difference
+        if: github.event_name == 'pull_request'
+        id: coverage-diff
+        run: |
+          CURRENT="${{ steps.merge-coverage.outputs.percentage }}"
+          MAIN="${{ steps.main-coverage.outputs.percentage }}"
+
+          if [ "$MAIN" = "N/A" ]; then
+            echo "diff=N/A" >> $GITHUB_OUTPUT
+            echo "emoji=ℹ️" >> $GITHUB_OUTPUT
+            echo "trend=baseline" >> $GITHUB_OUTPUT
+            echo "Cannot compare - main branch coverage not available"
+          else
+            # Use Python for floating point arithmetic (always available in GitHub Actions)
+            DIFF=$(python3 -c "print(round($CURRENT - $MAIN, 2))")
+            echo "diff=$DIFF" >> $GITHUB_OUTPUT
+
+            # Determine emoji and trend based on difference
+            # Use Python for comparison to avoid bc dependency
+            if [ "$(python3 -c "print(1 if $DIFF > 0 else 0)")" = "1" ]; then
+              echo "emoji=📈" >> $GITHUB_OUTPUT
+              echo "trend=improved" >> $GITHUB_OUTPUT
+              echo "Coverage improved by ${DIFF}%"
+            elif [ "$(python3 -c "print(1 if $DIFF < 0 else 0)")" = "1" ]; then
+              echo "emoji=📉" >> $GITHUB_OUTPUT
+              echo "trend=decreased" >> $GITHUB_OUTPUT
+              echo "Coverage decreased by ${DIFF}%"
+            else
+              echo "emoji=➡️" >> $GITHUB_OUTPUT
+              echo "trend=unchanged" >> $GITHUB_OUTPUT
+              echo "Coverage unchanged"
+            fi
+          fi
+
+      - name: Generate coverage summary for PR
+        if: github.event_name == 'pull_request'
+        id: coverage-summary
+        run: |
+          # A with: input reaches the action as a single environment variable, and Linux
+          # caps one of those at MAX_ARG_STRLEN = 131072 bytes. Exceeding it does not
+          # truncate anything -- execve fails and the step dies with "Argument list too
+          # long".
+          #
+          # The package table is ~1 KB, so this cap never fires in normal operation. It
+          # exists so that an unexpected growth degrades into a truncated comment that
+          # names where the full data is, instead of a failed job.
+          MAX_BYTES=50000
+          if [ "$(wc -c < coverage/summary.txt)" -gt "$MAX_BYTES" ]; then
+            echo "Coverage summary is $(wc -c < coverage/summary.txt) bytes; truncating to ${MAX_BYTES}."
+            head -c "$MAX_BYTES" coverage/summary.txt > coverage/summary-capped.txt
+            printf '\n\n_Truncated. The full report is in the job summary and the `coverage-combined` artifact._\n' \
+              >> coverage/summary-capped.txt
+            mv coverage/summary-capped.txt coverage/summary.txt
+          fi
+
+          echo "COVERAGE_SUMMARY<<EOF" >> $GITHUB_ENV
+          cat coverage/summary.txt >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Comment PR with combined coverage
+        if: github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v3
+        with:
+          header: coverage
+          message: |
+            ## 📊 Combined Test Coverage Report
+
+            **Current Coverage:** `${{ steps.merge-coverage.outputs.percentage }}%`
+            **Main Branch Coverage:** `${{ steps.main-coverage.outputs.percentage }}%`
+            **Difference:** ${{ steps.coverage-diff.outputs.emoji }} `${{ steps.coverage-diff.outputs.diff }}%`
+
+            <details>
+            <summary>📁 Coverage by package</summary>
+
+            ${{ env.COVERAGE_SUMMARY }}
+
+            </details>
+
+            > Unit and integration tests combined. The full per-function report is in this
+            > job's summary and in the `coverage-combined` artifact — it is deliberately not
+            > inlined here, because a `with:` input travels to the action as one environment
+            > variable and Linux caps that at 131072 bytes.
+
+  container-malware-scan:
+    name: Container Malware Scan
+    runs-on: self-hosted
+    needs: [malware-scan]  # Run after source scan passes
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # This job builds a container from the checked-out tree, and the
+          # Containerfile does `COPY . .`. Leaving credentials persisted would put
+          # the job token into .git/config and from there into the build context.
+          # .dockerignore excludes .git/ as well - both halves, because either one
+          # alone is a single point of failure. Nothing here pushes with git.
+          persist-credentials: false
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: guidedtraffic
+          password: ${{ secrets.DOCKERHUB_PAT }}
+
+      - name: Get current epoch time
+        id: time
+        run: echo "epoch=$(date +%s)" >> $GITHUB_OUTPUT
+
+      - name: Build container for scanning
+        uses: docker/build-push-action@v7
+        with:
+          file: Containerfile
+          context: .
+          build-args: |
+            BUILD_NUMBER=scan-${{ github.sha }}
+            GIT_COMMIT=${{ github.sha }}
+            BUILD_TIME=${{ steps.time.outputs.epoch }}
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: mosquitto-operator:scan-${{ github.sha }}
+
+      # Defence in depth for the two Trivy steps below: `docker/login-action` wrote
+      # the Docker Hub credential into ~/.docker/config.json on this runner, and the
+      # image is already built, so nothing after this point needs the registry. The
+      # scan steps therefore run third-party action code with no credential on disk.
+      - name: Log out of Docker Hub
+        run: docker logout
+
+      # Pinned to a commit, not to the moving `master` it used to track: this
+      # action runs on a self-hosted runner, two steps after a Docker Hub login,
+      # so whoever can move that branch could run code here with the credential
+      # still on disk. `docker logout` above closes the second half.
+      #
+      # What the pin actually buys, stated honestly: Renovate automerges
+      # github-actions DIGEST updates, so a new upstream release still lands here
+      # without a human reading it. The pin removes the "whatever is on master
+      # right now" window and replaces it with a Renovate cycle - it is not human
+      # review. Drop `digest` from the github-actions automerge rule in
+      # renovate.json if review is what is wanted.
+      #
+      # Only trivy is pinned this way. The rest (actions/*, docker/*, azure/*,
+      # helm/*) keep tag refs: they are first-party or vendor-published actions
+      # whose tags are protected upstream, whereas this one was tracking a branch
+      # head. That is the distinction, not a half-finished sweep.
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: mosquitto-operator:scan-${{ github.sha }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+          scanners: 'vuln,secret,misconfig'
+
+      - name: Run Trivy scan (SARIF output)
+        if: always()
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: mosquitto-operator:scan-${{ github.sha }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          scanners: 'vuln,secret,misconfig'
+
+      - name: Upload Trivy scan results
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trivy-container-report
+          path: trivy-results.sarif
+          retention-days: 30
+
+      - name: Cleanup scan image
+        if: always()
+        run: docker rmi mosquitto-operator:scan-${{ github.sha }} || true
+
+  # Proves on every PR that the semantic-release dependency set can still render
+  # release notes. The release job is the only other place these npm packages are
+  # exercised, and it runs on pushes to main - after a Renovate bump has merged.
+  # Without this job a preset/writer mismatch would surface as a failed (or
+  # silently note-less) release on main instead of as a red check on the bump PR.
+  release-tooling:
+    name: Release Tooling
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+
+      # The self-hosted runner image ships no make, and the target below is entered
+      # through the Makefile like every other check in this workflow.
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+
+      # Runs before npm install because it needs nothing from node_modules: a
+      # Renovate customManager whose regex stopped matching drops its file out of a
+      # version group silently, and this is the cheapest place to catch that.
+      - name: Verify every Renovate customManager still matches
+        run: make verify-ci-references
+
+      # --ignore-scripts: the semantic-release dependency tree is pure JavaScript and
+      # needs no build step, so nothing here has a reason to run arbitrary install
+      # hooks on a self-hosted runner.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
+        run: npm audit signatures
+
+      - name: Verify release tooling renders release notes
+        run: node hack/verify-release-tooling.mjs
+
+  semantic-release:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [malware-scan, container-malware-scan, gosec, govulncheck, linter, cyclomatic-complexity, generated-manifests, unit-tests, integration-tests, e2e-tests, mosquitto-image-tools, coverage-report, release-tooling]
+    name: Semantic Release
+    runs-on: self-hosted
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+      id-token: write
+    steps:
+      # persist-credentials: false keeps BOT_PAT out of .git/config. Otherwise the
+      # checkout writes it as an http.extraheader that stays readable in the working
+      # directory for every later step, npm install included. semantic-release does
+      # not need it there: it builds its own authenticated push URL from the
+      # GITHUB_TOKEN env var set on the Release step below.
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          token: ${{ secrets.BOT_PAT }}
+
+      - name: Download coverage badge
+        uses: actions/download-artifact@v8
+        with:
+          name: coverage-badge
+          path: .github/badges/
+        continue-on-error: true
+
+      - name: Verify coverage badge downloaded
+        run: |
+          if [ -f ".github/badges/coverage.json" ]; then
+            echo "✅ Coverage badge downloaded successfully"
+            cat .github/badges/coverage.json
+          else
+            echo "⚠️ Coverage badge not found, using existing file"
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "lts/*"
+
+      # --ignore-scripts: this job holds BOT_PAT in its environment, so the install
+      # of the dependency tree must not execute lifecycle scripts. The packages are
+      # pure JavaScript and need none.
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+
+      - name: Verify the integrity of provenance attestations and registry signatures for installed dependencies
+        run: npm audit signatures
+
+      - name: Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.BOT_PAT }}
+        run: npx semantic-release

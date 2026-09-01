@@ -1,0 +1,18 @@
+apiVersion: v2
+name: mosquitto-operator
+description: A Kubernetes operator for provisioning highly available Mosquitto MQTT brokers
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+maintainers:
+  - name: Guided Traffic
+    url: https://github.com/guided-traffic
+keywords:
+  - mosquitto
+  - mqtt
+  - broker
+  - operator
+  - kubernetes
+home: https://github.com/guided-traffic/mosquitto-operator
+sources:
+  - https://github.com/guided-traffic/mosquitto-operator

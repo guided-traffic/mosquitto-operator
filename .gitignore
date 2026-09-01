@@ -7,6 +7,7 @@
 *.dll
 *.so
 *.dylib
+bin/
 
 # Test binary, built with `go test -c`
 *.test
@@ -14,8 +15,13 @@
 # Code coverage profiles and other test artifacts
 *.out
 coverage.*
+coverage/
 *.coverprofile
 profile.cov
+
+# The coverage badge is a committed artifact, not a coverage run output: the
+# coverage.* rule above would otherwise keep it out of a fresh clone.
+!.github/badges/coverage.json
 
 # Dependency directories (remove the comment below to include it)
 # vendor/
@@ -30,3 +36,15 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Node.js dependencies (for semantic-release)
+node_modules/
+
+# Manager binary built without -o (make build writes bin/manager instead)
+main
+
+# Scratch dir for generated Kind configs
+tmp/
+
+# Local agent workspace
+.claude/

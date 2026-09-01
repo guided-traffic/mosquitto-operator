@@ -1,0 +1,42 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: mosquitto-operator-role
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - services
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - apps
+  resources:
+  - statefulsets
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - mko.gtrfc.com
+  resources:
+  - mosquittoes
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - mko.gtrfc.com
+  resources:
+  - mosquittoes/finalizers
+  - mosquittoes/status
+  verbs:
+  - update

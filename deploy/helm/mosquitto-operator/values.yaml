@@ -1,0 +1,89 @@
+# Default values for mosquitto-operator.
+
+replicaCount: 1
+
+image:
+  repository: guidedtraffic/mosquitto-operator
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created.
+  create: true
+  # Annotations to add to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+resources:
+  requests:
+    cpu: 10m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# maxConcurrentReconciles is how many Mosquitto resources the operator reconciles
+# at the same time. A pass writes the ConfigMap, the headless Service, the client
+# Service and the StatefulSet, so it is bound by API server round trips; with a
+# single worker one slow resource delays every other Mosquitto in the cluster.
+# Passes for the same resource stay serialised at any value, because the work
+# queue never runs two passes for one key.
+maxConcurrentReconciles: 4
+
+# Leader election ensures only one operator instance is active at a time. It is
+# also what the coordination.k8s.io/leases rule in the ClusterRole is for - that
+# rule is rendered only while this is true.
+leaderElection:
+  enabled: true
+
+# The operator's own Prometheus endpoint. It serves controller-runtime's
+# standard reconcile, work queue, client and Go runtime series; this operator
+# registers no metric of its own yet. enabled: true passes
+# --metrics-bind-address=:8080 and renders the ClusterIP Service that gives that
+# port a DNS name; enabled: false passes --metrics-bind-address=0, which is the
+# literal controller-runtime reads as "do not start the metrics server", and
+# renders no Service.
+#
+# Security note, because a ClusterIP Service suggests more of a boundary than it
+# is: the endpoint is plain HTTP and applies no authentication or authorization
+# filter. Every pod that can route to the operator pod reads it whether or not
+# this Service exists - setting enabled: false is what closes the port, deleting
+# the Service only hides the DNS name. This chart ships no NetworkPolicy on
+# purpose; restricting ingress to the operator namespace is the documented
+# mitigation and is left to the cluster administrator.
+metrics:
+  enabled: true
+
+# TLS is configured per Mosquitto resource, not here. spec.tls.secretName names
+# an existing Secret in the resource's own namespace carrying tls.crt and
+# tls.key; the operator mounts it into the broker pods and switches the listener
+# to MQTTS on 8883. Two ways of filling that Secret are supported and neither
+# needs anything from this chart:
+#   1. Create it by hand: kubectl create secret tls <name> --cert=... --key=...
+#   2. Let cert-manager issue it, on clusters that already run cert-manager. The
+#      administrator owns the Certificate object; this chart has no cert-manager
+#      dependency and installs nothing.
+#
+# Security note: the operator does not watch that Secret. Renewing or replacing
+# the certificate changes the Secret, but the running broker pods keep serving
+# the material they started with - a rotation only takes effect once the pods
+# restart (for example `kubectl rollout restart statefulset/<name>`).
+
+# Mosquitto resources support spec.antiAffinity (default: off - upgrades change
+# nothing). "soft" spreads the broker pods over kubernetes.io/hostname as a
+# scheduler preference; "hard" guarantees the spread, and surplus pods stay
+# Pending when there are fewer schedulable nodes than replicas.
