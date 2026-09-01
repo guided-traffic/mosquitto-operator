@@ -2,12 +2,18 @@
 
 // Package integration runs the real reconciler against a real API server
 // (envtest), which is the tier that can answer what unit tests cannot: whether
-// the objects the builder produces are actually accepted, whether the owner
-// references make garbage collection work, and whether the CRD's validation and
-// defaulting behave as the markers claim.
+// the objects the builder produces are actually accepted by the API server,
+// whether the owner references the reconciler writes are accepted as written,
+// and whether the CRD's validation and defaulting behave as the markers claim.
 //
-// There is no kubelet, so no pod ever starts. Anything that depends on a running
-// broker belongs in test/e2e.
+// What this tier deliberately cannot answer, because envtest starts only the API
+// server and etcd:
+//   - Garbage collection. There is no kube-controller-manager, so no garbage
+//     collector runs and deleting a Mosquitto removes nothing here. That the owner
+//     references actually cause the managed objects to be collected is asserted in
+//     test/e2e (see the "deleting the CR removes everything it owns" subtest).
+//   - Anything that depends on a running broker: there is no kubelet, so no pod
+//     ever starts. That belongs in test/e2e too.
 package integration
 
 import (
