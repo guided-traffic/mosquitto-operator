@@ -32,12 +32,48 @@ const (
 	ComponentBroker = "broker"
 )
 
-// ExtractVersionFromImage extracts the tag portion from a container image string.
-// Returns "latest" if no tag is present.
+// maxLabelValueLength is the Kubernetes limit on a label value, in bytes.
+const maxLabelValueLength = 63
+
+// shortDigestLength is how much of a digest hex reaches the version label. Twelve
+// characters is the short form docker itself prints, long enough to identify an
+// image by eye and short enough to leave the value obviously abbreviated.
+const shortDigestLength = 12
+
+// ExtractVersionFromImage derives the app.kubernetes.io/version label value from a
+// container image reference. It returns "latest" when the reference carries no tag.
+//
+// The result is always a VALID label value, which is the whole point of this
+// function rather than a strings.Split at the call site. spec.image is free-form
+// (the CRD validates nothing beyond MinLength), and two shapes of reference produce
+// something the API server refuses:
+//
+//   - A digest reference. "eclipse-mosquitto@sha256:<64 hex>" yields
+//     "sha256:<64 hex>", which is 71 bytes and contains a colon. Both break the
+//     rules, so EVERY object the operator writes for that resource - ConfigMap, both
+//     Services, StatefulSet - is rejected, and the resource sits in Failed forever.
+//   - A long tag. A docker tag may be 128 characters, twice what a label value holds.
+//
+// So a digest is reduced to its hex prefix and anything else is sanitised: characters
+// outside [A-Za-z0-9._-] become "-", the value is truncated to the limit, and it is
+// trimmed to start and end alphanumerically. A value with nothing usable left becomes
+// "unknown" rather than an empty label, so the label is always present and always says
+// something.
 func ExtractVersionFromImage(image string) string {
 	// Handle images with digest (e.g., "image@sha256:...").
+	//
+	// The algorithm prefix is dropped: it is constant across every image in practice,
+	// and the colon separating it from the hex is exactly what a label value may not
+	// contain.
 	if idx := strings.LastIndex(image, "@"); idx != -1 {
-		return image[idx+1:]
+		digest := image[idx+1:]
+		if algoEnd := strings.Index(digest, ":"); algoEnd != -1 {
+			digest = digest[algoEnd+1:]
+		}
+		if len(digest) > shortDigestLength {
+			digest = digest[:shortDigestLength]
+		}
+		return sanitizeLabelValue(digest)
 	}
 
 	// Handle images with tag (e.g., "image:tag").
@@ -49,10 +85,46 @@ func ExtractVersionFromImage(image string) string {
 	}
 
 	if idx := strings.LastIndex(tagPart, ":"); idx != -1 {
-		return tagPart[idx+1:]
+		return sanitizeLabelValue(tagPart[idx+1:])
 	}
 
 	return "latest"
+}
+
+// sanitizeLabelValue coerces a string into a valid Kubernetes label value.
+//
+// It is deliberately lossy and deliberately never fails: the alternative at the call
+// site would be a reconcile that cannot write anything, which is a worse outcome than
+// an abbreviated version label. What it must never do is return something the API
+// server rejects, and TestSanitizeLabelValue_AlwaysProducesAValidLabel asserts that
+// against apimachinery's own validator rather than against expected strings, so a
+// future edit cannot pin an invalid value as intended behaviour.
+func sanitizeLabelValue(value string) string {
+	var b strings.Builder
+	for _, r := range value {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9',
+			r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('-')
+		}
+	}
+
+	// Truncate on bytes, not runes: the limit is a byte limit, and every rune that
+	// survived the loop above is one byte.
+	out := b.String()
+	if len(out) > maxLabelValueLength {
+		out = out[:maxLabelValueLength]
+	}
+
+	// A label value must start and end alphanumerically. Trimming can empty the
+	// string - a tag of "---" leaves nothing - hence the fallback.
+	out = strings.Trim(out, "-_.")
+	if out == "" {
+		return "unknown"
+	}
+	return out
 }
 
 // BaseLabels returns the labels stamped on every object the operator creates for
