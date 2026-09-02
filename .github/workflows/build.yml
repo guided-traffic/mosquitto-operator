@@ -5,7 +5,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GO_VERSION: '1.27.0'
+  GO_VERSION: '1.27.1'
 
 # Two releases published close together would otherwise run this workflow twice at
 # once, and both runs rebase the same gh-pages index.yaml. Serialising them (and
