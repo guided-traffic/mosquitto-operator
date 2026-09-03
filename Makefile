@@ -367,7 +367,7 @@ $(LOCALBIN):
 # renovate: datasource=go depName=sigs.k8s.io/kustomize/kustomize/v5
 KUSTOMIZE_VERSION ?= v5.8.1
 # renovate: datasource=go depName=sigs.k8s.io/controller-tools/cmd/controller-gen
-CONTROLLER_GEN_VERSION ?= v0.21.0
+CONTROLLER_GEN_VERSION ?= v0.22.0
 # setup-envtest is pinned to a controller-runtime BRANCH, not a tag, so no
 # Renovate datasource resolves it and this pin is bumped by hand alongside
 # ENVTEST_K8S_VERSION. Deliberately no "# renovate:" comment: the manager below
