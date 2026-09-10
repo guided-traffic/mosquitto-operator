@@ -2,8 +2,31 @@ apiVersion: v1
 entries:
   mosquitto-operator:
   - apiVersion: v2
+    appVersion: 0.1.3
+    created: "2026-09-10T03:11:49.563152553Z"
+    description: A Kubernetes operator for provisioning highly available Mosquitto
+      MQTT brokers
+    digest: ea065bbe980925c0dc8caef56565f7eddf74c1297dff9761c27726c897c45968
+    home: https://github.com/guided-traffic/mosquitto-operator
+    keywords:
+    - mosquitto
+    - mqtt
+    - broker
+    - operator
+    - kubernetes
+    maintainers:
+    - name: Guided Traffic
+      url: https://github.com/guided-traffic
+    name: mosquitto-operator
+    sources:
+    - https://github.com/guided-traffic/mosquitto-operator
+    type: application
+    urls:
+    - https://guided-traffic.github.io/mosquitto-operator/mosquitto-operator-0.1.3.tgz
+    version: 0.1.3
+  - apiVersion: v2
     appVersion: 0.1.2
-    created: "2026-09-06T02:53:53.733919574Z"
+    created: "2026-09-10T03:11:49.562603418Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 300127538a1a8792031985cd7a5e668e08827516e5f045aeaa6b9164a7db46ff
@@ -26,7 +49,7 @@ entries:
     version: 0.1.2
   - apiVersion: v2
     appVersion: 0.1.1
-    created: "2026-09-06T02:53:53.733183074Z"
+    created: "2026-09-10T03:11:49.561826474Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: a1ccf3647eb17b5b5b30ba2fe61a6d30fd72fa917e96d57a9da446dbfd39e7c3
@@ -49,7 +72,7 @@ entries:
     version: 0.1.1
   - apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-09-06T02:53:53.732642654Z"
+    created: "2026-09-10T03:11:49.560947126Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 2da98374ca4b13d46f3735d822bb787aa360ab96b7b5b20388e9ef96cce5301e
@@ -70,4 +93,4 @@ entries:
     urls:
     - https://guided-traffic.github.io/mosquitto-operator/mosquitto-operator-0.1.0.tgz
     version: 0.1.0
-generated: "2026-09-06T02:53:53.731942203Z"
+generated: "2026-09-10T03:11:49.560045999Z"
