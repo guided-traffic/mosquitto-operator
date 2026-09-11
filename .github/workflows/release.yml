@@ -784,7 +784,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v5
         with:
-          version: 'v4.2.4'
+          version: 'v4.3.0'
 
       # Runs the generator itself, so the kubebuilder markers in the Go sources are
       # compared against the checked-in manifests. build.yml runs the same check, but
