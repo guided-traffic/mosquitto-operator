@@ -4,6 +4,11 @@
 
 Accepted. Date: 2026-09-01.
 
+**Amended 2026-09-25:** the token named below as `BOT_PAT` is now an installation token of the
+org GitHub App `guided-traffic-automation`, minted from `APP_CLIENT_ID`/`APP_PRIVATE_KEY`
+([ADR 0005](0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) Status). The
+reasoning that rests on it is unchanged.
+
 **Verified by reading, in this tree:** [`go.mod`](../../go.mod) line 3 (`go 1.27.0`),
 [`Containerfile`](../../Containerfile) line 2 (`FROM golang:1.27.0-alpine AS builder`),
 [`.github/workflows/build.yml`](../../.github/workflows/build.yml) line 8 and

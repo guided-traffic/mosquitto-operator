@@ -50,7 +50,7 @@ ADRs that own each decision —
 | **CR author** | Anyone with `create`/`update` on `mosquittoes.mko.gtrfc.com` in a namespace | That namespace | Chooses `spec.image` (arbitrary string), the whole tail of the broker's `mosquitto.conf` through `spec.config`, the TLS Secret name, `spec.replicas` (1–9), the storage class. Section 3 is what that buys them |
 | **Broker pods** | The namespace's `default` ServiceAccount — `buildPodSpec` sets no `ServiceAccountName` — with `AutomountServiceAccountToken: ptr.To(false)` ([`internal/builder/statefulset.go:154`](internal/builder/statefulset.go)) | None: no token is mounted | Nothing. The container command is `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf`; no code in this repository runs in that pod and it makes no Kubernetes API call |
 | **MQTT clients** | **None. There is no client identity.** | Anything that can route to the ClusterIP Service `<name>` on 1883, or 8883 under TLS | Publish and subscribe on every topic. `GenerateMosquittoConf` appends `allow_anonymous true` unconditionally and renders no `require_certificate` ([`internal/builder/configmap.go:129`](internal/builder/configmap.go)) |
-| **CI** | GitHub Actions jobs, all on `self-hosted` runners | The runner fleet; on non-fork runs also Docker Hub and this GitHub repository | `DOCKERHUB_PAT`, `BOT_PAT` and the job `GITHUB_TOKEN` — section 2.4 says which job holds which, and what bounds it |
+| **CI** | GitHub Actions jobs, all on `self-hosted` runners | The runner fleet; on non-fork runs also Docker Hub and this GitHub repository. The GitHub App private key two jobs handle could mint tokens for every repository of the org; the workflows only ever request this one | `DOCKERHUB_PAT`, the GitHub App credentials `APP_CLIENT_ID`/`APP_PRIVATE_KEY` with the per-job installation token minted from them, and the job `GITHUB_TOKEN` — section 2.4 says which job holds which, and what bounds it |
 
 ```
         cluster scope                              namespace scope (any namespace)
@@ -155,17 +155,22 @@ not already leaking by scheduling the pods that mount it.
 
 ### 2.4 CI credentials
 
-Three credentials appear in the workflows. None of them reaches a fork pull
-request: GitHub does not pass repository secrets to a `pull_request` run from a
-fork, so in a fork run `secrets.DOCKERHUB_PAT` and `secrets.BOT_PAT` are empty
-strings and the job token is read-only
+The workflows use one repository secret (`DOCKERHUB_PAT`), two organization
+secrets (`APP_CLIENT_ID`, `APP_PRIVATE_KEY`) and two short-lived tokens (the
+GitHub App installation token and the job `GITHUB_TOKEN`). None of them reaches a
+fork pull request: GitHub does not pass repository or organization secrets to a
+`pull_request` run from a fork, so in a
+fork run `secrets.DOCKERHUB_PAT`, `secrets.APP_CLIENT_ID` and
+`secrets.APP_PRIVATE_KEY` are empty strings — no app token can be minted — and
+the job token is read-only
 ([ADR 0005](docs/adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md)
 D4).
 
 | Credential | Which job holds it | What for | What bounds it |
 |---|---|---|---|
 | `DOCKERHUB_PAT` | [`release.yml`](.github/workflows/release.yml): `e2e-tests`, `mosquitto-image-tools`, `container-malware-scan`, each in a `docker/login-action@v4` step. [`build.yml`](.github/workflows/build.yml): the `build` job's login and its `docker/scout-action@v1` step | Authenticated Docker Hub pulls (the anonymous rate limit is the reason the image-tools job logs in at all) and, in `build.yml`, the release push and the Scout scan | `container-malware-scan` runs `docker logout` **before** its two Trivy steps, so third-party action code executes with no credential left in `~/.docker/config.json`; that action is pinned to a commit (`aquasecurity/trivy-action@ed142fd…`), unlike the tag-referenced first-party actions |
-| `BOT_PAT` | [`release.yml`](.github/workflows/release.yml): `semantic-release` (the checkout `token:` and the `GITHUB_TOKEN` env of the Release step). [`renovate.yml`](.github/workflows/renovate.yml): the `renovate` job | Tagging, publishing the release, committing the coverage badge; Renovate's own PRs | `semantic-release` carries `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, so it never runs on a pull request of any kind; its checkout sets `persist-credentials: false` so the token is not written into `.git/config` as an `http.extraheader`; and `npm ci --ignore-scripts` keeps dependency lifecycle scripts from executing while the token sits in the environment. `renovate.yml` has no `pull_request` trigger at all |
+| `APP_CLIENT_ID`, `APP_PRIVATE_KEY` (organization secrets: client ID and private key of the org GitHub App `guided-traffic-automation`) | [`release.yml`](.github/workflows/release.yml): `semantic-release`. [`renovate.yml`](.github/workflows/renovate.yml): `renovate`. In both jobs only as `with:` inputs of the first step, `actions/create-github-app-token@v3`; no later step receives them in its environment | Identifying the app and signing the request for an installation token | The private key is the long-lived secret of this set: it does not expire, and the app is installed on every repository of the org, so the key alone can mint tokens for every one of them with every permission the app holds. What this repository controls is only where the key goes: both jobs are unreachable from a pull request (`semantic-release`'s `if:` below, no `pull_request` trigger in `renovate.yml`), and the key reaches the token step alone. It still passes through the self-hosted runner, so a runner that is not clean sees the key, not only a token (section 7). Rotation — a new key in the app settings, then the secret replaced — is manual and outside this repository |
+| GitHub App installation token (`steps.app-token.outputs.token`), minted per job | [`release.yml`](.github/workflows/release.yml): `semantic-release` (the checkout `token:` and the `GITHUB_TOKEN` env of the Release step). [`renovate.yml`](.github/workflows/renovate.yml): the `token:` input of the `renovate` job's Renovate step | Tagging, publishing the release, committing the coverage badge; Renovate's own PRs. Not the job `GITHUB_TOKEN`, because events that token creates start no other workflow — a release it published would never run `build.yml` | Scoped to this repository (the token step sets no `owner`/`repositories`), valid for 1 h, and revoked by the action's post step when the job ends. `semantic-release` requests `permission-contents: write` only: [`.releaserc.json`](.releaserc.json) sets `successComment`, `failComment` and `releasedLabels` to `false`, so `@semantic-release/github` writes no issue and no PR. `renovate` requests no `permission-*` input and therefore gets every permission of the app installation. `semantic-release` carries `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, so it never runs on a pull request of any kind; its checkout sets `persist-credentials: false` so the token is not written into `.git/config` as an `http.extraheader`; and `npm ci --ignore-scripts` keeps dependency lifecycle scripts from executing while the token sits in the environment. `renovate.yml` has no `pull_request` trigger at all |
 | `GITHUB_TOKEN` (the job token) | [`release.yml`](.github/workflows/release.yml): `coverage-report`'s checkout. [`build.yml`](.github/workflows/build.yml): the SBOM upload, the release-asset upload and the `gh-pages` checkout | Sticky PR comment, release assets, publishing the Helm chart by committing to `gh-pages` | `release.yml` and `renovate.yml` set a top-level `permissions: contents: read` floor; exactly two jobs raise it, each in its own block (`coverage-report`: `pull-requests: write`; `semantic-release`: `contents`, `issues`, `pull-requests`, `id-token` write). [`build.yml`](.github/workflows/build.yml) has **no top-level floor** — both of its jobs declare `contents: write` themselves, so a job added without a block would inherit the repository default (open item, section 7) |
 
 Two mechanisms keep a job token out of the container image, and the comments in
@@ -561,8 +566,9 @@ the verb, the target, and whether it is live today.
       ([ADR 0005](docs/adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md)).
       Stated with the correct facts, because the wrong version of this sentence
       is the common one: **secrets are not the exposure.** GitHub passes no
-      repository secret to a `pull_request` run from a fork — `DOCKERHUB_PAT` and
-      `BOT_PAT` are empty strings there and the job token is read-only — so what
+      repository or organization secret to a `pull_request` run from a fork — `DOCKERHUB_PAT`,
+      `APP_CLIENT_ID` and `APP_PRIVATE_KEY` are empty strings there and the job
+      token is read-only — so what
       is at stake is **code execution on the runner**, on a fleet whose steps
       assume a Docker daemon and unprompted `sudo`. Under a `pull_request`
       trigger the workflow definition itself comes from the PR, so no part of the
@@ -580,13 +586,19 @@ the verb, the target, and whether it is live today.
       ephemeral ARC runner pod". If the runners are not ephemeral, fork-authored
       code can leave state — a poisoned build cache, a modified
       `~/.docker/config.json`, a cron entry — that a later trusted job executes
-      with `DOCKERHUB_PAT` or `BOT_PAT` in its environment. That is infrastructure
-      this repository cannot inspect.
+      with `DOCKERHUB_PAT` in its environment, or while `semantic-release` or
+      `renovate` hands `APP_PRIVATE_KEY` to its token step. The key is the worse
+      catch: the token lives 1 h and reaches this repository only, the key does
+      not expire and mints tokens for every repository of the org. That is
+      infrastructure this repository cannot inspect.
 - [ ] **Renovate automerges GitHub Actions minor, patch and digest updates, and
-      those actions execute on the fleet in jobs that hold `DOCKERHUB_PAT` and
-      `BOT_PAT`. Live.** Majors require review ([`renovate.json`](renovate.json)),
+      those actions execute on the fleet in jobs that hold `DOCKERHUB_PAT`, or
+      `APP_PRIVATE_KEY` and the app token minted from it. Live.** Majors require
+      review ([`renovate.json`](renovate.json)),
       and only `aquasecurity/trivy-action` is pinned to a commit — the rest keep
       tag refs, on the argument that they are first-party or vendor-published.
+      That includes `actions/create-github-app-token@v3`, the one step that
+      receives the private key itself.
       Dropping `digest` from the github-actions automerge rule is the one-line
       change if human review is what is wanted.
 - [ ] **[`build.yml`](.github/workflows/build.yml) has no top-level `permissions:`

@@ -623,7 +623,7 @@ executed.)
 Everything runs on `runs-on: self-hosted`. That is a deliberate, recorded exposure: this repository
 is public, so a fork pull request executes fork-authored code on that infrastructure. Repository
 secrets are *not* passed to a fork run — GitHub provides only a read-only `GITHUB_TOKEN` — so the
-exposure is code execution on the runner, not disclosure of `DOCKERHUB_PAT` or `BOT_PAT`. It is
+exposure is code execution on the runner, not disclosure of `DOCKERHUB_PAT` or `APP_PRIVATE_KEY`. It is
 gated outside the repository, under Settings > Actions > General, and there is deliberately no fork
 guard in the workflow. See
 [ADR 0005](docs/adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md).
@@ -649,7 +649,7 @@ guard in the workflow. See
 | `Cyclomatic Complexity` | `make cyclo` | Also writes a top-20 report into the job summary. |
 | `Generated Manifests Up To Date` | `make generate-all` + dirty check + `make verify-rbac-parity` | The dirty check covers untracked files too. |
 | `Release Tooling` | `make verify-ci-references`, `npm ci --ignore-scripts`, `npm audit signatures`, `node hack/verify-release-tooling.mjs` | It calls the node script directly rather than `make test-release-tooling`: the install here is explicit and uses `npm ci --ignore-scripts`, where the Makefile target runs `npm ci --no-audit --no-fund`. |
-| `Semantic Release` | `if: push && ref == refs/heads/main`, `needs:` the thirteen check jobs — every row above except `e2e-gate`, with `e2e-tests` itself in the list | `npx semantic-release` with `BOT_PAT`. |
+| `Semantic Release` | `if: push && ref == refs/heads/main`, `needs:` the thirteen check jobs — every row above except `e2e-gate`, with `e2e-tests` itself in the list | First mints a GitHub App installation token (`actions/create-github-app-token`, from `APP_CLIENT_ID`/`APP_PRIVATE_KEY`, scoped to this repository with `contents: write`, valid 1 h, revoked when the job ends), then runs `npx semantic-release` with it. Not `GITHUB_TOKEN`: a release that token creates does not trigger `build.yml`. |
 
 The E2E job carries a long preparation sequence that exists for real, still-applicable mechanics of
 Docker-in-Docker runners, and it is worth reading before you touch it: kernel modules and sysctls
@@ -696,7 +696,9 @@ update is labelled `major-update` and waits for a human, and major updates of *i
 are disabled outright, because a module-path bump cannot be applied without a direct importer and
 `go mod tidy` would keep resetting it. GitHub Actions majors specifically are read
 before they merge, because those actions execute on the self-hosted runners inside jobs that hold
-`DOCKERHUB_PAT` and `BOT_PAT`.
+`DOCKERHUB_PAT`, `APP_PRIVATE_KEY` and the app token minted from it. Renovate authenticates with its
+own GitHub App installation token, minted in the first step of the job with every permission of the
+app but scoped to this repository, valid 1 h and revoked when the job ends.
 
 ---
 

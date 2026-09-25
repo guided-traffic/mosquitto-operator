@@ -354,7 +354,9 @@ directly.
 Note one deliberate asymmetry: the local target `make test-release-tooling` runs
 `npm ci --no-audit --no-fund`, while the CI job runs `npm ci --ignore-scripts`, then
 `npm audit signatures`, then the script directly — the job holds no secret at that point, but the
-`semantic-release` job below it holds `BOT_PAT`, which is why lifecycle scripts stay off.
+`semantic-release` job below it holds a GitHub App installation token (minted from
+`APP_CLIENT_ID`/`APP_PRIVATE_KEY`, repository-scoped, `contents: write`, 1 h), which is why
+lifecycle scripts stay off.
 
 **A check is not a check until it has failed on purpose.** A new guard is trusted only after it has
 been observed failing against a deliberately broken tree — and the break must be *the* failure the

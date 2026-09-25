@@ -4,6 +4,11 @@
 
 Accepted. Date: 2026-09-01.
 
+**Amended 2026-09-25:** `BOT_PAT` below is now `APP_PRIVATE_KEY`, the private key of the org
+GitHub App `guided-traffic-automation`, and the installation token minted from it
+([ADR 0005](0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) Status). The
+statement is unchanged otherwise.
+
 **Verified by reading, in this tree:**
 [`hack/verify-ci-references.mjs`](../../hack/verify-ci-references.mjs),
 [`hack/verify-release-tooling.mjs`](../../hack/verify-release-tooling.mjs),

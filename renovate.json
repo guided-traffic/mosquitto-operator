@@ -164,7 +164,7 @@
       "automerge": true
     },
     {
-      "description": "GitHub Actions: require manual review for major updates. A major bump is by definition a behaviour change, and these actions execute on the self-hosted runners - on a push to main inside jobs that hold DOCKERHUB_PAT and BOT_PAT. Green CI does not tell us what else the new major does, so it is read before it merges. Minor, patch and digest updates stay automerged above.",
+      "description": "GitHub Actions: require manual review for major updates. A major bump is by definition a behaviour change, and these actions execute on the self-hosted runners - on a push to main inside jobs that hold DOCKERHUB_PAT, or APP_PRIVATE_KEY and the GitHub App token minted from it. Green CI does not tell us what else the new major does, so it is read before it merges. Minor, patch and digest updates stay automerged above.",
       "matchManagers": [
         "github-actions"
       ],

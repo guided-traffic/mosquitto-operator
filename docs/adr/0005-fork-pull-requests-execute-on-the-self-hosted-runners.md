@@ -5,6 +5,17 @@
 Accepted. Date: 2026-09-01. The call is the maintainer's, made on 2026-09-01 after the exposure
 below was put to them explicitly.
 
+**Amended 2026-09-25 — the credential changed, the decision did not.** `BOT_PAT`, a personal
+access token of the machine account `guided-traffic-bot`, is gone: GitHub suspended the account.
+`semantic-release` and `renovate` now mint an installation token of the org GitHub App
+`guided-traffic-automation` in their first step, from the organization secrets `APP_CLIENT_ID`
+and `APP_PRIVATE_KEY`. Every statement below about `BOT_PAT` holds for `APP_PRIVATE_KEY` and the
+token minted from it: both secrets are empty strings in a fork run, so no token can be minted
+there (D4); the jobs that mint it are the two D4 names; and D8's `persist-credentials: false` and
+`npm ci --ignore-scripts` now keep the app token out of `.git/config` and away from lifecycle
+scripts. The key does not expire and can mint tokens for every repository of the org
+([`SECURITY_ARCHITECTURE.md`](../../SECURITY_ARCHITECTURE.md) section 2.4).
+
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the comment block above
 `on:`, the `on:` block itself, the `concurrency` block, the top-level `permissions:`, every
