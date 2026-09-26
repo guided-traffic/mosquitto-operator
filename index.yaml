@@ -2,8 +2,31 @@ apiVersion: v1
 entries:
   mosquitto-operator:
   - apiVersion: v2
+    appVersion: 0.1.5
+    created: "2026-09-26T03:36:53.780076881Z"
+    description: A Kubernetes operator for provisioning highly available Mosquitto
+      MQTT brokers
+    digest: f119f663a4bd4a00ebca98ae84fbcab5b22a548cb05e477514e5516417447317
+    home: https://github.com/guided-traffic/mosquitto-operator
+    keywords:
+    - mosquitto
+    - mqtt
+    - broker
+    - operator
+    - kubernetes
+    maintainers:
+    - name: Guided Traffic
+      url: https://github.com/guided-traffic
+    name: mosquitto-operator
+    sources:
+    - https://github.com/guided-traffic/mosquitto-operator
+    type: application
+    urls:
+    - https://guided-traffic.github.io/mosquitto-operator/mosquitto-operator-0.1.5.tgz
+    version: 0.1.5
+  - apiVersion: v2
     appVersion: 0.1.4
-    created: "2026-09-16T03:18:00.98195056Z"
+    created: "2026-09-26T03:36:53.779359779Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 41ffe7a93197e8f5cc0d37468270c58c89198cc83f14f57cdccec1bc3540e3b8
@@ -26,7 +49,7 @@ entries:
     version: 0.1.4
   - apiVersion: v2
     appVersion: 0.1.3
-    created: "2026-09-16T03:18:00.981326693Z"
+    created: "2026-09-26T03:36:53.778694997Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: ea065bbe980925c0dc8caef56565f7eddf74c1297dff9761c27726c897c45968
@@ -49,7 +72,7 @@ entries:
     version: 0.1.3
   - apiVersion: v2
     appVersion: 0.1.2
-    created: "2026-09-16T03:18:00.980760244Z"
+    created: "2026-09-26T03:36:53.77787471Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 300127538a1a8792031985cd7a5e668e08827516e5f045aeaa6b9164a7db46ff
@@ -72,7 +95,7 @@ entries:
     version: 0.1.2
   - apiVersion: v2
     appVersion: 0.1.1
-    created: "2026-09-16T03:18:00.980226767Z"
+    created: "2026-09-26T03:36:53.777321498Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: a1ccf3647eb17b5b5b30ba2fe61a6d30fd72fa917e96d57a9da446dbfd39e7c3
@@ -95,7 +118,7 @@ entries:
     version: 0.1.1
   - apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-09-16T03:18:00.979694624Z"
+    created: "2026-09-26T03:36:53.776736204Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 2da98374ca4b13d46f3735d822bb787aa360ab96b7b5b20388e9ef96cce5301e
@@ -116,4 +139,4 @@ entries:
     urls:
     - https://guided-traffic.github.io/mosquitto-operator/mosquitto-operator-0.1.0.tgz
     version: 0.1.0
-generated: "2026-09-16T03:18:00.978776451Z"
+generated: "2026-09-26T03:36:53.775995278Z"
