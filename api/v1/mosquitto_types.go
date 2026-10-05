@@ -48,6 +48,27 @@ const (
 	PhaseFailed = "Failed"
 )
 
+// SecretConsumableLabel is the label a Secret carries to consent to being named
+// by a Mosquitto while the operator runs with --secret-security=true (ADR 0014
+// D10). Whoever can label a Secret can write it, so the label is the consent of
+// the Secret's owner. The value must be SecretConsumableValue.
+const SecretConsumableLabel = "mko.gtrfc.com/consumable"
+
+// SecretConsumableValue is the only value of SecretConsumableLabel that counts
+// as consent.
+const SecretConsumableValue = "true"
+
+// Reasons of the Ready condition when --secret-security=true refuses the TLS
+// Secret a Mosquitto names. The StatefulSet is left as it is.
+const (
+	// ReasonSecretNotFound: the named Secret does not exist, so its label cannot
+	// be checked.
+	ReasonSecretNotFound = "SecretNotFound"
+	// ReasonSecretNotConsumable: the named Secret does not carry
+	// SecretConsumableLabel with SecretConsumableValue.
+	ReasonSecretNotConsumable = "SecretNotConsumable"
+)
+
 // ConditionTypeReady is the data-plane verdict: every broker pod the spec asks
 // for is ready. It is recomputed on every pass that reaches the status update,
 // and it is present on every Mosquitto once one pass has completed.
@@ -78,7 +99,11 @@ type MosquittoSpec struct {
 	Replicas int32 `json:"replicas,omitempty"`
 
 	// Image is the Mosquitto container image. Empty means the operator default
-	// (see internal/builder for the pinned default).
+	// (see internal/builder for the pinned default). The supported broker line is
+	// 2.1.x: the generated configuration uses what 2.1 accepts, and an init
+	// container runs the image's own --test-config against it before the broker
+	// starts, so an image that does not understand a directive stops there with
+	// the broker's message. Nothing here checks the tag.
 	// +optional
 	Image string `json:"image,omitempty"`
 
@@ -119,6 +144,20 @@ type MosquittoSpec struct {
 	// directory. Empty means emptyDir.
 	// +optional
 	Storage *MosquittoStorage `json:"storage,omitempty"`
+
+	// PodLabels are added to the labels of every broker pod, merged under the
+	// operator's own keys: a key the operator sets (the selector labels, the
+	// version label) always wins. A key removed from this map is removed from the
+	// pods. A change rolls the pods.
+	// +optional
+	PodLabels map[string]string `json:"podLabels,omitempty"`
+
+	// PodAnnotations are added to the annotations of every broker pod, merged
+	// under the operator's own keys: the two hash annotations under
+	// mko.gtrfc.com/ always win. A key removed from this map is removed from the
+	// pods. A change rolls the pods.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
 }
 
 // MosquittoTLS points at the TLS material the broker listener serves.

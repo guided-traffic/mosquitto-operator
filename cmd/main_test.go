@@ -60,6 +60,7 @@ func TestBindOperatorFlags_Defaults(t *testing.T) {
 		"leader election defaults to off so a single-replica deployment needs no lease RBAC")
 	assert.Equal(t, controller.DefaultMaxConcurrentReconciles, f.maxConcurrentReconciles,
 		"an operator started without the flag must not fall back to a single worker")
+	assert.False(t, f.secretSecurity, "ADR 0014 D10: the owner chose false as the default")
 }
 
 // TestBindOperatorFlags_AllFlagsParsed is the guard behind the chart: these are
@@ -73,12 +74,16 @@ func TestBindOperatorFlags_AllFlagsParsed(t *testing.T) {
 		"--health-probe-bind-address=:9091",
 		"--leader-elect=true",
 		"--max-concurrent-reconciles=8",
+		"--secret-security=false",
+		"--secret-security=true",
 	}))
 
 	assert.Equal(t, ":9090", f.metricsAddr)
 	assert.Equal(t, ":9091", f.probeAddr)
 	assert.True(t, f.enableLeaderElection)
 	assert.Equal(t, 8, f.maxConcurrentReconciles)
+	assert.True(t, f.secretSecurity,
+		"the last occurrence wins: the kustomize component appends --secret-security=true after the default")
 }
 
 // TestZapFlagsAreBound covers the other half of the chart's argument list: the
@@ -135,12 +140,15 @@ func TestNewReconciler(t *testing.T) {
 	mgr, err := ctrl.NewManager(&rest.Config{Host: "http://127.0.0.1:1"}, ctrl.Options{Scheme: scheme})
 	require.NoError(t, err)
 
-	r := newReconciler(mgr, &operatorFlags{maxConcurrentReconciles: 6})
+	r := newReconciler(mgr, &operatorFlags{maxConcurrentReconciles: 6, secretSecurity: true})
 
 	assert.NotNil(t, r.Client, "without a client the reconciler can neither read nor write objects")
 	assert.Same(t, scheme, r.Scheme, "the scheme must be the manager's, or SetControllerReference fails")
 	assert.Equal(t, 6, r.MaxConcurrentReconciles,
 		"the flag is only worth having if it reaches the reconciler")
+	assert.True(t, r.SecretSecurity)
+	assert.Same(t, mgr.GetAPIReader(), r.APIReader,
+		"the Secret check reads uncached, or it needs list and watch on every Secret")
 }
 
 // TestSetupWithManagerRegistersTheController covers the watch wiring: a typo in

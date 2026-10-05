@@ -35,7 +35,12 @@ step), [`test/e2e/tls_test.go`](../../test/e2e/tls_test.go),
 
 **Implemented:** D1 through D6 — the Secret reference, the mount, the MQTTS listener, the port
 move on both Services, the absent Secret watch and the absent Secret RBAC are all present in the
-tree as described.
+tree as described. *(Built 2026-10-05:)* D1 and D6 as amended — with `secretSecurity: true` the
+operator holds `get` on `secrets` and reads the named TLS Secret's **labels** through a
+metadata-only `get` (`refuseTLSSecret` in
+[`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)),
+refusing a Secret without `mko.gtrfc.com/consumable=true`; it still watches no Secret and never
+reads the TLS data. At the default `false` D6 holds in full.
 
 **Open:** D7's rotation trigger is deliberately not built. Nothing rolls a broker pod when the
 referenced Secret changes.

@@ -4,6 +4,7 @@ package common
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	mkov1 "github.com/guided-traffic/mosquitto-operator/api/v1"
@@ -182,4 +183,51 @@ func MapEntriesMissing(desired, current map[string]string) bool {
 		}
 	}
 	return false
+}
+
+// MergeLabels returns a new map holding base with overlay written over it: every
+// key of overlay carries overlay's value, every other key of base is kept. It is
+// how the operator writes its own labels and annotations onto an object other
+// writers label too - its keys win, theirs stay (ADR 0009 D9). Neither argument
+// is modified.
+func MergeLabels(base, overlay map[string]string) map[string]string {
+	merged := make(map[string]string, len(base)+len(overlay))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range overlay {
+		merged[k] = v
+	}
+	return merged
+}
+
+// JoinKeys renders the keys of m as one annotation value: sorted and joined by
+// commas, so the same key set always gives the same string. A label or
+// annotation key cannot contain a comma. An empty or nil map gives "".
+func JoinKeys(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+// RemovedKeys returns the keys listed in the JoinKeys value previous that the
+// JoinKeys value current no longer lists.
+func RemovedKeys(previous, current string) []string {
+	if previous == "" {
+		return nil
+	}
+	kept := make(map[string]bool)
+	for _, k := range strings.Split(current, ",") {
+		kept[k] = true
+	}
+	var removed []string
+	for _, k := range strings.Split(previous, ",") {
+		if !kept[k] {
+			removed = append(removed, k)
+		}
+	}
+	return removed
 }

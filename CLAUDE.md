@@ -102,10 +102,17 @@ PrometheusRule, and any cert-manager dependency at any layer.
   `Mosquitto` carrying a `DeletionTimestamp` gets no writes at all; teardown is the garbage
   collector's. **A new RBAC marker updates the chart's hand-written `clusterrole.yaml` in the same
   change**; `make verify-rbac-parity` catches the drift.
-- **`StatefulSetHasChanged` compares replicas, object labels, template labels and the two hash
-  annotations — never the pod spec structurally**, because the API server defaults pod fields and
-  a structural comparison loops forever. A new field outside the pod template is not picked up by
-  the hash.
+- **`StatefulSetHasChanged` compares replicas and the operator's own keys among the object's and
+  the pod template's labels and annotations — the two hashes and `spec.podLabels` /
+  `spec.podAnnotations` included — never the pod spec structurally**, because the API server
+  defaults pod fields and a structural comparison loops forever. A new field outside the pod
+  template is not picked up by the hash.
+- **Updates merge labels and annotations, never assign them** (`common.MergeLabels`,
+  `builder.MergeStatefulSet`; ADR 0009 D9): the operator's keys win, every other key stays. The
+  one removal is a `spec.podLabels`/`spec.podAnnotations` key that left the spec, tracked by the
+  applied-keys annotations on the StatefulSet.
+- **The `config-check` init container never mounts the data volume**: `--test-config` saves an
+  empty database on exit (broker-behaviour.md M19).
 - **`volumeClaimTemplates` are written on create and never updated.**
 - **Config changes need the config hash.** Mosquitto reads its file once at start; a ConfigMap
   update restarts nothing, so `mko.gtrfc.com/config-hash` carries a config change into a roll.

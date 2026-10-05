@@ -10,6 +10,19 @@ installation into a cluster managed by Flux.
 
 *Amended 2026-10-05:* D3 — HA comes last, after every other phase of the plan.
 
+**Built 2026-10-05:** D5 — `spec.podLabels` and `spec.podAnnotations`, merged under the
+operator's keys in `BuildStatefulSet` and observed reaching the pods on Kind
+(`TestE2E_PodMetadata_ReachesAndLeavesThePods`, which against the operator of `main` before this
+change failed with `no ready broker pod of e2e-pod-metadata/broker carries the label and the
+annotation of the CR`); and D4's guard — an API server's PodSecurity
+admission at `enforce=restricted` judges the pod of every shape the builder renders
+(`TestIntegration_PodSecurity_RestrictedAdmitsEveryShape`, envtest `1.29.0`, which enforces
+PodSecurity: the test's control pod is refused). Observed failing once with
+`allowPrivilegeEscalation: true` on the broker container: `pods "broker-0" is forbidden: violates
+PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "mosquitto" must set
+securityContext.allowPrivilegeEscalation=false)`. The `config-check` init container is the first
+container added since D4 and passes the same guard.
+
 **Not built**, apart from what already exists: R5 is met by `Mosquitto` alone today
 (`status.observedGeneration` and one `Ready` condition, written together by `updateStatus` /
 `setPhase` in [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)),

@@ -25,9 +25,11 @@ and writes [`config/rbac/role.yaml`](../../config/rbac/role.yaml). The chart's
 hand. `make verify-rbac-parity` renders both and compares them as
 `(kind, apiGroup, resource) → verb set`
 ([`test/rbacparity/rbac_parity_test.go`](../../test/rbacparity/rbac_parity_test.go)), and the
-`generated-manifests` job runs it on every push to `main` and every pull request. Run for this page
-on 2026-10-05 (helm v3.21.3 and kustomize v5.8.1 locally; CI installs helm v4.3.0): **PASS,
-"compared 8 grants across both install paths".**
+`generated-manifests` job runs it on every push to `main` and every pull request. It renders two
+settings — the defaults, and `secretSecurity: true` against `config/default` with the component
+`config/components/secret-security` — and also checks that `--secret-security` reaches the manager
+with the same value on both paths. Run for this page on 2026-10-05: **PASS, "compared 8 grants"
+at the defaults and "compared 9 grants" with `secretSecurity`.**
 
 | Object | Helm, release `mosquitto-operator` | kustomize, `config/default` |
 |---|---|---|
@@ -47,6 +49,7 @@ controller-gen emits them as one:
 | ClusterRole | `mko.gtrfc.com` | `mosquittoes/finalizers` | update | The owner references the reconciler writes carry `blockOwnerDeletion`, and the `OwnerReferencesPermissionEnforcement` admission plugin — off by default, on in some managed distributions — refuses such a reference unless the writer may update the owner's finalizers. Per the marker comment; not observed on such a cluster |
 | ClusterRole | `""` (core) | `configmaps`, `services` | create, get, list, update, watch | **Create or overwrite any ConfigMap or Service in any namespace.** Overwriting a Service's `spec.selector` redirects its traffic; overwriting a ConfigMap changes what its consumers read |
 | ClusterRole | `apps` | `statefulsets` | create, get, list, update, watch | **Create a StatefulSet, or replace the pod template of any existing one, in any namespace** — the image, the command, the volumes and the ServiceAccount its pods run as. The heaviest grant here ([H-5](#h-5)) |
+| ClusterRole, **only with `secretSecurity: true`** | `""` (core) | `secrets` | get | Read any Secret in any namespace **through the API**, data included, although the operator asks only for metadata: RBAC cannot grant a metadata-only read. The code reads the TLS Secret's labels through a metadata-only `get` with the uncached reader, so no informer and no `list` or `watch` exist ([H-17](#h-17)) |
 | Role (operator namespace) | `coordination.k8s.io` | `leases` | create, delete, get, list, patch, update, watch | Leader election. Namespaced on purpose: the Lease `mosquitto-operator.mko.gtrfc.com` (`LeaderElectionID` in [`cmd/main.go`](../../cmd/main.go)) lives in the operator's own namespace |
 | Role (operator namespace) | `""` (core) | `events` | create, patch | client-go's `LeaseLock` records a `LeaderElection` Event when leadership changes. The reconciler records no Events |
 
@@ -63,16 +66,17 @@ Absent by decision rather than by oversight
   grants `delete` and `patch` on `coordination.k8s.io/leases` and `patch` on `events`. That is
   client-go's `LeaseLock` operating on the operator's own Lease in its own namespace, not the
   reconciler reaching a managed object. Both install paths render it identically at default values.
-- **No rule on `secrets`.** Not narrowed — absent, and the chart says so in a comment rather than
+- **No rule on `secrets` at the default.** Absent, and the chart says so in a comment rather than
   by omission. The kubelet mounts the TLS material; the operator never reads it
-  ([credentials.md](credentials.md#the-operator-holds-no-workload-credential)).
+  ([credentials.md](credentials.md#the-operator-holds-no-workload-credential)). `secretSecurity:
+  true` adds `get` and nothing else, on both paths together.
 - **Nothing on `rbac.authorization.k8s.io`, no `escalate`, no `bind`, no `serviceaccounts`.** The
   operator creates no per-instance identity, so it needs no authority to grant one.
 - `list` and `watch` are informer verbs, not call sites: controller-runtime's cache needs them for
   every kind the manager watches, and no line of the non-test tree calls `List`.
 
 **In one paragraph.** This is a workload manager with cluster-wide create and update on three
-kinds and read on its own CRD. Through the API it cannot read a Secret, cannot delete any object,
+kinds and read on its own CRD. Through the API it cannot read a Secret at the default, cannot delete any object,
 and cannot write RBAC. That is not a bound on what its identity reaches: `statefulsets: create,
 update` in every namespace is the authority to run chosen code under any ServiceAccount, with any
 Secret of the namespace mounted, wherever the namespace's admission lets the pod in. Treat its
@@ -80,14 +84,15 @@ ServiceAccount token and its image accordingly ([H-5](#h-5)).
 
 ## What the parity test does not cover
 
-The test compares RBAC, at **chart default values**, over `config/default`:
+The test compares RBAC at **chart default values** over `config/default`, and with
+`secretSecurity: true` over `config/default` plus its component:
 
 - **With `leaderElection.enabled=false` the chart renders no Role at all** and passes no
   `--leader-elect`, while `config/default` always includes
   [`config/rbac/leader_election_role.yaml`](../../config/rbac/leader_election_role.yaml) and
   [`config/manager/manager.yaml`](../../config/manager/manager.yaml) always passes `--leader-elect`.
   Rendered on 2026-10-05: zero Role documents. The parity statement is "the two paths agree at
-  default values", not "the chart cannot be configured into a different shape".
+  the settings the test renders", not "the chart cannot be configured into a different shape".
 - **The metrics port is switchable in one path only.** The chart renders
   `--metrics-bind-address=:8080`, or `=0` under `metrics.enabled=false` — `0` is the literal
   controller-runtime reads as "do not start the metrics server" (rendered on 2026-10-05).
@@ -157,3 +162,19 @@ image as cluster-admin-adjacent — restrict who may create pods in, exec into, 
 of the operator's namespace, and who may change the operator's image; an admission policy of the
 cluster's own that limits what this ServiceAccount may write is the only control that bounds the
 grant itself, and none ships here.
+
+<a id="h-17"></a>
+### H-17 — `secretSecurity: true` grants a cluster-wide `get` on Secrets the code does not use
+
+Dormant at the default, live with `secretSecurity: true`. The operator needs one metadata read per
+TLS Secret, and RBAC has no metadata-only verb, so the ClusterRole carries `get` on `secrets` in
+every namespace: whoever controls the operator's identity — its ServiceAccount token, its image,
+its process — can read any Secret of the cluster whose name it knows, including GitOps deploy keys
+and the SOPS key of a Flux cluster. The code itself issues a metadata-only `get`
+(`PartialObjectMetadata` through `mgr.GetAPIReader()`, `refuseTLSSecret` in
+[`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)),
+so the Secret data never reaches the process in normal operation; that is a property of the code,
+not of the grant. Without `list`, a name has to be known or guessed. What an operator can do: weigh
+this against [H-15](trust-boundaries.md#h-15) — the switch trades a namespace-wide read for every
+`Mosquitto` author against a cluster-wide read for the operator's identity — and protect the
+operator's namespace and image as the [H-5](#h-5) paragraph already asks.

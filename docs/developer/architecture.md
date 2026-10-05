@@ -42,8 +42,9 @@ published through another. What the pinned image actually does is measured in
 [broker-behaviour.md](broker-behaviour.md).
 
 The operator itself never talks to a broker: it writes objects, and the StatefulSet controller and
-the kubelet turn them into running pods. It holds no rule for `secrets` — the kubelet mounts the
-TLS material. The security view of this picture is [docs/security/](../security/README.md).
+the kubelet turn them into running pods. At the default it holds no rule for `secrets` — the
+kubelet mounts the TLS material; with `--secret-security=true` it reads the TLS Secret's labels
+through a metadata-only `get` before writing anything (`refuseTLSSecret`). The security view of this picture is [docs/security/](../security/README.md).
 
 ## Operator startup
 
@@ -154,14 +155,19 @@ nor exposes ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-c
 
 | Kind | Drift when | An update writes |
 |---|---|---|
-| ConfigMap | `Data` differs (`equality.Semantic.DeepEqual`), or a desired label is missing or different | `Data`, `Labels` |
-| Service | `Spec.Ports` or `Spec.Selector` differ, or a desired label is missing or different | `Spec.Ports`, `Spec.Selector`, `Labels` |
-| StatefulSet | `builder.StatefulSetHasChanged`: replica count, object labels, template labels, or one of the two hash annotations on the template | `Spec.Replicas`, `Spec.Template`, `Labels` |
+| ConfigMap | `Data` differs (`equality.Semantic.DeepEqual`), or a desired label is missing or different | `Data`; `Labels` merged (`common.MergeLabels`) |
+| Service | `Spec.Ports` or `Spec.Selector` differ, or a desired label is missing or different | `Spec.Ports`, `Spec.Selector`; `Labels` merged |
+| StatefulSet | `builder.StatefulSetHasChanged`: replica count, or a desired key missing or different among the object labels, the object annotations (the applied-keys records), the template labels (`spec.podLabels` included) or the template annotations (the two hashes and `spec.podAnnotations`) | `builder.MergeStatefulSet`: `Spec.Replicas` and the pod spec replaced; object and template labels and annotations merged |
 
-Labels other parties add are not drift — `MapEntriesMissing` ignores extra keys. They are not kept
-either: an update sets `Labels` to the desired set, so a foreign label survives until the operator
-updates the object for a reason of its own. The same holds for `Spec.Template`, which an update
-replaces whole, including annotations somebody else put on it.
+Labels and annotations other parties add are not drift — `MapEntriesMissing` ignores extra keys —
+and they are kept: every update merges the operator's keys over the live ones, its values winning
+([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D9). The one removal is
+`MergeStatefulSet`'s: the StatefulSet carries `mko.gtrfc.com/applied-pod-labels` and
+`mko.gtrfc.com/applied-pod-annotations`, the sorted keys of `spec.podLabels` and
+`spec.podAnnotations` it last applied, and a key that one of those lists and the desired list no
+longer does is deleted from the template before the merge (`common.RemovedKeys`). Because the
+desired StatefulSet always carries both annotations, an emptied map still changes their value and
+so still counts as drift; a StatefulSet written before they existed reads as "nothing applied".
 
 `StatefulSetHasChanged` treats a nil replica count on either side as no drift
 (`TestStatefulSetHasChanged_NilReplicasIsNotDrift`). The pod-spec hash covers the whole pod spec the
@@ -181,7 +187,8 @@ describe.
 | `spec.replicas > 0` and `readyReplicas >= spec.replicas` | `Ready` | `True` | `AllReplicasReady` | `<ready>/<replicas> broker pods are ready` |
 | `readyReplicas > 0`, fewer than requested | `Progressing` | `False` | `ReplicasNotReady` | `<ready>/<replicas> broker pods are ready` |
 | `readyReplicas == 0` | `Pending` | `False` | `NoReplicasReady` | `0/<replicas> broker pods are ready` |
-| any write in `reconcileResources` failed | `Failed` | `False` | `ReconcileFailed` | the error text |
+| any write in `reconcileResources` failed, or the metadata read of `refuseTLSSecret` | `Failed` | `False` | `ReconcileFailed` | the error text |
+| `--secret-security=true`: the TLS Secret is missing / lacks `mko.gtrfc.com/consumable=true` (`refuseTLSSecret`, before any write; the pass requeues after `secretRecheckInterval`, one minute) | `Failed` | `False` | `SecretNotFound` / `SecretNotConsumable` | names the Secret and the label |
 
 `readyReplicas` mirrors the StatefulSet's `status.readyReplicas`, which counts pods whose
 readiness probe passes — a TCP connect to the listener port, so "Ready" means "accepts TCP", not
@@ -205,30 +212,46 @@ identity.
 | `spec.tls` switched on or off | ConfigMap (listener, cert paths), both Services' port, the template (volume, mount, port, probes) | rolled |
 | another `spec.tls.secretName` | the template (the secret volume) | rolled |
 | `spec.replicas` | `spec.replicas` of the StatefulSet only | scaled; nothing rolls (`TestReplicaChangeDoesNotRollThePods`) |
+| `spec.podLabels`, `spec.podAnnotations` | the template's labels or annotations, the applied-keys annotation of the object | rolled; a removed key leaves the template |
 | the content of the TLS Secret | nothing — the Secret is not watched | keep serving the old material until they restart, e.g. `kubectl rollout restart statefulset/<name>` ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)) |
 | `spec.storage.size` or `storageClassName` | nothing that converges — `volumeClaimTemplates` are never updated | unchanged; the StatefulSet has to be recreated by hand |
 | `spec.storage` added or removed | the template changes (the `emptyDir` named `data` disappears or appears) while the claim templates stay as created | not verified: what the API server answers to that update has not been observed |
 
 ## The broker pod
 
-Built by `buildPodSpec` and `buildBrokerContainer` in
+Built by `buildPodSpec`, `buildConfigCheckContainer` and `buildBrokerContainer` in
 [`statefulset.go`](../../internal/builder/statefulset.go):
 
 - **Identity and hardening.** `runAsNonRoot`, uid/gid `1883` and `fsGroup: 1883` (the `mosquitto`
   user of the image; the `fsGroup` is what lets the broker write a root-owned PVC),
   `readOnlyRootFilesystem`, `allowPrivilegeEscalation: false`, every capability dropped, the
   `RuntimeDefault` seccomp profile at pod level, and `automountServiceAccountToken: false` because
-  the broker issues no API calls. `TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard`
-  holds this to the restricted Pod Security Standard.
+  the broker issues no API calls. Every container gets the same `containerSecurityContext()`.
+  `TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard` spells the restricted Pod Security
+  Standard out by hand, and `TestIntegration_PodSecurity_RestrictedAdmitsEveryShape` has an API
+  server's PodSecurity admission judge the pod of every shape.
+- **The `config-check` init container.** The broker image runs
+  `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf --test-config` before the broker starts,
+  with the broker's resources and security context ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)
+  D10). It mounts `config` read-only and `config-check-scratch`, an `emptyDir`, at
+  `/mosquitto/data` — **never the `data` volume**: `--test-config` saves an empty database to the
+  persistence path on exit, which would erase the broker's retained messages and sessions on every
+  start ([broker-behaviour.md](broker-behaviour.md) M19). It opens no TLS file, so it needs no TLS
+  mount.
 - **Command.** `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf`, bypassing the image's
   entrypoint, which chowns `/mosquitto` when it runs as root — which this pod never does. That the
   binary is still at that path is what `test/imagetools` checks against the pinned image.
 - **Volumes.** `config` (the ConfigMap, mode `0644`, read-only mount), `tls` (the Secret, mode
   `0644`, read-only mount, only with TLS), `data` (`emptyDir` unless `spec.storage` is set, in
-  which case the claim template of the same name). The `0644` is written out because it is what
+  which case the claim template of the same name), `config-check-scratch` (`emptyDir`, the init
+  container's only). The `0644` is written out because it is what
   the API server defaults to, which keeps the pod-spec hash stable across passes.
 - **Probes.** Both TCP on the listener port: readiness after 5 s every 5 s (timeout 3, failure
   threshold 3), liveness after 15 s every 10 s (timeout 5, failure threshold 5).
+- **Metadata.** The template labels are `spec.podLabels` with `common.BaseLabels` written over
+  them, the template annotations `spec.podAnnotations` with the two hash annotations written over
+  them ([ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)
+  D5); the StatefulSet object carries neither map.
 - **Anti-affinity.** `BuildPodAntiAffinity`: none for `off`, one preferred term at weight `100` for
   `soft`, one required term for `hard`; topology key `kubernetes.io/hostname`; the selector is
   `SelectorLabels`, so a second `Mosquitto` in the same namespace is not repelled.

@@ -107,9 +107,9 @@ GitOps review, or an admission policy of the cluster's own; none ships here.
 <a id="h-15"></a>
 ### H-15 — Whoever may write a `Mosquitto` can read every Secret of its namespace
 
-Live today, in every namespace where a principal holds `create` or `update` on
-`mosquittoes.mko.gtrfc.com`, and it holds even when that principal may not `get` Secrets or
-`create` pods there. `spec.tls.secretName` may name **any** Secret of the resource's namespace:
+Live at the default `secretSecurity: false`, in every namespace where a principal holds `create`
+or `update` on `mosquittoes.mko.gtrfc.com`, and it holds even when that principal may not `get`
+Secrets or `create` pods there. `spec.tls.secretName` may name **any** Secret of the resource's namespace:
 nothing checks its type or its keys, and `buildPodSpec` mounts it whole, with no `Items`
 projection, at `/mosquitto/tls`
 ([`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)). `spec.image` is any
@@ -123,11 +123,22 @@ The principal and the adversary: a subject granted `mosquittoes` more narrowly t
 for example a team allowed to manage its broker but not to read the namespace's credentials.
 Where the same subjects already read Secrets in the namespace, nothing new is exposed.
 
-What a cluster operator can do meanwhile: treat `create` and `update` on
-`mosquittoes.mko.gtrfc.com` in a namespace as equivalent to reading every Secret of that
-namespace, and grant it only to subjects who may do that already; keep credentials a broker owner
-must not see in another namespace; and remove legacy ServiceAccount token Secrets the namespace
-does not need.
+**The mitigation is the install-time switch `secretSecurity`** (chart value, `--secret-security`
+flag, the kustomize component `config/components/secret-security`;
+[ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
+D10). With `true` the operator reads the named Secret's labels through a metadata-only `get` before
+it writes anything, and a Secret without `mko.gtrfc.com/consumable=true` — the label whose
+writer can already write the Secret, so its owner's consent — is refused: the resource is `Failed`
+with reason `SecretNotConsumable`, nothing is written, and no new pod mounts it
+(`TestReconcile_SecretSecurity`). The default stays `false`, the owner's choice against the
+recommendation; at that default, treat `create` and `update` on `mosquittoes.mko.gtrfc.com` in a
+namespace as equivalent to reading every Secret of that namespace, and grant it only to subjects
+who may do that already. Either way: keep credentials a broker owner must not see in another
+namespace, and remove legacy ServiceAccount token Secrets the namespace does not need.
+
+With `true` two things remain: a `Mosquitto` author can still name any **labelled** Secret of the
+namespace, so the label states consent to every broker of the namespace, not to one; and a label
+removed later stops the next pass, not the pods that already run with the Secret mounted.
 
 <a id="h-16"></a>
 ### H-16 — The `Failed` condition tells a `Mosquitto` writer which objects exist

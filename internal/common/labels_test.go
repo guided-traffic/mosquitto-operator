@@ -163,3 +163,42 @@ func TestBaseLabels_AreAllValid(t *testing.T) {
 		require.Empty(t, validation.IsValidLabelValue(value), "label %s=%q is not a valid label value", key, value)
 	}
 }
+
+func TestMergeLabels(t *testing.T) {
+	base := map[string]string{"example.com/owner": "platform", LabelInstance: "stale"}
+	overlay := map[string]string{LabelInstance: "broker", LabelName: AppName}
+
+	merged := MergeLabels(base, overlay)
+
+	assert.Equal(t, map[string]string{
+		"example.com/owner": "platform",
+		LabelInstance:       "broker",
+		LabelName:           AppName,
+	}, merged, "the overlay wins on a shared key, every other key of the base stays")
+	assert.Equal(t, "stale", base[LabelInstance], "the base map is not modified")
+	assert.NotNil(t, MergeLabels(nil, nil), "a nil result would make a later write panic")
+}
+
+func TestJoinKeys(t *testing.T) {
+	assert.Equal(t, "", JoinKeys(nil))
+	assert.Equal(t, "a.example.com/x,b,c", JoinKeys(map[string]string{"c": "1", "b": "2", "a.example.com/x": "3"}),
+		"sorted, so one key set always gives one string and no write happens for a reordering")
+}
+
+func TestRemovedKeys(t *testing.T) {
+	tests := []struct {
+		name              string
+		previous, current string
+		want              []string
+	}{
+		{"nothing applied before", "", "a,b", nil},
+		{"nothing removed", "a,b", "a,b,c", nil},
+		{"one removed", "a,b,c", "a,c", []string{"b"}},
+		{"all removed", "a,b", "", []string{"a", "b"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, RemovedKeys(tt.previous, tt.current))
+		})
+	}
+}

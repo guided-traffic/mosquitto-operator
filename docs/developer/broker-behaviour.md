@@ -12,8 +12,8 @@ reasonable person would assume the other way, and the decisions in
 follow from them.
 
 **Rig.** Single-container docker 28.4.0 on arm64, the pinned image, configuration and credential
-files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M18 on 2026-10-05. **None of it
-ran on a cluster.** The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
+files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M19 on 2026-10-05. **None of it
+ran on a cluster**, except where a section says it was observed on Kind as well. The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
 to the parked high-availability research in [docs/planning/](../planning/), not to anything the
 operator builds.
 
@@ -311,6 +311,46 @@ and the plugin's unresolved symbols include `PKCS5_PBKDF2_HMAC` and nothing from
 broker can verify `$7$`; that it **cannot** verify `$argon2id$` is inferred from the symbols, not
 login-tested. A statement that 2.1 "understands `$argon2id$`" does not hold for this build. Not measured: whether the plugin honours an iteration count other than 1000 written into
 the `$7$<iterations>$` field.
+
+## M19 — `--test-config` saves an empty database on exit, and reads no TLS file
+
+*Measured 2026-10-05*, `eclipse-mosquitto:2.1.2-alpine`, run as `1883:1883`. A configuration with
+`persistence true`, `persistence_location /mosquitto/data/` and one listener. A broker run first
+stored one retained message (`mosquitto_pub -t keep/me -m retained-v1 -r -q 1`), leaving a
+162-byte `mosquitto.db`. Then, on the same data directory:
+
+```
+mosquitto -c p.conf --test-config            (data mounted read-write)
+  -> Configuration file is OK.
+     mosquitto version 2.1.2 terminating
+     Saving in-memory database to /mosquitto/data//mosquitto.db.        rc=0
+  -> mosquitto.db is now 47 bytes
+broker restarted on that directory, mosquitto_sub -t keep/me -C 1 -W 3
+  -> Timed out                                                          rc=27
+
+mosquitto -c p.conf --test-config            (data mounted read-only, read-only root fs)
+  -> Configuration file is OK.
+     ...
+     Error saving in-memory database, unable to remove stale tmp file
+     /mosquitto/data//mosquitto.db.new, error Read-only file system      rc=0
+```
+
+**`--test-config` does not load the database, and it saves its empty in-memory one on exit.** On
+the real data volume that replaces every retained message and every persistent session with
+nothing, on every pod start. So the `config-check` init container
+([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D10) never mounts the
+data volume: it sees a throwaway `emptyDir`, `config-check-scratch`, at the persistence path, where
+the save succeeds and is discarded (`buildConfigCheckContainer` in
+[`internal/builder/statefulset.go`](../../internal/builder/statefulset.go), asserted by
+`TestBuildStatefulSet_ConfigCheckInitContainer`). A read-only mount would also protect the data but
+prints an error line into every start's log.
+
+The same run with `listener 8883`, `certfile /nonexistent/tls.crt` and `keyfile
+/nonexistent/tls.key` prints `Configuration file is OK.` with `rc=0`: **`--test-config` opens no
+TLS file**, so the init container needs no TLS mount. A misspelled directive fails with the line,
+as M8 recorded: `Error: Unknown configuration variable 'max_queued_mesages'.`, `Error found at
+/c/typo.conf:4.`, `rc=3` — and on Kind, from the init container of a broker pod, with the path of
+the mounted file (`TestE2E_ConfigCheck_StopsATypoBeforeTheBroker`).
 
 ## Not measured
 

@@ -380,6 +380,10 @@ func TestPodTemplateHashesChangeWithTheThingTheyDigest(t *testing.T) {
 		{"tls changes both the listener and the mounts", withTLS("broker-tls"), true, true},
 		{"anti-affinity", withAntiAffinity(mkov1.AntiAffinityModeHard), true, false},
 		{"storage swaps the emptyDir for a claim", withStorage("1Gi"), true, false},
+		{"pod labels and annotations roll through the template, not a hash", func(m *mkov1.Mosquitto) {
+			m.Spec.PodLabels = map[string]string{"team": "iot"}
+			m.Spec.PodAnnotations = map[string]string{"example.com/note": "x"}
+		}, false, false},
 	}
 
 	for _, tt := range tests {
@@ -429,6 +433,9 @@ func TestStatefulSetHasChanged(t *testing.T) {
 		{"an annotation kubectl rollout restart added", func(s *appsv1.StatefulSet) {
 			s.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = "2026-01-01T00:00:00Z"
 		}, false, "only the two operator annotations decide whether the template drifted"},
+		{"a pod annotation added by somebody else", func(s *appsv1.StatefulSet) {
+			s.Spec.Template.Annotations["example.com/injected"] = "yes"
+		}, false, "keys only the live template carries are not the operator's to compare"},
 		{"a defaulted pod field the operator never writes", func(s *appsv1.StatefulSet) {
 			s.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirst
 			s.Spec.Template.Spec.SchedulerName = "default-scheduler"
@@ -456,4 +463,125 @@ func TestStatefulSetHasChanged_NilReplicasIsNotDrift(t *testing.T) {
 
 	assert.False(t, StatefulSetHasChanged(desired, current),
 		"a nil replica count carries no information to compare against")
+}
+
+func withPodMetadata(labels, annotations map[string]string) func(*mkov1.Mosquitto) {
+	return func(m *mkov1.Mosquitto) {
+		m.Spec.PodLabels = labels
+		m.Spec.PodAnnotations = annotations
+	}
+}
+
+// TestBuildStatefulSet_PodMetadataLosesToTheOperator is ADR 0012 D5: the user's
+// keys reach the pods, and a key the operator sets always wins, so a pod label
+// cannot detach a Service from its pods and a pod annotation cannot forge a hash.
+func TestBuildStatefulSet_PodMetadataLosesToTheOperator(t *testing.T) {
+	m := newMosquitto(withPodMetadata(
+		map[string]string{common.LabelInstance: "hijacked", "team": "iot"},
+		map[string]string{AnnotationConfigHash: "forged", "prometheus.io/scrape": "true"},
+	))
+	sts := mustBuild(t, m)
+	plain := mustBuild(t, newMosquitto())
+
+	assert.Equal(t, "broker", sts.Spec.Template.Labels[common.LabelInstance])
+	assert.Equal(t, "iot", sts.Spec.Template.Labels["team"])
+	assert.Equal(t, plain.Spec.Template.Annotations[AnnotationConfigHash], sts.Spec.Template.Annotations[AnnotationConfigHash])
+	assert.Equal(t, "true", sts.Spec.Template.Annotations["prometheus.io/scrape"])
+
+	assert.Equal(t, common.SelectorLabels(m), sts.Spec.Selector.MatchLabels, "the selector never takes a user key")
+	assert.NotContains(t, sts.Labels, "team", "pod labels reach the pods, not the StatefulSet object")
+	assert.Equal(t, common.LabelInstance+",team", sts.Annotations[AnnotationAppliedPodLabels])
+	assert.Equal(t, AnnotationConfigHash+",prometheus.io/scrape", sts.Annotations[AnnotationAppliedPodAnnotations])
+}
+
+func TestStatefulSetHasChanged_PodMetadata(t *testing.T) {
+	labelled := withPodMetadata(map[string]string{"team": "iot"}, map[string]string{"example.com/note": "x"})
+
+	tests := []struct {
+		name             string
+		desired, current []func(*mkov1.Mosquitto)
+		want             bool
+	}{
+		{"a pod label added to the spec", []func(*mkov1.Mosquitto){labelled}, nil, true},
+		{"a pod label removed from the spec", nil, []func(*mkov1.Mosquitto){labelled}, true},
+		{"a pod label value changed", []func(*mkov1.Mosquitto){
+			withPodMetadata(map[string]string{"team": "home"}, map[string]string{"example.com/note": "x"}),
+		}, []func(*mkov1.Mosquitto){labelled}, true},
+		{"unchanged pod metadata", []func(*mkov1.Mosquitto){labelled}, []func(*mkov1.Mosquitto){labelled}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			desired := mustBuild(t, newMosquitto(tt.desired...))
+			current := mustBuild(t, newMosquitto(tt.current...))
+			assert.Equal(t, tt.want, StatefulSetHasChanged(desired, current))
+		})
+	}
+}
+
+// TestMergeStatefulSet is ADR 0009 D9 on the one kind with a pod template: the
+// operator's keys win, every other key stays, and only a key that left
+// spec.podLabels or spec.podAnnotations is removed.
+func TestMergeStatefulSet(t *testing.T) {
+	current := mustBuild(t, newMosquitto(withPodMetadata(
+		map[string]string{"team": "iot", "zone": "a"},
+		map[string]string{"example.com/note": "x"},
+	)))
+	current.Labels["example.com/owner"] = "platform"
+	current.Labels[common.LabelInstance] = "drifted"
+	current.Annotations["example.com/backup"] = "daily"
+	current.Spec.Template.Labels["policy.example.com/scanned"] = "true"
+	current.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = "2026-10-05T00:00:00Z"
+	current.Spec.Template.Annotations[AnnotationPodSpecHash] = "deadbeef"
+
+	desired := mustBuild(t, newMosquitto(
+		func(m *mkov1.Mosquitto) { m.Spec.Replicas = 3 },
+		withPodMetadata(map[string]string{"team": "home"}, nil),
+	))
+
+	MergeStatefulSet(current, desired)
+
+	assert.Equal(t, int32(3), *current.Spec.Replicas)
+	assert.Equal(t, "platform", current.Labels["example.com/owner"], "a foreign object label stays")
+	assert.Equal(t, "broker", current.Labels[common.LabelInstance], "an operator key wins")
+	assert.Equal(t, "daily", current.Annotations["example.com/backup"], "a foreign object annotation stays")
+	assert.Equal(t, "team", current.Annotations[AnnotationAppliedPodLabels])
+
+	tl, ta := current.Spec.Template.Labels, current.Spec.Template.Annotations
+	assert.Equal(t, "true", tl["policy.example.com/scanned"], "a foreign template label stays")
+	assert.Equal(t, "home", tl["team"], "a changed pod label takes the new value")
+	assert.NotContains(t, tl, "zone", "a pod label removed from the spec leaves the pods")
+	assert.Equal(t, "2026-10-05T00:00:00Z", ta["kubectl.kubernetes.io/restartedAt"],
+		"a rollout restart must survive an unrelated write, or every pod rolls a second time")
+	assert.NotContains(t, ta, "example.com/note", "a pod annotation removed from the spec leaves the pods")
+	assert.Equal(t, desired.Spec.Template.Annotations[AnnotationPodSpecHash], ta[AnnotationPodSpecHash])
+	assert.False(t, StatefulSetHasChanged(desired, current), "after the merge the next pass writes nothing")
+}
+
+// TestBuildStatefulSet_ConfigCheckInitContainer is ADR 0007 D10: the pod's own
+// image checks the generated file before the broker starts, with the broker
+// container's security context, and without ever seeing the data volume.
+func TestBuildStatefulSet_ConfigCheckInitContainer(t *testing.T) {
+	for _, mutators := range [][]func(*mkov1.Mosquitto){nil, {withStorage("1Gi")}, {withTLS("broker-tls")}} {
+		m := newMosquitto(append(mutators, func(m *mkov1.Mosquitto) { m.Spec.Image = "eclipse-mosquitto:2.1.1-alpine" })...)
+		spec := mustBuild(t, m).Spec.Template.Spec
+
+		require.Len(t, spec.InitContainers, 1)
+		check := spec.InitContainers[0]
+		assert.Equal(t, ConfigCheckContainerName, check.Name)
+		assert.Equal(t, "eclipse-mosquitto:2.1.1-alpine", check.Image, "the check runs the image the broker runs")
+		assert.Equal(t, []string{"/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf", "--test-config"}, check.Command)
+		assert.Equal(t, spec.Containers[0].SecurityContext, check.SecurityContext)
+
+		config := containerVolumeMount(check, ConfigVolumeName)
+		require.NotNil(t, config)
+		assert.True(t, config.ReadOnly)
+		assert.Nil(t, containerVolumeMount(check, DataVolumeName),
+			"--test-config saves an empty database on exit; on the data volume that erases every retained message (M19)")
+		scratch := containerVolumeMount(check, ConfigCheckScratchVolumeName)
+		require.NotNil(t, scratch)
+		assert.Equal(t, DataMountPath, scratch.MountPath)
+		require.NotNil(t, podVolume(spec, ConfigCheckScratchVolumeName))
+		assert.NotNil(t, podVolume(spec, ConfigCheckScratchVolumeName).EmptyDir)
+	}
 }

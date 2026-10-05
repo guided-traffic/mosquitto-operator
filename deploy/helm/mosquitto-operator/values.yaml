@@ -44,6 +44,22 @@ affinity: {}
 # queue never runs two passes for one key.
 maxConcurrentReconciles: 4
 
+# Which Secret a Mosquitto may name as spec.tls.secretName (docs/adr/0014 D10).
+#
+# false (the default): any Secret of the Mosquitto's namespace. The trust rule
+# that follows, stated plainly: whoever may create or update a Mosquitto in a
+# namespace may read every Secret of that namespace, because the author also
+# chooses the image that runs with the Secret mounted. Grant mosquittoes no more
+# widely than Secrets, or turn this on.
+#
+# true: only a Secret labelled mko.gtrfc.com/consumable=true; whoever may label
+# a Secret may write it, so the label is its owner's consent. A Mosquitto naming
+# another Secret reports Ready=False with reason SecretNotConsumable (or
+# SecretNotFound) and its StatefulSet is left as it is. The ClusterRole gains
+# get on secrets, for the metadata-only read of that label; the operator never
+# reads the TLS data.
+secretSecurity: false
+
 # Leader election ensures only one operator instance is active at a time. It is
 # also what the coordination.k8s.io/leases rule is for, which lives in the
 # namespaced Role of templates/leader-election.yaml, not in the ClusterRole -

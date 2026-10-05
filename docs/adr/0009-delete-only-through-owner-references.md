@@ -2,8 +2,18 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** D9 — an update keeps the
-labels other writers added, and the pod-template annotations. **And (decided, matches the tree):**
+Accepted. Date: 2026-09-01. **Amended 2026-10-05:** D9 — an update keeps the labels other writers
+added, and the pod-template annotations. **D9 built 2026-10-05**: `common.MergeLabels` in
+`reconcileConfigMap` and `reconcileService`, `builder.MergeStatefulSet` in `reconcileStatefulSet`;
+`TestReconcile_UpdatesKeepForeignLabels` and
+`TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded` were observed failing against the
+wholesale assignments (`expected: "mqtt"`, `actual  : ""` for each of the four objects). Building
+it met an open question this record does not answer — what happens to a key of
+`spec.podLabels` or `spec.podAnnotations` that is deleted from the resource, which D9's accepted
+cost would leave on the pods forever. It is built on the recommended answer, pending the owner's
+decision in [the project plan](../planning/project-plan.md): the StatefulSet records the keys it
+applied (`mko.gtrfc.com/applied-pod-labels`, `mko.gtrfc.com/applied-pod-annotations`) and removes
+exactly the keys that left the spec. **And (decided, matches the tree):**
 D5's precise refusal message stays, with the existence oracle it gives a `Mosquitto` writer
 accepted by the owner and published on
 [docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-16). Today every update assigns the desired label map wholesale
@@ -205,7 +215,7 @@ clusters.
 the resource is the status subresource, which has its own rule carrying `update` alone.
 
 **D9 — An update keeps the labels other writers added, and the annotations they added to the pod
-template.** *(Added 2026-10-05; decided, not built.)*
+template.** *(Added 2026-10-05; built 2026-10-05.)*
 The operator's own keys are merged into the labels already on the object — its value wins for
 every key it sets, the selector labels and the version label included — and every other key is
 left as it is, on the managed objects' labels and on the StatefulSet's pod-template labels alike.

@@ -9,8 +9,17 @@ Secret per user password, once when the owner allowed the operator to read Secre
 step rests on measurements against the pinned image, recorded in
 [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md).
 
-**Not built.** The operator holds no `secrets` rule today and renders one container per broker
-pod. Before the code that depends on them is written, these are measured: a `$7$` line rendered in
+**Not built**, except D10 for the TLS Secret *(built 2026-10-05)*: `--secret-security`, the chart
+value `secretSecurity` and the component `config/components/secret-security`, default `false` on
+both paths; with `true` the label is `mko.gtrfc.com/consumable=true`, a refusal is `Ready=False`
+with reason `SecretNotConsumable` (or `SecretNotFound`), and the only grant added is `get` on
+`secrets`, because the read is a metadata-only `get` through the uncached reader rather than a
+cached informer — so D10's "the operator's Secret cache is restricted to labelled Secrets" does not
+apply yet: there is no Secret cache. `TestReconcile_SecretSecurity` was observed failing with the
+check removed; `test/rbacparity` renders both settings and was observed failing on a component
+without the rule (`ClusterRole core/secrets: granted by the chart (get) but not by kustomize`) and on
+a chart without the flag (`expected: "false"`, `actual  : ""`). Otherwise the operator holds no
+`secrets` rule and renders one broker container and one init container per broker pod. Before the code that depends on them is written, these are measured: a `$7$` line rendered in
 Go is accepted by the broker, byte format identical to `mosquitto_passwd`; a sidecar as uid `1883`
 without capabilities can signal the broker across `shareProcessNamespace` under PodSecurity
 `restricted`; how long the kubelet takes to refresh a changed Secret volume, and whether it swaps
@@ -126,7 +135,8 @@ its hash fields, whether `kickClient` ends a live session, whether `setClientPas
 existing connections.
 
 **D10 — Which Secret a `Mosquitto` or a `MosquittoUser` may name is an install-time switch,
-`secretSecurity`, default `false`.** *(Added 2026-10-05; decided, not built.)* With `true`, the
+`secretSecurity`, default `false`.** *(Added 2026-10-05; built for the TLS Secret 2026-10-05, the
+`credentialsSecret` half not built.)* With `true`, the
 operator mounts a TLS Secret and reads a `credentialsSecret` only when the Secret carries an opt-in
 label under `mko.gtrfc.com/` (the key is fixed when built); whoever can label a Secret is whoever
 can write it, so the label is the Secret owner's consent. A resource naming an unlabelled Secret

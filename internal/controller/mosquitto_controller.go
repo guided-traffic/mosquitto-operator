@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -44,7 +45,21 @@ type MosquittoReconciler struct {
 	// MaxConcurrentReconciles is how many Mosquitto resources are reconciled at
 	// the same time. Zero means DefaultMaxConcurrentReconciles.
 	MaxConcurrentReconciles int
+
+	// SecretSecurity is --secret-security: a TLS Secret is mounted only when it
+	// carries mkov1.SecretConsumableLabel (ADR 0014 D10).
+	SecretSecurity bool
+
+	// APIReader reads the metadata of a TLS Secret while SecretSecurity is on. It
+	// is the manager's uncached reader, so the check needs get on secrets and
+	// nothing more. Nil falls back to Client.
+	APIReader client.Reader
 }
+
+// secretRecheckInterval is how soon a Mosquitto refused for its TLS Secret is
+// looked at again. The operator watches no Secret, so a label added later is
+// noticed by this requeue.
+const secretRecheckInterval = time.Minute
 
 // These markers are the only source of the ClusterRole, and the ClusterRole is
 // cluster-wide: every verb here is granted on every namespace. Each one is
@@ -98,7 +113,11 @@ func (r *MosquittoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileResources(ctx, m); err != nil {
+	refused, err := r.refuseTLSSecret(ctx, m)
+	if err == nil && !refused {
+		err = r.reconcileResources(ctx, m)
+	}
+	if err != nil {
 		// The failure is reported on the resource before it is returned, so a
 		// rejected write is visible with kubectl get instead of only in the
 		// operator log. The error is still returned so the work queue backs the
@@ -109,8 +128,46 @@ func (r *MosquittoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, err
 	}
+	if refused {
+		return ctrl.Result{RequeueAfter: secretRecheckInterval}, r.persistStatus(ctx, m)
+	}
 
 	return ctrl.Result{}, r.updateStatus(ctx, m)
+}
+
+// refuseTLSSecret applies --secret-security to the TLS Secret a Mosquitto names
+// (ADR 0014 D10). It reads the Secret's metadata only - never its data - and
+// refuses one that is missing or does not carry the consent label: the Ready
+// condition says why, and nothing is written, so a running StatefulSet stays as
+// it is. It reports whether it refused.
+func (r *MosquittoReconciler) refuseTLSSecret(ctx context.Context, m *mkov1.Mosquitto) (bool, error) {
+	if !r.SecretSecurity || !m.IsTLSEnabled() {
+		return false, nil
+	}
+
+	reader := r.APIReader
+	if reader == nil {
+		reader = r.Client
+	}
+	secret := &metav1.PartialObjectMetadata{}
+	secret.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("Secret"))
+	err := reader.Get(ctx, types.NamespacedName{Namespace: m.Namespace, Name: m.Spec.TLS.SecretName}, secret)
+
+	switch {
+	case apierrors.IsNotFound(err):
+		r.setPhase(m, mkov1.PhaseFailed, metav1.ConditionFalse, mkov1.ReasonSecretNotFound,
+			fmt.Sprintf("TLS Secret %s does not exist; with --secret-security=true it must exist and carry %s=%s",
+				m.Spec.TLS.SecretName, mkov1.SecretConsumableLabel, mkov1.SecretConsumableValue))
+		return true, nil
+	case err != nil:
+		return false, fmt.Errorf("reading the metadata of TLS Secret %s: %w", m.Spec.TLS.SecretName, err)
+	case secret.GetLabels()[mkov1.SecretConsumableLabel] != mkov1.SecretConsumableValue:
+		r.setPhase(m, mkov1.PhaseFailed, metav1.ConditionFalse, mkov1.ReasonSecretNotConsumable,
+			fmt.Sprintf("TLS Secret %s does not carry %s=%s, which --secret-security=true requires",
+				m.Spec.TLS.SecretName, mkov1.SecretConsumableLabel, mkov1.SecretConsumableValue))
+		return true, nil
+	}
+	return false, nil
 }
 
 // reconcileResources writes every object the Mosquitto owns, in dependency
@@ -159,7 +216,8 @@ func (r *MosquittoReconciler) reconcileConfigMap(ctx context.Context, m *mkov1.M
 
 	logger.Info("Updating ConfigMap", "name", desired.Name)
 	current.Data = desired.Data
-	current.Labels = desired.Labels
+	// Merged, not assigned: labels other writers added stay (ADR 0009 D9).
+	current.Labels = common.MergeLabels(current.Labels, desired.Labels)
 	return r.Update(ctx, current)
 }
 
@@ -199,13 +257,15 @@ func (r *MosquittoReconciler) reconcileService(ctx context.Context, m *mkov1.Mos
 	logger.Info("Updating Service", "name", desired.Name)
 	current.Spec.Ports = desired.Spec.Ports
 	current.Spec.Selector = desired.Spec.Selector
-	current.Labels = desired.Labels
+	// Merged, not assigned: labels other writers added stay (ADR 0009 D9).
+	current.Labels = common.MergeLabels(current.Labels, desired.Labels)
 	return r.Update(ctx, current)
 }
 
 // reconcileStatefulSet ensures the broker StatefulSet exists and matches the spec.
 //
-// Only the replica count, the pod template and the labels are written. The
+// Only the replica count, the pod template, the labels and the annotations are
+// written, merged rather than assigned (builder.MergeStatefulSet). The
 // volumeClaimTemplates are left alone on purpose: they are immutable, so writing
 // them back would either be a no-op or a rejected request, and a changed
 // spec.storage needs the StatefulSet recreated by hand.
@@ -239,9 +299,7 @@ func (r *MosquittoReconciler) reconcileStatefulSet(ctx context.Context, m *mkov1
 	}
 
 	logger.Info("Updating StatefulSet", "name", desired.Name)
-	current.Spec.Replicas = desired.Spec.Replicas
-	current.Spec.Template = desired.Spec.Template
-	current.Labels = desired.Labels
+	builder.MergeStatefulSet(current, desired)
 	return r.Update(ctx, current)
 }
 

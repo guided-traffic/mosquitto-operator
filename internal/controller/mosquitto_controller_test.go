@@ -463,3 +463,200 @@ func TestMaxConcurrentReconciles(t *testing.T) {
 	assert.Greater(t, DefaultMaxConcurrentReconciles, 1,
 		"one worker couples every resource in the cluster to the slowest pass")
 }
+
+// TestReconcile_UpdatesKeepForeignLabels is ADR 0009 D9: an update made for
+// another reason keeps the labels other writers added, on every kind, instead of
+// dropping them at random whenever the operator happens to write.
+func TestReconcile_UpdatesKeepForeignLabels(t *testing.T) {
+	r, c := newReconcilerFor(t, newCR())
+	ctx := context.Background()
+	require.NoError(t, func() error { _, err := r.Reconcile(ctx, request()); return err }())
+
+	objects := []client.Object{
+		&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "broker-config", Namespace: testNamespace}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "broker-headless", Namespace: testNamespace}},
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: testName, Namespace: testNamespace}},
+		&appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: testName, Namespace: testNamespace}},
+	}
+	for _, obj := range objects {
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), obj))
+		labels := obj.GetLabels()
+		labels["kustomize.toolkit.fluxcd.io/name"] = "mqtt"
+		obj.SetLabels(labels)
+		require.NoError(t, c.Update(ctx, obj))
+	}
+
+	// TLS moves the listener: new ConfigMap data, new Service ports, a new pod
+	// template. Every one of the four objects is written for that reason.
+	stored := &mkov1.Mosquitto{}
+	require.NoError(t, c.Get(ctx, request().NamespacedName, stored))
+	stored.Spec.TLS = &mkov1.MosquittoTLS{SecretName: "broker-tls"}
+	require.NoError(t, c.Update(ctx, stored))
+	_, err := r.Reconcile(ctx, request())
+	require.NoError(t, err)
+
+	for _, obj := range objects {
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), obj))
+		assert.Equal(t, "mqtt", obj.GetLabels()["kustomize.toolkit.fluxcd.io/name"],
+			"%T %s lost a foreign label on an update made for another reason", obj, obj.GetName())
+		assert.Equal(t, testName, obj.GetLabels()[common.LabelInstance], "%T %s", obj, obj.GetName())
+	}
+	cm := objects[0].(*corev1.ConfigMap)
+	assert.Contains(t, cm.Data[builder.ConfigKey], "listener 8883", "the update itself still happened")
+}
+
+// TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded: a foreign
+// template label and the annotation kubectl rollout restart writes survive a
+// write caused only by spec.replicas. Dropping restartedAt there would roll every
+// pod a second time.
+func TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded(t *testing.T) {
+	r, c := newReconcilerFor(t, newCR())
+	ctx := context.Background()
+	require.NoError(t, func() error { _, err := r.Reconcile(ctx, request()); return err }())
+
+	key := types.NamespacedName{Name: testName, Namespace: testNamespace}
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, c.Get(ctx, key, sts))
+	sts.Spec.Template.Labels["policy.example.com/scanned"] = "true"
+	sts.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = "2026-10-05T00:00:00Z"
+	require.NoError(t, c.Update(ctx, sts))
+
+	stored := &mkov1.Mosquitto{}
+	require.NoError(t, c.Get(ctx, request().NamespacedName, stored))
+	stored.Spec.Replicas = 2
+	require.NoError(t, c.Update(ctx, stored))
+	_, err := r.Reconcile(ctx, request())
+	require.NoError(t, err)
+
+	require.NoError(t, c.Get(ctx, key, sts))
+	assert.Equal(t, int32(2), *sts.Spec.Replicas)
+	assert.Equal(t, "true", sts.Spec.Template.Labels["policy.example.com/scanned"])
+	assert.Equal(t, "2026-10-05T00:00:00Z", sts.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"])
+}
+
+// TestReconcile_PodLabelsReachAndLeaveTheTemplate covers ADR 0012 D5 through
+// the reconciler: a pod label set on the CR reaches the pod template, and one
+// removed from the CR leaves it, while a foreign template label stays.
+func TestReconcile_PodLabelsReachAndLeaveTheTemplate(t *testing.T) {
+	r, c := newReconcilerFor(t, newCR(func(m *mkov1.Mosquitto) {
+		m.Spec.PodLabels = map[string]string{"team": "iot", "network.example.com/allow-mqtt": "true"}
+	}))
+	ctx := context.Background()
+	require.NoError(t, func() error { _, err := r.Reconcile(ctx, request()); return err }())
+
+	key := types.NamespacedName{Name: testName, Namespace: testNamespace}
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, c.Get(ctx, key, sts))
+	assert.Equal(t, "true", sts.Spec.Template.Labels["network.example.com/allow-mqtt"])
+	sts.Spec.Template.Labels["policy.example.com/scanned"] = "true"
+	require.NoError(t, c.Update(ctx, sts))
+
+	stored := &mkov1.Mosquitto{}
+	require.NoError(t, c.Get(ctx, request().NamespacedName, stored))
+	stored.Spec.PodLabels = map[string]string{"team": "iot"}
+	require.NoError(t, c.Update(ctx, stored))
+	_, err := r.Reconcile(ctx, request())
+	require.NoError(t, err)
+
+	require.NoError(t, c.Get(ctx, key, sts))
+	assert.NotContains(t, sts.Spec.Template.Labels, "network.example.com/allow-mqtt",
+		"a label removed in Git must leave the pods: a NetworkPolicy may select on it")
+	assert.Equal(t, "iot", sts.Spec.Template.Labels["team"])
+	assert.Equal(t, "true", sts.Spec.Template.Labels["policy.example.com/scanned"])
+}
+
+func tlsSecret(labels map[string]string) *corev1.Secret {
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "broker-tls", Namespace: testNamespace, Labels: labels},
+		Type:       corev1.SecretTypeTLS,
+		Data:       map[string][]byte{"tls.crt": []byte("c"), "tls.key": []byte("k")},
+	}
+}
+
+func withTLSSecret(m *mkov1.Mosquitto) {
+	m.Spec.TLS = &mkov1.MosquittoTLS{SecretName: "broker-tls"}
+}
+
+// TestReconcile_SecretSecurity is ADR 0014 D10 for the TLS Secret: with the
+// switch on, a Secret without the consent label - or no Secret at all - is
+// refused visibly and nothing is written; with the label, or with the switch
+// off, the broker is built as before.
+func TestReconcile_SecretSecurity(t *testing.T) {
+	consenting := map[string]string{mkov1.SecretConsumableLabel: mkov1.SecretConsumableValue}
+
+	tests := []struct {
+		name       string
+		switchOn   bool
+		secret     *corev1.Secret
+		wantReason string
+	}{
+		{"on, labelled: accepted", true, tlsSecret(consenting), ""},
+		{"on, unlabelled: refused", true, tlsSecret(nil), mkov1.ReasonSecretNotConsumable},
+		{"on, label with another value: refused", true,
+			tlsSecret(map[string]string{mkov1.SecretConsumableLabel: "yes"}), mkov1.ReasonSecretNotConsumable},
+		{"on, no Secret: refused", true, nil, mkov1.ReasonSecretNotFound},
+		{"off, unlabelled: accepted", false, tlsSecret(nil), ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			objs := []client.Object{newCR(withTLSSecret)}
+			if tt.secret != nil {
+				objs = append(objs, tt.secret)
+			}
+			r, c := newReconcilerFor(t, objs...)
+			r.SecretSecurity = tt.switchOn
+			ctx := context.Background()
+
+			result, err := r.Reconcile(ctx, request())
+			require.NoError(t, err)
+
+			stored := &mkov1.Mosquitto{}
+			require.NoError(t, c.Get(ctx, request().NamespacedName, stored))
+			sts := &appsv1.StatefulSet{}
+			stsErr := c.Get(ctx, types.NamespacedName{Name: testName, Namespace: testNamespace}, sts)
+
+			if tt.wantReason == "" {
+				require.NoError(t, stsErr, "an accepted Secret builds the broker")
+				assert.NotEqual(t, mkov1.PhaseFailed, stored.Status.Phase)
+				return
+			}
+			assert.True(t, apierrors.IsNotFound(stsErr), "a refused Secret must not be mounted into a new StatefulSet")
+			assert.Equal(t, mkov1.PhaseFailed, stored.Status.Phase)
+			assert.Equal(t, metav1.ConditionFalse, readyCondition(t, stored).Status)
+			assert.Equal(t, tt.wantReason, readyCondition(t, stored).Reason)
+			assert.Contains(t, readyCondition(t, stored).Message, mkov1.SecretConsumableLabel,
+				"the message names the label, so the fix is readable from kubectl get")
+			assert.Equal(t, secretRecheckInterval, result.RequeueAfter,
+				"no Secret is watched, so a label added later is noticed by the requeue")
+		})
+	}
+}
+
+// TestReconcile_SecretSecurityLeavesARunningBrokerAlone: a Secret that loses its
+// label refuses the next pass, and the StatefulSet stays as it was - the change
+// that pass would have made is not applied.
+func TestReconcile_SecretSecurityLeavesARunningBrokerAlone(t *testing.T) {
+	secret := tlsSecret(map[string]string{mkov1.SecretConsumableLabel: mkov1.SecretConsumableValue})
+	r, c := newReconcilerFor(t, newCR(withTLSSecret), secret)
+	r.SecretSecurity = true
+	ctx := context.Background()
+	require.NoError(t, func() error { _, err := r.Reconcile(ctx, request()); return err }())
+
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(secret), secret))
+	secret.Labels = nil
+	require.NoError(t, c.Update(ctx, secret))
+	stored := &mkov1.Mosquitto{}
+	require.NoError(t, c.Get(ctx, request().NamespacedName, stored))
+	stored.Spec.Replicas = 3
+	require.NoError(t, c.Update(ctx, stored))
+
+	_, err := r.Reconcile(ctx, request())
+	require.NoError(t, err)
+
+	sts := &appsv1.StatefulSet{}
+	require.NoError(t, c.Get(ctx, types.NamespacedName{Name: testName, Namespace: testNamespace}, sts))
+	assert.Equal(t, int32(1), *sts.Spec.Replicas, "the refused pass wrote nothing")
+	require.NoError(t, c.Get(ctx, request().NamespacedName, stored))
+	assert.Equal(t, mkov1.ReasonSecretNotConsumable, readyCondition(t, stored).Reason)
+}

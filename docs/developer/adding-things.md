@@ -63,6 +63,32 @@ update in the same change. Read against the tree on 2026-10-05.
 10. Update [architecture.md](architecture.md#what-one-pass-writes), the names table in
     [README.md](../../README.md), and the privilege page under [docs/security/](../security/README.md).
 
+## An install-time setting
+
+A switch that changes the operator's flags and its RBAC together — `secretSecurity` is the model
+([ADR 0006](../adr/0006-both-install-paths-grant-the-same-authority.md),
+[ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10).
+
+1. The flag in `bindOperatorFlags` ([`cmd/main.go`](../../cmd/main.go)), a field on `operatorFlags`,
+   passed on in `newReconciler`; `TestBindOperatorFlags_Defaults`, `_AllFlagsParsed` and
+   `TestNewReconciler` extended.
+2. A rule the setting needs is **not** a kubebuilder marker — a marker is unconditional. It goes
+   into the chart's [`clusterrole.yaml`](../../deploy/helm/mosquitto-operator/templates/clusterrole.yaml)
+   under `{{- if .Values.<setting> }}` and into a kustomize Component under
+   [`config/components/`](../../config/components) that patches the ClusterRole by kind.
+3. The chart value in [`values.yaml`](../../deploy/helm/mosquitto-operator/values.yaml) with its
+   trust consequence in the comment, and the flag in
+   [`deployment.yaml`](../../deploy/helm/mosquitto-operator/templates/deployment.yaml); the default
+   written out in [`config/manager/manager.yaml`](../../config/manager/manager.yaml), and the
+   Component appending the other value (Go's flag package keeps the last occurrence).
+4. An entry in `installSettings` in
+   [`test/rbacparity/rbac_parity_test.go`](../../test/rbacparity/rbac_parity_test.go) — the
+   `--set` values, the components, the expected flag value. Observe it failing once with the rule
+   missing from one path.
+5. The value and the flag in the README tables, the setting in
+   [docs/operations/installation.md](../operations/installation.md), the grant in
+   [docs/security/privilege-footprint.md](../security/privilege-footprint.md).
+
 ## An E2E scenario
 
 1. A new file in [`test/e2e`](../../test/e2e) starting with `//go:build e2e` and `package e2e`.

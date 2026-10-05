@@ -53,6 +53,11 @@ A pass handles one `Mosquitto`
   `Mosquitto resource is being deleted, skipping reconciliation`. The garbage collector removes
   the owned objects through their owner references
   ([ADR 0009](../adr/0009-delete-only-through-owner-references.md)).
+- **With `--secret-security=true` and `spec.tls`, the TLS Secret is checked first:** its labels
+  are read through a metadata-only `get`. A Secret that is missing or lacks
+  `mko.gtrfc.com/consumable=true` sets the resource `Failed` with reason `SecretNotFound` or
+  `SecretNotConsumable` and ends the pass without writing anything, so a running StatefulSet stays
+  as it is. The pass comes back after one minute, because no Secret is watched.
 - **Otherwise the four objects are written in order:** the ConfigMap, the headless Service, the
   client Service, then the StatefulSet. For each one, the pass does one of three things:
   - creates it if it is missing (log: `Creating <Kind>` with its name);
@@ -73,16 +78,21 @@ many *different* resources can be in a pass at once. It defaults to 4, not to co
 
 ### What a pass corrects, and what it leaves alone
 
-| Object | Compared: a difference triggers a write | When the operator writes, it replaces | Never written after creation |
-|---|---|---|---|
-| ConfigMap `<name>-config` | the data, the operator's own labels | the data and the whole label set | annotations |
-| Both Services | the ports, the selector, the operator's own labels | the ports, the selector and the whole label set | the type, annotations, every other spec field |
-| StatefulSet | the replica count, the operator's own labels on the object and on the pod template, the annotations `mko.gtrfc.com/pod-spec-hash` and `mko.gtrfc.com/config-hash` | the replica count, the whole pod template and the whole label set | annotations on the object; the claim template |
+| Object | Compared: a difference triggers a write | When the operator writes, it replaces | Merged: the operator's keys win, every other key stays | Never written after creation |
+|---|---|---|---|---|
+| ConfigMap `<name>-config` | the data, the operator's own labels | the data | the labels | annotations |
+| Both Services | the ports, the selector, the operator's own labels | the ports, the selector | the labels | the type, annotations, every other spec field |
+| StatefulSet | the replica count, the operator's own labels and annotations on the object, the operator's labels and annotations on the pod template — the two hashes, `spec.podLabels` and `spec.podAnnotations` among them | the replica count and the pod spec | the labels and annotations of the object and of the pod template | the claim template |
 
-Labels that others add are not compared, so they never trigger a write. But when the operator
-writes the object for another reason, it assigns its own label set, and labels added by others are
-gone. The same happens to annotations that others add to the pod template whenever the operator
-writes a new template.
+Labels and annotations that others add are not compared, so they never trigger a write, and when
+the operator writes the object for another reason it merges its own keys in and keeps theirs
+([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D9). A label from Flux or a policy
+engine therefore stays. The one key the operator removes is a key of `spec.podLabels` or
+`spec.podAnnotations` that you deleted from the resource: the StatefulSet records which keys it
+last applied, in `mko.gtrfc.com/applied-pod-labels` and `mko.gtrfc.com/applied-pod-annotations`,
+and exactly the keys that left the spec are taken off the pod template. A label the operator itself
+once set and no longer sets is never removed by merging; that has not happened yet, because the
+operator has not renamed one of its keys.
 
 Three consequences:
 
@@ -98,8 +108,10 @@ Three consequences:
   (`TestStatefulSetHasChanged` in
   [`internal/builder/statefulset_test.go`](../../internal/builder/statefulset_test.go)).
 - **`kubectl rollout restart` survives too.** The annotation it adds to the pod template is not
-  compared, so the operator does not undo the restart (same test). The annotation disappears the
-  next time the operator writes a template, and that write rolls the pods anyway.
+  compared, so the operator does not undo the restart (same test), and a later write — for a
+  replica change, a new label, a new image — keeps it, so the pods do not roll a second time for
+  the restart (`TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded` in
+  [`internal/controller/mosquitto_controller_test.go`](../../internal/controller/mosquitto_controller_test.go)).
 
 ### An object the operator refuses
 
@@ -133,15 +145,18 @@ hashes onto the template. `mko.gtrfc.com/pod-spec-hash` digests the whole pod sp
 | `spec.image` | the pod template (the container image, and the `app.kubernetes.io/version` label) | Rolled |
 | `spec.resources` | the pod template | Rolled |
 | `spec.antiAffinity` | the pod template | Rolled |
+| `spec.podLabels` or `spec.podAnnotations` | the pod template's labels or annotations, and the applied-keys annotation on the StatefulSet | Rolled. A removed key is removed from the pods |
 | `spec.tls` added or removed | the ConfigMap (the listener), the pod template (the Secret volume, the mount, the port, the probes) and the port of both Services | Rolled. Clients have to change their port (`1883` ↔ `8883`) |
 | `spec.tls.secretName` pointing at another Secret | the pod template (the volume) | Rolled |
 | New content in the referenced Secret | nothing | Not restarted ([a renewed certificate](#a-renewed-certificate)) |
 | `spec.storage.size` or `.storageClassName` on a broker that has storage | nothing | Not restarted. The change never converges ([below](#changing-specstorage-on-an-existing-broker)) |
 | `spec.storage` added or removed | the pod template only (the `emptyDir` appears or disappears), never the claim template | Rolled onto a template that no longer matches the claim template ([below](#changing-specstorage-on-an-existing-broker)) |
-| A new operator version | whatever it renders differently | Rolled where the rendering differs ([installation.md, upgrade](installation.md#upgrade)) |
+| A new operator version | whatever it renders differently | Rolled where the rendering differs ([installation.md, upgrade](installation.md#upgrade)). The release that added the `config-check` init container changed every pod spec, so the first upgrade to it rolls every broker once |
 
 The image, config, TLS, anti-affinity and storage rows are asserted by
-`TestPodTemplateHashesChangeWithTheThingTheyDigest`, and the replica row by
+`TestPodTemplateHashesChangeWithTheThingTheyDigest`, the pod-metadata row by
+`TestStatefulSetHasChanged_PodMetadata` and `TestMergeStatefulSet` and on a Kind cluster by
+`TestE2E_PodMetadata_ReachesAndLeavesThePods`, and the replica row by
 `TestReplicaChangeDoesNotRollThePods`
 ([`internal/builder/statefulset_test.go`](../../internal/builder/statefulset_test.go)). The
 integration test `TestIntegration_Reconcile_ConfigChangeReachesThePodTemplate` checks the config
@@ -223,8 +238,15 @@ Proving an MQTT session takes a publish and a subscribe, as in
 causes, none of which the operator sees:
 
 - an image that cannot be pulled;
-- a missing TLS Secret: the pod waits on its volume mount;
-- a `spec.config` the broker refuses: `CrashLoopBackOff`;
+- a missing TLS Secret: the pod stays in `ContainerCreating` with a `FailedMount` event naming
+  the Secret (observed on Kind);
+- a directive the broker does not know, in `spec.config` or in the generated file on an older
+  image: the pod stays in `Init:Error` / `Init:CrashLoopBackOff`, and
+  `kubectl logs <pod> -c config-check` carries the broker's message with file and line, for
+  example `Error: Unknown configuration variable 'max_queued_mesages'.` and
+  `Error found at /mosquitto/config/mosquitto.conf:<line>.` (observed on Kind,
+  `TestE2E_ConfigCheck_StopsATypoBeforeTheBroker`). The check is the broker's `--test-config`: it
+  knows directive names, not what a plugin accepts, so a file it passes can still crash the broker;
 - an admission policy that rejects the pod: the StatefulSet exists and creates no pod. The broker
   pod satisfies the restricted Pod Security Standard
   ([installation.md](installation.md#the-namespace)), so this comes from a policy beyond it;
@@ -243,6 +265,9 @@ kubectl -n messaging logs broker-0
 four objects. Pods that were already running keep running on what they had. The causes:
 
 - an object the operator refuses ([above](#an-object-the-operator-refuses));
+- with `--secret-security=true`, a TLS Secret that is missing or lacks
+  `mko.gtrfc.com/consumable=true` (reasons `SecretNotFound`, `SecretNotConsumable`; nothing is
+  written and the pass is repeated every minute);
 - a `spec.storage.size` that does not parse as a quantity (`parsing spec.storage.size …`);
 - any write the API server rejects, such as a `403` from RBAC that falls short, or a conflict with
   another writer.

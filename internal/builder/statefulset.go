@@ -24,6 +24,10 @@ const (
 	// BrokerContainerName is the name of the broker container.
 	BrokerContainerName = "mosquitto"
 
+	// ConfigCheckContainerName is the init container that runs the broker binary
+	// in --test-config mode against the generated file before the broker starts.
+	ConfigCheckContainerName = "config-check"
+
 	// ConfigVolumeName is the volume carrying the generated mosquitto.conf.
 	ConfigVolumeName = "config"
 	// TLSVolumeName is the volume carrying the referenced TLS secret.
@@ -32,6 +36,13 @@ const (
 	// name of the PVC template when spec.storage is set, so it must not change:
 	// volumeClaimTemplates are immutable once the StatefulSet exists.
 	DataVolumeName = "data"
+	// ConfigCheckScratchVolumeName is a throwaway emptyDir the config-check init
+	// container sees at the persistence path instead of the data volume:
+	// --test-config saves the broker's empty in-memory database to
+	// persistence_location when it exits, which on the real data volume replaces
+	// every retained message and session with nothing
+	// (docs/developer/broker-behaviour.md, M19).
+	ConfigCheckScratchVolumeName = "config-check-scratch"
 
 	// AnnotationPodSpecHash carries a digest of the pod spec the operator built.
 	// The StatefulSet controller rolls the pods when the template changes, and
@@ -44,6 +55,18 @@ const (
 	// does not restart anything, so without this annotation a config change would
 	// sit in the ConfigMap and never reach a running broker.
 	AnnotationConfigHash = "mko.gtrfc.com/config-hash"
+
+	// AnnotationAppliedPodLabels and AnnotationAppliedPodAnnotations sit on the
+	// StatefulSet object, not on its pods, and list the keys of spec.podLabels and
+	// spec.podAnnotations the operator last wrote into the pod template (sorted,
+	// comma-separated). An update merges into the template and keeps keys other
+	// writers added (ADR 0009 D9), so without this record a key removed from the
+	// spec would stay on the pods forever; with it, exactly the keys that left the
+	// spec are removed.
+	AnnotationAppliedPodLabels = "mko.gtrfc.com/applied-pod-labels"
+	// AnnotationAppliedPodAnnotations is the record of spec.podAnnotations; see
+	// AnnotationAppliedPodLabels.
+	AnnotationAppliedPodAnnotations = "mko.gtrfc.com/applied-pod-annotations"
 
 	// brokerUserID is the uid/gid of the "mosquitto" user in the eclipse-mosquitto
 	// image. It is set explicitly (rather than left to the image) so the pod can
@@ -81,6 +104,10 @@ func BuildStatefulSet(m *mkov1.Mosquitto) (*appsv1.StatefulSet, error) {
 			Name:      common.StatefulSetName(m),
 			Namespace: m.Namespace,
 			Labels:    labels,
+			Annotations: map[string]string{
+				AnnotationAppliedPodLabels:      common.JoinKeys(m.Spec.PodLabels),
+				AnnotationAppliedPodAnnotations: common.JoinKeys(m.Spec.PodAnnotations),
+			},
 		},
 		Spec: appsv1.StatefulSetSpec{
 			Replicas:    &replicas,
@@ -90,11 +117,14 @@ func BuildStatefulSet(m *mkov1.Mosquitto) (*appsv1.StatefulSet, error) {
 			},
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
-					Labels: labels,
-					Annotations: map[string]string{
+					// The user's keys go in first and the operator's are written over
+					// them, so spec.podLabels cannot detach the Services from the pods
+					// and spec.podAnnotations cannot forge a hash (ADR 0012 D5).
+					Labels: common.MergeLabels(m.Spec.PodLabels, labels),
+					Annotations: common.MergeLabels(m.Spec.PodAnnotations, map[string]string{
 						AnnotationPodSpecHash: hashOf(podSpec),
 						AnnotationConfigHash:  hashOf(GenerateMosquittoConf(m)),
-					},
+					}),
 				},
 				Spec: podSpec,
 			},
@@ -148,6 +178,11 @@ func buildPodSpec(m *mkov1.Mosquitto) corev1.PodSpec {
 		})
 	}
 
+	volumes = append(volumes, corev1.Volume{
+		Name:         ConfigCheckScratchVolumeName,
+		VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+	})
+
 	return corev1.PodSpec{
 		// The operator issues no API calls from the broker pod, so it takes the
 		// ServiceAccount token away rather than leaving the default one mounted.
@@ -164,13 +199,52 @@ func buildPodSpec(m *mkov1.Mosquitto) corev1.PodSpec {
 			// inherits it instead of needing its own copy.
 			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
-		Containers: []corev1.Container{buildBrokerContainer(m)},
-		Volumes:    volumes,
-		Affinity:   BuildPodAntiAffinity(m),
+		InitContainers: []corev1.Container{buildConfigCheckContainer(m)},
+		Containers:     []corev1.Container{buildBrokerContainer(m)},
+		Volumes:        volumes,
+		Affinity:       BuildPodAntiAffinity(m),
 	}
 }
 
-// buildBrokerContainer constructs the single container of a broker pod.
+// containerSecurityContext is the security context of every container the
+// operator renders: no privilege escalation, a read-only root filesystem and no
+// capabilities. The uid, the group, runAsNonRoot and the seccomp profile come
+// from the pod (ADR 0012 D4).
+func containerSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		AllowPrivilegeEscalation: ptr.To(false),
+		ReadOnlyRootFilesystem:   ptr.To(true),
+		Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
+	}
+}
+
+// buildConfigCheckContainer constructs the init container that runs the broker
+// binary of the pod's own image in --test-config mode against the generated
+// file (ADR 0007 D10). A directive the image does not know - a typo in
+// spec.config, or a generated directive an older image lacks - stops the pod
+// here with the broker's message, file and line, instead of a crash loop.
+//
+// It checks directive names only, nothing a plugin decides (M8), and it never
+// sees the data volume: the scratch emptyDir at the persistence path receives
+// the empty database --test-config saves on exit (M19).
+func buildConfigCheckContainer(m *mkov1.Mosquitto) corev1.Container {
+	return corev1.Container{
+		Name:    ConfigCheckContainerName,
+		Image:   ResolveImage(m),
+		Command: []string{"/usr/sbin/mosquitto", "-c", ConfigMountPath + "/" + ConfigKey, "--test-config"},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
+			{Name: ConfigCheckScratchVolumeName, MountPath: DataMountPath},
+		},
+		// The broker's own requests and limits: an init container that runs
+		// before every other container does not raise the pod's effective
+		// request, and a namespace whose quota demands limits admits it.
+		Resources:       m.Spec.Resources,
+		SecurityContext: containerSecurityContext(),
+	}
+}
+
+// buildBrokerContainer constructs the broker container of a broker pod.
 func buildBrokerContainer(m *mkov1.Mosquitto) corev1.Container {
 	volumeMounts := []corev1.VolumeMount{
 		{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
@@ -220,12 +294,8 @@ func buildBrokerContainer(m *mkov1.Mosquitto) corev1.Container {
 			SuccessThreshold:    1,
 			FailureThreshold:    5,
 		},
-		Resources: m.Spec.Resources,
-		SecurityContext: &corev1.SecurityContext{
-			AllowPrivilegeEscalation: ptr.To(false),
-			ReadOnlyRootFilesystem:   ptr.To(true),
-			Capabilities:             &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}},
-		},
+		Resources:       m.Spec.Resources,
+		SecurityContext: containerSecurityContext(),
 	}
 }
 
@@ -271,26 +341,56 @@ func hashOf(v any) string {
 // StatefulSetHasChanged reports whether the live StatefulSet has to be updated to
 // match the desired one.
 //
-// It compares the replica count, the object labels and the two hash annotations
-// on the pod template rather than the pod spec itself: the API server defaults a
-// long list of pod fields the operator never sets, so a structural comparison
-// against the stored object would report a difference on every pass and put the
-// StatefulSet in a permanent update loop.
+// It compares the replica count, the object labels and annotations, and the pod
+// template's labels and annotations - the two hash annotations and the user's
+// spec.podLabels and spec.podAnnotations among them - rather than the pod spec
+// itself: the API server defaults a long list of pod fields the operator never
+// sets, so a structural comparison against the stored object would report a
+// difference on every pass and put the StatefulSet in a permanent update loop.
+// Keys only the live object carries are ignored; a key that left the spec is
+// caught through the applied-keys annotations, whose value then differs.
 func StatefulSetHasChanged(desired, current *appsv1.StatefulSet) bool {
 	if desired.Spec.Replicas != nil && current.Spec.Replicas != nil &&
 		*desired.Spec.Replicas != *current.Spec.Replicas {
 		return true
 	}
-	if common.MapEntriesMissing(desired.Labels, current.Labels) {
-		return true
+	return common.MapEntriesMissing(desired.Labels, current.Labels) ||
+		common.MapEntriesMissing(desired.Annotations, current.Annotations) ||
+		common.MapEntriesMissing(desired.Spec.Template.Labels, current.Spec.Template.Labels) ||
+		common.MapEntriesMissing(desired.Spec.Template.Annotations, current.Spec.Template.Annotations)
+}
+
+// MergeStatefulSet writes desired into current the way an update must (ADR 0009
+// D9): replicas and the pod spec are replaced; the object labels and
+// annotations and the pod template's labels and annotations are merged, the
+// operator's keys winning and every other key kept - a label from Flux or a
+// policy engine, kubectl.kubernetes.io/restartedAt. The one exception are the
+// keys of spec.podLabels and spec.podAnnotations that the applied-keys
+// annotations of current list and those of desired no longer do: they are
+// removed, so a key deleted from the spec leaves the pods.
+// volumeClaimTemplates are not touched; they are immutable.
+func MergeStatefulSet(current, desired *appsv1.StatefulSet) {
+	template := *desired.Spec.Template.DeepCopy()
+	template.Labels = common.MergeLabels(
+		withoutKeys(current.Spec.Template.Labels, common.RemovedKeys(
+			current.Annotations[AnnotationAppliedPodLabels], desired.Annotations[AnnotationAppliedPodLabels])),
+		template.Labels)
+	template.Annotations = common.MergeLabels(
+		withoutKeys(current.Spec.Template.Annotations, common.RemovedKeys(
+			current.Annotations[AnnotationAppliedPodAnnotations], desired.Annotations[AnnotationAppliedPodAnnotations])),
+		template.Annotations)
+
+	current.Labels = common.MergeLabels(current.Labels, desired.Labels)
+	current.Annotations = common.MergeLabels(current.Annotations, desired.Annotations)
+	current.Spec.Replicas = desired.Spec.Replicas
+	current.Spec.Template = template
+}
+
+// withoutKeys returns a copy of m without the given keys.
+func withoutKeys(m map[string]string, keys []string) map[string]string {
+	out := common.MergeLabels(m, nil)
+	for _, k := range keys {
+		delete(out, k)
 	}
-	if common.MapEntriesMissing(desired.Spec.Template.Labels, current.Spec.Template.Labels) {
-		return true
-	}
-	for _, key := range []string{AnnotationPodSpecHash, AnnotationConfigHash} {
-		if desired.Spec.Template.Annotations[key] != current.Spec.Template.Annotations[key] {
-			return true
-		}
-	}
-	return false
+	return out
 }

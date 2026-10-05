@@ -76,8 +76,20 @@ rules:
       - list
       - update
       - watch
-  # No rule for secrets: spec.tls.secretName is mounted into the broker pods by
-  # the kubelet, so the operator never reads the TLS material itself.
+  # spec.tls.secretName is mounted into the broker pods by the kubelet, so the
+  # operator never reads the TLS material itself. With secretSecurity on it
+  # reads the Secret's METADATA - its labels, through a metadata-only get - to
+  # check the consent label mko.gtrfc.com/consumable=true (docs/adr/0014 D10);
+  # get is all that takes, because the read is uncached. config/components/
+  # secret-security adds the same rule on the kustomize path.
+  {{- if .Values.secretSecurity }}
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+  {{- end }}
   # No leader-election rule here on purpose. The Lease lives in the operator's
   # own namespace, so cluster-wide access to every Lease in the cluster is more
   # than the manager needs; leader-election.yaml grants it as a namespaced Role

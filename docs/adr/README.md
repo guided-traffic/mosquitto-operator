@@ -69,14 +69,14 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0011](0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md) | Documentation has five homes, tickets are work lists that get archived, an open security finding is embargoed, and planning documents are consumed | Implemented |
-| [0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) | The first release is one broker run from Git, and high availability is parked | Partly built — R5 and R6 hold for today's single container; the rest is not built |
+| [0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) | The first release is one broker run from Git, and high availability is parked | Partly built — D4 with its admission guard, D5 (R4), R5 for `Mosquitto`; the rest is not built |
 
 ### Broker workload and configuration
 
 | ADR | Decision | State |
 |---|---|---|
-| [0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) | The operator consumes TLS material, it never issues it — and a renewed certificate is reloaded in place | Partly built — D1–D9 implemented; D10 (in-pod reload) not built |
-| [0007](0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) | One broker image pin, on `2.1.2-alpine`, and not on the `-openssl` tag | Partly built — D1–D8 implemented; D9, D10 (supported line, `--test-config` init container) not built |
+| [0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) | The operator consumes TLS material, it never issues it — and a renewed certificate is reloaded in place | Partly built — D1–D9 implemented, D1 and D6 as amended; D10 (in-pod reload) not built |
+| [0007](0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) | One broker image pin, on `2.1.2-alpine`, and not on the `-openssl` tag | Implemented — D9, D10 built 2026-10-05 |
 | [0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) | The generated broker is anonymous, and `spec.config` can undo the rest — amended: never anonymous, takeover-safe, `spec.config` allowlisted, no NetworkPolicy | Partly built — D1–D10 describe the tree; D13–D16 not built |
 
 ### Users and credentials
@@ -84,14 +84,14 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) | A client is a `MosquittoUser` with its credentials in its own Secret | Not built |
-| [0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) | Credentials reach the broker as one rendered Secret and a signal, never as a restart | Not built |
+| [0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) | Credentials reach the broker as one rendered Secret and a signal, never as a restart | Partly built — D10 for the TLS Secret; the rest is not built |
 
 ### Reconciliation and privilege
 
 | ADR | Decision | State |
 |---|---|---|
 | [0006](0006-both-install-paths-grant-the-same-authority.md) | Both install paths grant the same authority, and a test compares what they render | Partly built — D1–D8 implemented; D9 (users, `secrets` modes) not built |
-| [0009](0009-delete-only-through-owner-references.md) | Delete only through owner references, and never patch — and an update keeps foreign labels | Partly built — D1–D8 implemented; D9 not built |
+| [0009](0009-delete-only-through-owner-references.md) | Delete only through owner references, and never patch — and an update keeps foreign labels | Implemented — D9 built 2026-10-05, the removal of a deleted `spec.podLabels` key on an open question |
 
 ### Observability
 

@@ -48,7 +48,9 @@ executed while writing this file.
 - 🧭 **Opt-in anti-affinity** — `off` (default), `soft` (scheduler preference) or `hard` (one broker pod per node, surplus pods stay `Pending`), over `kubernetes.io/hostname`.
 - 🛡 **Never adopts what it does not own** — an existing ConfigMap, Service or StatefulSet under a managed name is refused, not overwritten, and reported on the resource.
 - 🗑 **No delete verb** — the ClusterRole grants none, so teardown runs entirely through owner references and the garbage collector.
-- 🔒 **Hardened broker pods** — non-root uid/gid 1883, read-only root filesystem, all capabilities dropped, `seccompProfile: RuntimeDefault`, no ServiceAccount token mounted.
+- 🔒 **Hardened broker pods** — non-root uid/gid 1883, read-only root filesystem, all capabilities dropped, `seccompProfile: RuntimeDefault`, no ServiceAccount token mounted; an API server's own PodSecurity admission at `restricted` judges every shape in the test suite.
+- 🔎 **Typos stop before the broker starts** — an init container runs the broker's own `--test-config` on the generated file and fails with the broker's message, file and line.
+- 🏷 **Pod labels and annotations from the resource** — `spec.podLabels` and `spec.podAnnotations` reach the broker pods, under the operator's own keys; a key removed from the resource leaves the pods.
 - 📊 **Status you can read with `kubectl`** — `PHASE`, `READY` and `REPLICAS` printer columns, `observedGeneration`, and a `Ready` condition.
 - 📦 **Two install paths, one authority** — Helm chart and `kustomize build config/default`; [`make verify-rbac-parity`](Makefile) compares what they actually render.
 
@@ -67,7 +69,8 @@ Everything below is derived deterministically from the resource. For a `Mosquitt
 | ConfigMap | `<name>-config` | [`builder.ConfigMapName`](internal/builder/configmap.go) |
 | ConfigMap key | `mosquitto.conf` | [`builder.ConfigKey`](internal/builder/configmap.go) |
 | Broker container | `mosquitto` | [`builder.BrokerContainerName`](internal/builder/statefulset.go) |
-| Volumes | `config`, `tls` (only with `spec.tls`), `data` | [`builder.ConfigVolumeName`, `TLSVolumeName`, `DataVolumeName`](internal/builder/statefulset.go) |
+| Init container | `config-check` | [`builder.ConfigCheckContainerName`](internal/builder/statefulset.go) |
+| Volumes | `config`, `tls` (only with `spec.tls`), `data`, `config-check-scratch` (an `emptyDir` the init container sees at the persistence path) | [`builder.ConfigVolumeName`, `TLSVolumeName`, `DataVolumeName`, `ConfigCheckScratchVolumeName`](internal/builder/statefulset.go) |
 | PVC template (only with `spec.storage`) | `data` | [`builder.DataVolumeName`](internal/builder/statefulset.go) |
 
 Kubernetes derives two more names from those, by its own StatefulSet rules rather than by
@@ -95,6 +98,7 @@ StatefulSet; the cluster domain is whatever the cluster uses, `cluster.local` by
 | Data mount / persistence location | `/mosquitto/data` | [`builder.DataMountPath`](internal/builder/configmap.go) |
 | Expected Secret keys | `tls.crt`, `tls.key` | [`builder.TLSCertKey`, `TLSKeyKey`](internal/builder/configmap.go) |
 | Broker command | `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf` | [`buildBrokerContainer`](internal/builder/statefulset.go) |
+| Config-check command | `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf --test-config` | [`buildConfigCheckContainer`](internal/builder/statefulset.go) |
 
 Exactly one container port is declared: `mqtt` or `mqtts`, never both. Enabling TLS **moves**
 the generated listener rather than adding one.
@@ -110,7 +114,13 @@ the generated listener rather than adding one.
 | `app.kubernetes.io/version` | the image tag, or `latest` when the image carries none | every created object (**not** in selectors) |
 | `mko.gtrfc.com/pod-spec-hash` | 8 hex digits over the built pod spec | the pod template |
 | `mko.gtrfc.com/config-hash` | 8 hex digits over the generated `mosquitto.conf` | the pod template |
+| `mko.gtrfc.com/applied-pod-labels` | the keys of `spec.podLabels` last written, sorted, comma-separated | the StatefulSet object |
+| `mko.gtrfc.com/applied-pod-annotations` | the keys of `spec.podAnnotations` last written, sorted, comma-separated | the StatefulSet object |
+| `mko.gtrfc.com/consumable` | `true` | a TLS Secret **you** label, the consent `secretSecurity: true` requires ([`mkov1.SecretConsumableLabel`](api/v1/mosquitto_types.go)) |
 
+The pod template carries `spec.podLabels` and `spec.podAnnotations` too, under the keys above: a
+key the operator sets always wins. Labels and annotations other tools add to any of the objects
+are kept on every update.
 The selector deliberately omits `component` and `version`
 ([`common.SelectorLabels`](internal/common/labels.go)): a selector carrying the image tag
 would stop matching the running pods exactly when the image changes and the Service has to
@@ -164,7 +174,8 @@ them through the chart's `fullname` template. The **names** differ between the t
 Read [docs/security/](docs/security/README.md) before granting anyone
 `create mosquittoes`: the generated broker accepts anonymous clients, the operator holds a
 cluster-wide grant, and whoever may write a `Mosquitto` in a namespace can read every Secret of
-that namespace ([H-15](docs/security/trust-boundaries.md#h-15)).
+that namespace unless the operator runs with `secretSecurity: true`
+([H-15](docs/security/trust-boundaries.md#h-15)).
 
 ## 🚀 TL;DR fast start
 
@@ -182,7 +193,15 @@ helm install mosquitto-operator deploy/helm/mosquitto-operator \
 ```
 
 The chart carries the CRD, the ClusterRole, the leader-election Role and the Deployment, so
-one command installs all four. Which image a checked-out chart runs, the published chart
+one command installs all four.
+
+**Decide `secretSecurity` before you install.** With the default `false`, a `Mosquitto` may name
+any Secret of its namespace as `spec.tls.secretName`, and because the author of a `Mosquitto`
+also chooses the image that runs with that Secret mounted, **whoever may create or update a
+`Mosquitto` in a namespace may read every Secret of that namespace**. If your cluster grants
+`mosquittoes` more widely than Secrets, install with `--set secretSecurity=true`: a TLS Secret is
+then used only when it carries the label `mko.gtrfc.com/consumable=true`, and the operator gains
+`get` on Secrets to read that label ([ADR 0014](docs/adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10). Which image a checked-out chart runs, the published chart
 repository, and the kustomize path: [installation.md](docs/operations/installation.md#install-with-helm).
 
 **2. Create a broker.**
@@ -269,6 +288,10 @@ spec:
     limits:
       cpu: 500m
       memory: 256Mi
+  podLabels:                              # example — omitted means the operator's labels only
+    network.example.com/mqtt-clients: allowed
+  podAnnotations:                         # example — omitted means the two hash annotations only
+    prometheus.io/scrape: "false"
 ```
 
 ### `spec`
@@ -276,12 +299,14 @@ spec:
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `replicas` | `int32` | `1` | Broker pods in the StatefulSet. Schema-validated to 1…9. They are independent processes; see the note under the pitch. |
-| `image` | `string` | *(empty → `eclipse-mosquitto:2.1.2-alpine`)* | The broker image. The fallback is [`builder.DefaultImage`](internal/builder/statefulset.go), pinned to the 2.x line and tracked by Renovate. |
-| `config` | `string` | *(empty)* | Extra `mosquitto.conf` content, appended after everything the operator generates. Nothing validates it: a rejected file is a `CrashLoopBackOff`, not a rejected resource. |
+| `image` | `string` | *(empty → `eclipse-mosquitto:2.1.2-alpine`)* | The broker image. The fallback is [`builder.DefaultImage`](internal/builder/statefulset.go), pinned to the 2.x line and tracked by Renovate. **The supported line is 2.1.x**; the operator does not check the tag, and an image that does not know a generated directive stops in the `config-check` init container with the broker's own message ([ADR 0007](docs/adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D9, D10). |
+| `config` | `string` | *(empty)* | Extra `mosquitto.conf` content, appended after everything the operator generates. The operator does not parse it; the `config-check` init container runs the broker's `--test-config` on the whole file before the broker starts, so a misspelled directive leaves the pod in `Init:Error` / `Init:CrashLoopBackOff` with the broker's message, file and line in `kubectl logs <pod> -c config-check`. That checks directive names, nothing a plugin decides; the resource itself is not refused. |
 | `antiAffinity` | `string` | `"off"` | `off` renders no affinity block at all; `soft` renders a preferred term with weight `100`; `hard` renders a required term. Topology key `kubernetes.io/hostname`, selector limited to this resource's own pods. |
 | `tls` | `object` | *(unset)* | Mounts an existing Secret and moves the listener to MQTTS. See [Two modes](#two-modes-and-what-each-one-protects). |
 | `storage` | `object` | *(unset)* | Renders a `data` PVC template with access mode `ReadWriteOnce`. Unset means an `emptyDir` at the same mount path. |
-| `resources` | `corev1.ResourceRequirements` | *(unset)* | Passed to the broker container unchanged — `requests`, `limits` and `claims`, the standard Kubernetes type. |
+| `resources` | `corev1.ResourceRequirements` | *(unset)* | Passed to the broker container unchanged — `requests`, `limits` and `claims`, the standard Kubernetes type — and to the `config-check` init container, which runs before the broker and therefore raises no request. |
+| `podLabels` | `map[string]string` | *(unset)* | Added to the broker pods' labels, under the operator's own: a key the operator sets (the selector labels, `app.kubernetes.io/component`, `app.kubernetes.io/version`) always wins, so a Service cannot be detached from its pods. A change rolls the pods; a key removed here is removed from the pods. Not put on the StatefulSet, the Services or the ConfigMap. |
+| `podAnnotations` | `map[string]string` | *(unset)* | Added to the broker pods' annotations, under the operator's own: `mko.gtrfc.com/pod-spec-hash` and `mko.gtrfc.com/config-hash` always win, so a hash cannot be forged. A change rolls the pods; a key removed here is removed from the pods. |
 
 `spec.antiAffinity: hard` guarantees the spread by refusing to place two broker pods of this
 resource on one node, so replicas beyond the number of schedulable nodes stay `Pending`. Any
@@ -302,6 +327,12 @@ So the label identifies the image by eye without ever being a value the API serv
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `secretName` | `string` | *(required)* | Name of a Secret **in the resource's own namespace** carrying `tls.crt` and `tls.key`. Minimum length 1; an empty value is treated as TLS off ([`Mosquitto.IsTLSEnabled`](api/v1/mosquitto_types.go)) so a half-filled spec cannot produce a listener with no certificate. |
+
+With `secretSecurity: true` the Secret must also carry `mko.gtrfc.com/consumable=true`; one that
+does not, or that does not exist, makes the resource `Failed` with reason `SecretNotConsumable`
+or `SecretNotFound`, writes nothing — a running StatefulSet stays as it is — and is looked at
+again every minute, because the operator watches no Secret. The operator reads the Secret's
+labels through a metadata-only `get`; it never reads `tls.crt` or `tls.key`.
 
 The operator neither creates nor renews that Secret. Filling it — by hand or through a
 cert-manager `Certificate` the administrator owns:
@@ -347,7 +378,7 @@ status:
 | `Pending` | The StatefulSet does not exist yet, or none of its pods are ready | `StatefulSetNotFound`, `NoReplicasReady` |
 | `Progressing` | Some but not all requested pods are ready | `ReplicasNotReady` |
 | `Ready` | Every requested pod is ready | `AllReplicasReady` |
-| `Failed` | The operator could not write one of the objects it manages | `ReconcileFailed` |
+| `Failed` | The operator could not write one of the objects it manages, or refused to, because `secretSecurity: true` rejects the named TLS Secret | `ReconcileFailed`, `SecretNotConsumable`, `SecretNotFound` |
 
 `Failed` describes the operator, not the brokers: pods that were already running keep running.
 What each phase means in practice: [runtime.md](docs/operations/runtime.md#status).
@@ -432,8 +463,9 @@ spec:
 
 Two things `spec.config` can do that are worth knowing before you use it: a `listener` line
 adds a listener the operator neither models nor exposes as a container or Service port, and
-nothing validates the content — the broker sees it first at startup, so a mistake is a
-`CrashLoopBackOff` rather than a rejected resource.
+the operator does not parse the content — the `config-check` init container is where a
+misspelled directive surfaces, as `Init:Error` with the broker's message, never as a rejected
+resource.
 
 ### Helm chart values
 
@@ -456,6 +488,7 @@ Defaults from [`deploy/helm/mosquitto-operator/values.yaml`](deploy/helm/mosquit
 | `maxConcurrentReconciles` | `4` | How many `Mosquitto` resources reconcile at once. Passes for one resource stay serialised at any value. |
 | `leaderElection.enabled` | `true` | Passes `--leader-elect` and renders the namespaced leader-election `Role`/`RoleBinding`. With it off, neither is created. |
 | `metrics.enabled` | `true` | Renders the metrics Service and passes `--metrics-bind-address=:8080`; `false` passes `0`, which is what controller-runtime reads as "do not start the metrics server". |
+| `secretSecurity` | `false` | Passes `--secret-security`. `true` adds `get` on `secrets` to the ClusterRole and makes a `Mosquitto` use a TLS Secret only when it carries `mko.gtrfc.com/consumable=true`. **Security:** with `false`, whoever may write a `Mosquitto` in a namespace may read every Secret there ([TL;DR](#-tldr-fast-start)). On the kustomize path the same switch is the component [`config/components/secret-security`](config/components/secret-security/kustomization.yaml). |
 
 **Security note:** the metrics endpoint is plain HTTP with no authentication; `metrics.enabled:
 false` closes the port, deleting the Service only hides the DNS name. What it serves, and that no
@@ -464,7 +497,7 @@ broker metrics exist yet ([ADR 0002](docs/adr/0002-the-metrics-exporter-is-writt
 
 ### Operator flags
 
-From [`cmd/main.go`](cmd/main.go). The chart sets the first four from the values above.
+From [`cmd/main.go`](cmd/main.go). The chart sets the first five from the values above.
 
 | Flag | Default | Effect |
 |---|---|---|
@@ -472,6 +505,7 @@ From [`cmd/main.go`](cmd/main.go). The chart sets the first four from the values
 | `--health-probe-bind-address` | `:8081` | Serves `/healthz` and `/readyz`. |
 | `--leader-elect` | `false` | Leader election under the Lease `mosquitto-operator.mko.gtrfc.com`. |
 | `--max-concurrent-reconciles` | `4` | Concurrent reconciles across resources. |
+| `--secret-security` | `false` | Use a TLS Secret only when it carries `mko.gtrfc.com/consumable=true`; needs `get` on `secrets`, which the chart and the kustomize component grant only together with this flag. The last occurrence on the command line wins. |
 | `--zap-*` | `Development: true` | The standard zap logging flags, e.g. `--zap-log-level=debug` as used by `make run`. `bindZapFlags` in [`cmd/main.go`](cmd/main.go) starts from `zap.Options{Development: true}`, so the shipped default is development-mode logging (console encoder, DEBUG level, stack traces from WARN) rather than controller-runtime's production default. |
 
 ## 🛠 Development

@@ -52,159 +52,54 @@ authority; five test tiers. What it built is in the records 0001 to 0010 and in
 
 ## Phase 1 — The tree tells the truth, and the release gate is back
 
-**Goal:** every tracked statement matches the code, the E2E tier gates releases again, and the
-pipeline holds no authority it does not use — before anything new is built on top.
+**Built 2026-10-05.** The E2E tier gates releases again (first CI run of both legs: `Test and
+Release` run `37367556237`), the statements the code contradicted are corrected, the pipeline holds
+only the authority it uses, and the ownership refusal message is pinned. What it built is recorded
+in ADR 0001, 0003, 0004, 0005, 0007, 0009 and 0010 and in
+[ci-and-release.md](../developer/ci-and-release.md). One check is left, because only a merge to
+`main` can run it:
 
-**Effort:** M.
-
-### 1.1 Restore the E2E tier in CI
-
-- [`release.yml`](../../.github/workflows/release.yml): uncomment the block under
-  `TEMPORARILY DISABLED` (the two legs of `e2e-tests` and the `e2e-gate` job) and add `e2e-tests`
-  back to the `needs:` of `semantic-release`, where the comment `TEMPORARILY REMOVED` marks it.
-- [ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) `Status`: that the tier was
-  disabled from 2026-09-01 until the restoring change, and why (the comment in the workflow); the
-  index row back to *Implemented*.
-- [ADR 0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md): D4's list of
-  jobs that hold a credential and the Context's job count corrected to the running jobs.
-- [`release-template.hbs`](../../.github/release-template.hbs) lines 28–31: the gating sentence is
-  true again; `make test-release-tooling` renders it.
-- **Done when** both legs ran green on a pull request and the multi-node leg's guard grep found
-  `--- PASS: TestE2E_AntiAffinity_HardSpreadsAcrossNodes`; the run is named in ADR 0004's
-  `Status`. A leg that fails for an infrastructure reason is recorded there with its cause, not
-  worked around.
-
-### 1.2 Correct what the code contradicts
-
-Each line: the text corrected to the tree, checked against it once more in the change.
-
-| Where | Correction |
-|---|---|
-| [ADR 0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md) `Status` | the four sites read `1.27.1` today; the record names the fact, not a value Renovate moves |
-| [`cmd/main.go`](../../cmd/main.go), comment of `bindZapFlags` | nothing in the deployment passes `--zap-log-level`; `make run` does |
-| [`internal/common/labels.go`](../../internal/common/labels.go), comment of `sanitizeLabelValue` | the test is `TestExtractVersionFromImage_AlwaysProducesAValidLabel` |
-| `internal/common/labels.go` lines 47–48 | `spec.image` carries no `MinLength` in the CRD |
-| [`clusterrole.yaml`](../../deploy/helm/mosquitto-operator/templates/clusterrole.yaml), header comment | `test/rbacparity` compares it with `config/rbac/role.yaml`; it holds no leases rule — that is the namespaced Role of `leader-election.yaml` |
-| [`values.yaml`](../../deploy/helm/mosquitto-operator/values.yaml), `leaderElection` comment | the leases rule is in the namespaced Role, not the ClusterRole |
-| [`Chart.yaml`](../../deploy/helm/mosquitto-operator/Chart.yaml), [`package.json`](../../package.json), [`Containerfile`](../../Containerfile), [`build.yml`](../../.github/workflows/build.yml) | "provisioning highly available Mosquitto MQTT brokers" replaced by the README's pitch, in all four in one change |
-| `build.yml`, the buildx cache comment | releases `v0.1.0`–`v0.1.8` exist; whether `build.yml` built them is checked on GitHub and written as found |
-| ADR 0005 D5 and D8, and the comment in `release.yml` before `npm ci` | Renovate does not run on push; the app token is in the Release step's environment only — the protection of `--ignore-scripts` is real, its stated reason is not |
-| [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md), Consequences | a missing TLS Secret holds the pod in `ContainerCreating` rather than `CrashLoopBackOff` — observed on Kind first (`make e2e-local`, a `Mosquitto` naming a Secret that does not exist), then written as observed |
-
-### 1.3 Take back the pipeline's unused authority
-
-- `semantic-release`: `permissions:` reduced to what checkout needs; every write already goes
-  through the GitHub App token. `build.yml`: a top-level `permissions: contents: read`, widened per
-  job.
-- `build`: `docker logout` right after the push, before `anchore/sbom-action` and
-  `softprops/action-gh-release` run.
-- The third-party actions referenced by tag — `anchore/sbom-action@v0`,
-  `softprops/action-gh-release@v3`, `marocchino/sticky-pull-request-comment@v3`,
-  `renovatebot/github-action@v46.3.6` — pinned by commit SHA with a Renovate digest manager; the
-  exception comment in `release.yml` and the security page updated to the truth.
-- `moby/buildkit:v0.12.0` in `build.yml`: a Renovate `customManager` for the `image=` line, guarded
-  by `make verify-ci-references`, or the pin dropped. Before that, the version is checked against
-  the BuildKit advisories of 2024 (CVE-2024-23651, -23652, -23653); not checked yet.
-- Renovate automerge for images ([`renovate.json`](../../renovate.json) lines 128–139 and
-  217–228): minor updates of the broker image need review, because the operator ships it as the
-  default into every cluster.
-- [ci-and-supply-chain.md](../security/ci-and-supply-chain.md): H-9 and H-10 rewritten to what is
-  left.
-- **Done when** a release run on `main` succeeds with the reduced permissions, and
-  `make verify-ci-references` was observed failing once with a broken BuildKit regex.
-
-### 1.4 Pin the ownership refusal message
-
-- A unit test in [`mosquitto_controller_test.go`](../../internal/controller/mosquitto_controller_test.go)
-  asserts the exact message of `ensureOwned` for ConfigMap, Service and StatefulSet
-  ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D5), observed failing once
-  against an edited format string.
+- **A release run on `main` with the reduced permissions.** `semantic-release` now holds
+  `contents: read` only and writes through the app token; `build` logs out of Docker Hub before the
+  pinned SBOM and release actions. **Done when** the first `Test and Release` run on `main` after
+  the merge succeeds through `semantic-release`, and the `Release Docker & Helm` run it triggers
+  succeeds through `release-helm-gh`. A step that fails for a permission gets the permission back,
+  with a comment naming the call that needed it, and ADR 0005 D6 says so.
 
 ## Phase 2 — Pod labels, the configuration gate, the admission guard, and the first Secret switch
 
-**Goal:** R4 and R6 of ADR 0012, the label rule of ADR 0009 D9, and the TLS half of the Secret
-switch — everything that does not need users.
+**Built 2026-10-05**: `spec.podLabels` and `spec.podAnnotations` (ADR 0012 D5), updates that merge
+(ADR 0009 D9), the `config-check` init container (ADR 0007 D10, with the measurement M19 it
+needed), the PodSecurity admission guard (ADR 0012 D4) and `secretSecurity` for the TLS Secret
+(ADR 0014 D10). One decision is open, and the tree is built on its recommended answer:
 
-**Builds:** [ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)
-D4, D5; [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D9, D10;
-[ADR 0009](../adr/0009-delete-only-through-owner-references.md) D9;
-[ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
-D10 for the TLS Secret; [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
-D1 and D6 as amended.
+### 2.1a — What happens to a key deleted from `spec.podLabels` or `spec.podAnnotations`?
 
-**Effort:** M.
+ADR 0009 D9 makes every update merge the operator's keys over the live labels and annotations and
+keep every other key; its accepted cost is that "a label the operator once set and later stops
+setting is never removed by merging". `spec.podLabels` turns that cost into a user-visible one: a
+pod label deleted from the `Mosquitto` in Git would stay on the pods forever, and a label a
+NetworkPolicy or a scraper selects on keeps granting what it granted.
 
-### 2.1 `spec.podLabels` and `spec.podAnnotations` (ADR 0012 D5)
+- **A — The StatefulSet records the keys it applied and removes those that left the spec.**
+  *(Recommended, and built.)* Two annotations on the StatefulSet object,
+  `mko.gtrfc.com/applied-pod-labels` and `mko.gtrfc.com/applied-pod-annotations`, list the sorted
+  keys last written; `builder.MergeStatefulSet` deletes exactly the keys that one lists and the new
+  spec does not, then merges. Cost: two annotations of bookkeeping, and a foreign label that
+  happens to share a removed key is removed too. It is what `kubectl apply` does with its
+  last-applied record, scoped to the two maps the user owns, and it needs no status as memory.
+- **B — Accept D9's cost for these keys as well.** No bookkeeping; removing a pod label means
+  editing the StatefulSet's pod template by hand, which the next roll keeps. Against R4 of ADR
+  0012, half-met: a label reaches the pods, it never leaves.
+- **C — Replace the pod template's labels and annotations wholesale, keep merging elsewhere.**
+  Simple, and it brings back what D9 removed: `kubectl.kubernetes.io/restartedAt` and every
+  policy-engine label on the template disappear on any write.
 
-- [`api/v1/mosquitto_types.go`](../../api/v1/mosquitto_types.go): two optional
-  `map[string]string` fields on `MosquittoSpec`, documented as "merged under the operator's own
-  keys".
-- [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) `BuildStatefulSet`:
-  the template labels are `podLabels` with `common.BaseLabels` written over them; the template
-  annotations are `podAnnotations` with `AnnotationPodSpecHash` and `AnnotationConfigHash` written
-  over them. `StatefulSetHasChanged` already compares template labels through
-  `MapEntriesMissing`; the user's annotation keys join that comparison.
-- `make generate-all`; the chart's CRD copy follows through `sync-helm-crd`.
-- Tests: unit — a `podLabels` entry for `app.kubernetes.io/instance` and a `podAnnotations` entry
-  for `mko.gtrfc.com/config-hash` lose to the operator's values; a new label makes
-  `StatefulSetHasChanged` true. E2E — a label added to the CR appears on the pods after the roll.
+A is recommended because it is the only option under which a Git change to `spec.podLabels` means
+the same thing in both directions, at the cost of state the operator already owns. The answer
+becomes an amendment of ADR 0009 D9.
 
-### 2.2 Updates keep what others added (ADR 0009 D9)
-
-- [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)
-  `reconcileConfigMap`, `reconcileService`, `reconcileStatefulSet`: `current.Labels =
-  desired.Labels` becomes a merge (a helper beside `MapEntriesMissing` in
-  `internal/common/labels.go`, proposed `MergeLabels`), and the template write merges labels and
-  annotations into `current.Spec.Template` before its spec is replaced.
-- Tests: unit — a foreign label on each of the three kinds survives an update made for another
-  reason; a foreign template label and `kubectl.kubernetes.io/restartedAt` survive a replica
-  change; observed failing against today's assignments.
-- [runtime.md](../operations/runtime.md#what-a-pass-corrects-and-what-it-leaves-alone): the
-  paragraph on `kubectl rollout restart` rewritten.
-
-### 2.3 The `--test-config` init container (ADR 0007 D10)
-
-- `buildPodSpec`: an init container (proposed name `config-check`) from `ResolveImage(m)`, running
-  `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf --test-config`, with the `config` and
-  `data` mounts and the broker container's security context. It is part of the pod spec, so the
-  pod-spec hash covers it.
-- The `image` field description and the README state the supported line, 2.1.x.
-- Tests: unit — the init container exists with the broker container's security context. E2E — a
-  `spec.config` typo leaves the broker container unstarted, and the init container's log carries
-  the broker's message with file and line.
-
-### 2.4 The restricted-admission guard (ADR 0012 D4)
-
-- First settle the open fact: does envtest's API server enforce `pod-security.kubernetes.io/enforce`
-  labels? If it does, an integration test creates a namespace with `enforce=restricted` and a Pod
-  from `BuildStatefulSet(m).Spec.Template` for each shape — plain, TLS, storage, both, hard
-  anti-affinity; if it does not, the same test runs in the E2E tier.
-- Observed failing once with `allowPrivilegeEscalation: true` on the broker container, the API
-  server's own message recorded.
-
-### 2.5 `secretSecurity` for the TLS Secret (ADR 0014 D10)
-
-- [`cmd/main.go`](../../cmd/main.go) `bindOperatorFlags`: a flag (proposed `--secret-security`,
-  bool, default `false`) on `operatorFlags`, passed to `MosquittoReconciler`.
-- Chart: value `secretSecurity: false`, passed as the flag in
-  [`deployment.yaml`](../../deploy/helm/mosquitto-operator/templates/deployment.yaml); kustomize:
-  the flag in [`manager.yaml`](../../config/manager/manager.yaml), same default.
-- With `true` the reconciler reads the TLS Secret's metadata — labels only, never data — and
-  refuses one without the label (proposed `mko.gtrfc.com/consumable: "true"`): `Ready=False`,
-  proposed reason `SecretNotConsumable`, the StatefulSet left as it is. That read needs `get` on
-  `secrets`, which the tree does not grant before phase 4: phase 2 adds a read-only `secrets` rule
-  **only while `secretSecurity` is `true`**, rendered under the same condition on both install
-  paths, and `test/rbacparity` compares both settings. Phase 4's grant supersedes it.
-- Tests: unit — refused without the label, accepted with it, accepted without it when `false`;
-  observed failing with the check removed. Integration — the flag reaches the operator on both
-  paths.
-- README: the value, the flag, the label, and the trust rule of `false` next to the install
-  command; [trust-boundaries.md](../security/trust-boundaries.md#h-15): H-15 names the switch as
-  its mitigation.
-
-**Phase 2 is done when** every test above passed on CI, the E2E legs included; the README
-reference covers `podLabels`, `podAnnotations`, `secretSecurity` and the flag; the records'
-`Status` and index rows say what is built.
+**Answer:** _open_
 
 ## Phase 3 — The measurements the user phase stands on
 

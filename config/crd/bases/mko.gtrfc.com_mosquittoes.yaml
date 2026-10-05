@@ -100,8 +100,30 @@ spec:
               image:
                 description: |-
                   Image is the Mosquitto container image. Empty means the operator default
-                  (see internal/builder for the pinned default).
+                  (see internal/builder for the pinned default). The supported broker line is
+                  2.1.x: the generated configuration uses what 2.1 accepts, and an init
+                  container runs the image's own --test-config against it before the broker
+                  starts, so an image that does not understand a directive stops there with
+                  the broker's message. Nothing here checks the tag.
                 type: string
+              podAnnotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodAnnotations are added to the annotations of every broker pod, merged
+                  under the operator's own keys: the two hash annotations under
+                  mko.gtrfc.com/ always win. A key removed from this map is removed from the
+                  pods. A change rolls the pods.
+                type: object
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are added to the labels of every broker pod, merged under the
+                  operator's own keys: a key the operator sets (the selector labels, the
+                  version label) always wins. A key removed from this map is removed from the
+                  pods. A change rolls the pods.
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of broker pods in the StatefulSet.

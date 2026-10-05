@@ -38,6 +38,7 @@ type operatorFlags struct {
 	probeAddr               string
 	enableLeaderElection    bool
 	maxConcurrentReconciles int
+	secretSecurity          bool
 }
 
 // bindOperatorFlags declares the operator flags on fs and returns the struct
@@ -53,6 +54,11 @@ func bindOperatorFlags(fs *flag.FlagSet) *operatorFlags {
 	fs.IntVar(&f.maxConcurrentReconciles, "max-concurrent-reconciles", controller.DefaultMaxConcurrentReconciles,
 		"How many Mosquitto resources are reconciled at the same time. Passes for the same "+
 			"resource stay serialised at any value.")
+	fs.BoolVar(&f.secretSecurity, "secret-security", false,
+		"Mount a TLS Secret only when it carries the label "+mkov1.SecretConsumableLabel+"="+
+			mkov1.SecretConsumableValue+". Needs get on secrets. With false, any Secret of a "+
+			"Mosquitto's namespace may be named, so whoever may write a Mosquitto may read the "+
+			"Secrets of its namespace.")
 
 	return f
 }
@@ -85,6 +91,11 @@ func newReconciler(mgr ctrl.Manager, f *operatorFlags) *controller.MosquittoReco
 		Client:                  mgr.GetClient(),
 		Scheme:                  mgr.GetScheme(),
 		MaxConcurrentReconciles: f.maxConcurrentReconciles,
+		SecretSecurity:          f.secretSecurity,
+		// Uncached: the Secret check reads one object's metadata with get, and a
+		// cached read would start an informer that needs list and watch on every
+		// Secret in the cluster.
+		APIReader: mgr.GetAPIReader(),
 	}
 }
 
