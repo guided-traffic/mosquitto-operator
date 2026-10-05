@@ -231,6 +231,20 @@ gap (the M11 tradeoff, made choosable: `upgradeStrategy: flip | restart`).
 - **New Q22** (added to the catalogue) — fencing authority for the flip pair vs. ADR 0009's
   no-delete rule.
 
+## 7. Parked here (2026-10-05)
+
+The next release targets a single broker run from Git through Flux
+([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 0). Everything HA- or multi-replica-shaped waits in
+this ticket until it is reopened:
+
+- Plan section 3.1 (high availability) and 3.3 (version updates).
+- Plan phase 4 (the upgrade promise) and phase 5 (HA).
+- Questions Q1, Q2, Q3, Q4, Q15, Q22, and the PDB half of Q17.
+- The HA ADR the plan had numbered 0011; it takes the next free number when this reopens.
+
+Until then `spec.replicas` keeps its `v0.1.0` meaning — independent brokers, no shared state — and
+nothing in the next release may build on `replicas > 1`.
+
 ## Sources
 
 Read 2026-09-01.

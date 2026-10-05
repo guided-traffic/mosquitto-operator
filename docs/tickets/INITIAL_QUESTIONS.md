@@ -1,6 +1,9 @@
 # Initial question catalogue
 
-Opened: 2026-09-01. Status: **unanswered by design** — this file exists to be decided before
+Opened: 2026-09-01. Status: ~~**unanswered by design**~~ *2026-10-05:* **every question in the
+current scope is answered** (scope re-cut in [`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 0).
+Parked with HA in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7: Q1, Q2, Q3, Q4, Q15, Q22 and the PDB
+half of Q17. Q6's roles are deferred, not open. This file exists to be decided before
 implementation starts, not alongside it.
 
 Companion: [`INITITAL_PLAN.md`](INITITAL_PLAN.md) carries the plan and the measurements the
@@ -31,6 +34,9 @@ Priority marks:
 
 # A. High availability — what are we actually promising
 
+*Whole section parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 (scope re-cut,
+[`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 0). Kept unchanged as the record.*
+
 The honest starting point, measured and unambiguous: **open-source Mosquitto has no clustering.**
 No shared sessions, no shared retained messages, no state replication, no leader election. A
 second broker process is a second broker, not a second copy of the first. Everything in this
@@ -41,6 +47,8 @@ correct for exactly one workload class and wrong for every other, which is why t
 first.
 
 ### Q1 (P0) — Which HA shape is the product?
+
+*Parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 — not answered in this round.*
 
 **What it blocks:** the meaning of `spec.replicas`, whether the operator does leader election,
 the Service topology, the PVC layout, the whole storage story, and the first sentence of the
@@ -73,6 +81,8 @@ phase 5 and adds Q22.
 
 ### Q2 (P0) — What does `spec.replicas > 1` mean after Q1?
 
+*Parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 — not answered in this round.*
+
 **What it blocks:** CRD validation, the anti-affinity story, and whether we have to remove a field
 that already shipped in `v0.1.0`.
 
@@ -94,6 +104,8 @@ field name carries the warning into `kubectl explain`, which is where people act
 
 ### Q3 (P1) — Is bounded failover good enough, and what is the bound?
 
+*Parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 — not answered in this round.*
+
 **What it blocks:** whether phase 5 (option D) is ever built, the PDB defaults, the probe
 defaults, and whether we need RWX storage anywhere.
 
@@ -108,6 +120,8 @@ commercial edition — which should then be written down rather than discovered 
 **Answer:**
 
 ### Q4 (P1) — Persistence backend: classic or `persist-sqlite`?
+
+*Parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 — not answered in this round.*
 
 Mosquitto 2.1 ships `mosquitto_persist_sqlite.so` (verified present in the pinned image). The two
 cannot both be on, and the broker refuses to start rather than picking one — measured, exact
@@ -136,6 +150,8 @@ answer says it does — decide it there, not here.
 **Answer:**
 
 ### Q22 (P1) — Fencing for a flip-based failover: may the operator kill a broker pod?
+
+*Parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 — not answered in this round.*
 
 *Added 2026-09-01 from [`HA_RESEARCH.md`](HA_RESEARCH.md). Only reachable if Q1 ever activates
 the flip pair (option D / phase 5).*
@@ -199,7 +215,13 @@ and a cross-namespace binding question ([Q8](#q8-p0--may-a-mosquittouser-bind-to
 
 **Recommendation:** separate. Confirm it and move on.
 
-**Answer:**
+**Answer:** *2026-10-05* — **separate.** A `MosquittoUser` kind, bound to its broker by
+`spec.brokerRef`, same namespace only, ACLs inline on the user, no roles yet. Decisive reason,
+from the Flux requirement R5 ([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 0): a user whose
+Secret is missing reports `Ready=False` on its own object, so the broker and every other client
+stay healthy for Flux health checks and `dependsOn`. Inline would have forced a choice between
+blocking every `dependsOn` on the broker and hiding the broken user. This answer also settles the
+first round of Q6, Q7 and the first half of Q8 — see their answers.
 
 ### Q6 (P0) — Which kinds, exactly?
 
@@ -218,7 +240,10 @@ The reason to build roles now rather than later: it is the same object graph dyn
 [Q11](#q11-p0--password-file--acl-file-or-dynamic-security) is ever re-decided toward dynsec, a
 role-shaped API maps across; a flat one does not.
 
-**Answer:**
+**Answer:** *2026-10-05, via Q5* — **Minimal for the first release**: `MosquittoUser` with an
+inline ACL list, no `MosquittoRole`. Roles stay the planned next step and are additive (a
+`roleRefs` field next to the inline list), so nothing built now is undone; the dynsec-mapping
+argument above survives because the role kind can still mirror dynsec when it lands.
 
 ### Q7 (P1) — Which direction does the reference point?
 
@@ -235,7 +260,8 @@ the broker object.
 **Recommendation:** user → broker, with the broker holding an *acceptance policy*, not a list —
 see Q8. That keeps the delegation working while leaving the broker owner in control of the rule.
 
-**Answer:**
+**Answer:** *2026-10-05, via Q5* — **user → broker**, `spec.brokerRef` on the `MosquittoUser`.
+Onboarding a client never touches the broker object.
 
 ### Q8 (P0) — May a `MosquittoUser` bind to a broker in another namespace?
 
@@ -260,12 +286,31 @@ Even same-namespace, if the ACL list is arbitrary, a user object can subscribe t
 broker need a policy — a topic prefix per namespace, a maximum scope, a deny on `$SYS` and
 `$CONTROL`?
 
+*Added 2026-10-05 with M13* ([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 2): an ACL entry of
+`#` grants neither read nor write on `$`-prefixed topics; only an entry that itself starts with
+`$` does. A "mandatory deny" line is therefore not needed — refusing every user ACL entry whose
+topic starts with `$` closes the same door without depending on deny semantics in `acl-file`.
+
 **Recommendation:** opt-in selector on the broker, default **same namespace only**, plus a
 mandatory deny on `$CONTROL/#` and `$SYS/#` for every rendered user regardless of what the CR
 asks for. The second half — a topic-prefix policy — is worth its own field but can land in
 phase 3.
 
-**Answer:**
+**Answer:** *2026-10-05, via Q5, first half only* — **same namespace only.** A `brokerRef`
+into another namespace is rejected with a `Ready=False` condition on the user, at render time and
+not only in validation. A namespace selector on the broker is a later, additive opt-in. **The
+second half stays open:** the mandatory deny on `$CONTROL/#` and `$SYS/#` and any topic-prefix
+policy.
+
+*Second half answered 2026-10-05:* **every user ACL entry whose topic starts with `$` is refused**
+— in CRD validation (CEL) as a shape check and again at render time as the authority, the split
+ADR 0009 draws for object writes. A refused entry makes the user `Ready=False` with a reason; it is
+never silently dropped. No deny lines are rendered: M13 shows `#` does not reach `$` topics, so the
+refusal alone closes `$SYS` and `$CONTROL`. This is what keeps the later dynsec mode safe, where
+write on `$CONTROL/dynamic-security/#` is administrative control. **No topic-prefix policy** for
+now; it lands together with a cross-namespace acceptance selector, which is the first point at
+which it would bound anyone. `$SYS` access for monitoring goes through Q18's reserved user. Not
+measured: how shared subscriptions (`$share/...`) are checked against ACLs.
 
 ### Q9 (P1) — How is the rendered auth material made deterministic?
 
@@ -280,7 +325,12 @@ gets a SIGHUP it did not need — forever.
 on it that renders the same input a hundred times and asserts one distinct output. Cheap, and the
 class of bug it prevents is one that only shows up as unexplained load.
 
-**Answer:**
+**Answer:** *2026-10-05* — **one render function, output sorted by username**; unique after Q24's
+collision rule, so a renamed `MosquittoUser` with an unchanged login leaves `<name>-auth`
+byte-identical. Salt and hash are kept while the plaintext still verifies (plan section 4.2), which
+removes the second source of churn. Test: render one input a hundred times with shuffled input
+order and asserts a single distinct output; per ADR 0010 it is observed failing once against a
+renderer with the sort removed.
 
 ### Q10 (P2) — What happens to connected clients when their user is deleted?
 
@@ -299,7 +349,14 @@ terminated). Revocation latency is a real security property and it must not be s
 If Q3's answer is "revocation must be immediate", that flips [Q11](#q11-p0--password-file--acl-file-or-dynamic-security)
 toward dynsec on its own.
 
-**Answer:**
+**Answer:** *2026-10-05* — **resolved by measurement, no option needed.** M14
+([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 2): on SIGHUP the file plugins re-check every
+connected client and disconnect exactly those whose user was removed or whose password changed;
+everyone else stays connected, and a narrowed ACL applies to live connections per message. The
+premise of this question ("an existing connection survives a reload") was wrong. Remaining
+latency is the kubelet's propagation of `<name>-auth` plus the sidecar, not measured. This removes
+"immediate revocation" as a trigger for dynsec (Q11) — what dynsec still adds is ACL priorities and
+kicking a client whose credential is still valid.
 
 ---
 
@@ -339,14 +396,33 @@ expanded at render time rather than referenced.
 write the ADR so the re-decision has a named trigger — if Q10 comes back as "revocation must be
 immediate", or if ACL priorities turn out to be needed, that is the trigger.
 
-**Answer:**
+**Answer:** *2026-10-05, **reopened the same day** — see Q12's answer: its premise (the operator
+does not read Secrets) no longer holds.* ~~**file plugins** (`password-file` + `acl-file`). Re-weighed against
+R2: dynsec takes passwords in plaintext over its control topic, which would have made a `secrets`
+read grant on the operator mandatory and pre-decided Q12; the file plugins leave Q12 open. Accepted
+cost: a deleted user or a changed password does not end an existing connection (Q10), and there
+are no ACL priorities. Named triggers to re-decide, to be carried into the ADR: immediate
+revocation becomes a requirement, or ACL priorities become necessary. Not measured: that a
+password change of an *existing* user takes effect on SIGHUP the way an added user does (M2
+measured the addition only).~~
+
+*Re-decided 2026-10-05, after Q12:* **file plugins now; dynamic security later as an opt-in broker
+mode** (`spec.auth.mode: files | dynsec`, default `files`, not added until needed). Both paths share
+one aggregate Secret `<name>-auth` per broker (Q12), so the user-facing API is identical and the
+mode is a broker-side delivery detail. Building both now was rejected: two payload renderers, two
+live paths, two E2E suites, two security postures, and three unmeasured dynsec behaviours would
+all have blocked the first release. The constraints that keep the later mode cheap are in
+[`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 4.4 and are binding on the phase-2 implementation.
+Triggers that move dynsec from "later" to "now": ACL priorities become necessary, or a client with a
+still-valid credential must be kickable. *Corrected the same day by M14:* "immediate revocation"
+is no longer a trigger — a reload already disconnects removed users and changed passwords.
 
 ### Q12 (P0) — Where do passwords come from, and who hashes them?
 
 **Security question.**
 
 The password file holds hashes, not passwords. `mosquitto_passwd` writes `$7$` (PBKDF2-HMAC-SHA512)
-and 2.1 also understands `$argon2id$`. The operator image is distroless and contains no
+~~and 2.1 also understands `$argon2id$`~~ (*wrong for the official image, M18 — see Q28*). The operator image is distroless and contains no
 `mosquitto_passwd`.
 
 | Option | How it works | Cost / risk |
@@ -361,12 +437,60 @@ the operator from "can rewrite broker configs" into "can read every credential i
 The current ClusterRole has no `secrets` rule at all, and that is a property worth spending
 something to keep.
 
+*Added 2026-10-05:* requirement R2 ([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 0) puts each
+user's password in its own Secret **as a value a client can consume too** — the same Secret a
+Zigbee2MQTT or Home Assistant deployment reads. B makes that two Secrets per user (plaintext for
+the client, hash for the broker) kept in step by hand, which is exactly the manual step R3 forbids.
+B no longer satisfies the requirement on its own; the recommendation below predates R2 and has to
+be re-weighed between A and C when this question comes up.
+
 **Recommendation:** **B for phase 2**, C or D behind an explicit later decision. B needs no new
 RBAC, no new hash implementation and no new secret path. If onboarding friction turns out to be
 the blocker, D with a **namespace-scoped** grant (a Role per watched namespace, not a ClusterRole)
 is the next step — and that is an ADR, not a patch.
 
-**Answer:**
+**Answer:** *2026-10-05, partial* — two constraints, no option picked yet:
+
+1. **No Secret is derived from the password Secrets.** Nothing the operator writes holds a hash or a
+   copy of a user's credential. That rules out A as written (it rendered `<name>-auth`) and every
+   variant that stores rendered material in an object.
+2. **The operator may read the password Secrets.** C (no operator access, one volume per user)
+   was rejected: adding a user would roll the broker, and a missing Secret could not be reported
+   per user (R5). The *scope* of the read grant — cluster-wide or per namespace — is not decided.
+
+Consequence: with the file plugins, the rendered `passwd` has no object left to travel in, so Q11
+is reopened.
+
+*Refined the same day:* constraint 1 is narrowed to **no Secret per user password**. Exactly
+**one** operator-owned Secret per broker, `<name>-auth`, carries the full rendered state (`passwd`
+hashes, `acl`). Accepted because it lives in the same namespace as the plaintext Secrets it is
+rendered from (Q8), so it exposes nothing that was not already readable there, and because it lets
+a broker restart with every user while the operator is down. The operator therefore needs
+`get;list;watch` on the password Secrets and `create;update` on `<name>-auth`. The scope of that
+grant:
+
+*Grant scope decided 2026-10-05:* **configurable at install time, two modes.**
+
+| Mode | Grant | Effect of an operator compromise |
+|---|---|---|
+| `all` | ClusterRole: `get;list;watch;create;update` on `secrets` in every namespace | Read **and overwrite** every Secret in the cluster — including GitOps deploy keys, the SOPS/age key, other operators' credentials. In a Flux cluster that is a path to the whole cluster. |
+| `namespaces` | One Role + RoleBinding per listed namespace, created at install time (the operator cannot mint them itself: RBAC escalation prevention would require it to already hold the grant); the Secret cache is restricted to the same list | Read and overwrite the Secrets of the listed namespaces only |
+
+The maintainer runs `all` on their own cluster, a conscious acceptance of the row above after it
+was stated. `namespaces` exists for operators who want the bound. Both modes ship on **both**
+install paths and the RBAC parity test ([ADR 0006](../adr/0006-both-install-paths-grant-the-same-authority.md))
+renders and compares each of them; a `MosquittoUser` whose namespace the grant does not cover
+reports `Ready=False` with a reason naming the setting. The risk and the choice go into
+`SECURITY_ARCHITECTURE.md` (privilege footprint) in the same change as the code.
+
+*Default decided 2026-10-05:* **`all`.** Weighed against "no Secret access unless configured"
+(recommended, rejected) and "release namespace only". Consequence accepted with it: a plain
+`helm install` or `kustomize build config/default` grants cluster-wide read **and write** on
+Secrets without the installer writing anything down. Because the default now carries that risk
+for third-party installers too, the documentation requirement is sharper: the README's install
+section states the grant before the install command, and the chart's `NOTES.txt` prints it when
+`all` is active. Both install paths default to `all`, so the parity test's default rendering
+compares the cluster-wide rule.
 
 ### Q13 (P0) — How does the material reach the broker, given that Kubernetes cannot write a file Mosquitto will accept?
 
@@ -399,7 +523,13 @@ signal every other one, and the process namespace no longer isolates the broker 
 sidecars. In a pod whose containers we all build, that is acceptable; it should be written down
 rather than assumed.
 
-**Answer:**
+**Answer:** *2026-10-05* — **C, fed by the aggregate Secret.** `<name>-auth` is mounted as a
+volume (no `subPath`, not part of the pod-template hash); an init container copies it into an
+emptyDir as `1883/0600` on every start; a sidecar compares bytes after each kubelet `..data`
+swap, writes temp-then-rename, and sends SIGHUP. Every container runs as uid `1883` with all
+capabilities dropped (R6). User and password changes therefore restart nothing. Entry
+measurements before phase 2 are collected in [`INITITAL_PLAN.md`](INITITAL_PLAN.md) phase 2
+(*the changed-password case was measured the same day, M14*).
 
 ### Q14 (P1) — Should `spec.config` stay unvalidated?
 
@@ -420,6 +550,11 @@ Also measured, and important: **`--test-config` does not validate plugin options
 a wrong `plugin_opt_*` key passed `--test-config` cleanly and only failed at runtime with
 `password-file: Error: Unknown option 'file'.` So it is a syntax gate, not a correctness gate.
 
+*Added 2026-10-05 with M15* ([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 2): a global
+`allow_anonymous true` in `spec.config` does **not** undo the listener-scoped `false`; a second
+`listener` with `listener_allow_anonymous true` **does** — an anonymous, ACL-free listener on the
+pod IP that sees every user's topics. That is the concrete case a deny-list must catch.
+
 | Option | Effect |
 |---|---|
 | Leave it | A typo is a CrashLoop. After phase 2, a directive can silently disable auth. |
@@ -431,13 +566,63 @@ a wrong `plugin_opt_*` key passed `--test-config` cleanly and only failed at run
 authentication once phase 2 exists. The webhook is a real answer but it drags a certificate
 requirement into a project that deliberately has none.
 
-**Answer:**
+**Answer:** *2026-10-05* — **allowlist of directives**, enforced at render time. A `spec.config`
+line whose directive is not on the list is refused: the `Mosquitto` goes `Ready=False` with a
+reason naming the line, the previously rendered configuration stays in force, nothing rolls.
+Chosen over a denylist because M15 shows a single overlooked directive (`listener` +
+`listener_allow_anonymous true`) undoes all authentication, and a bridge block (`connection` …
+`topic # out`) is a second, unrelated way to exfiltrate every topic — a denylist depends on nobody
+missing a third. Extending the list is non-breaking; a needed directive costs an operator release.
+The initial list (tuning only — limits, queues, keepalive, persistence intervals, log types) is
+fixed in the ADR and checked against `mosquitto.conf(5)` of the pinned version, never from memory.
+**It ships with phase 2, not phase 3**: the release that adds authentication must not ship with
+the M15 bypass open. [ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+is amended in place in that change. The webhook option was not taken (serving certificate, ADR
+0001); the `--test-config` initContainer of phase 1 stays, for typos in values.
+
+### Q23 (P0) — Does "a changed Secret applies itself" include the TLS Secret?
+
+*Added 2026-10-05 from requirement R3.*
+
+**What it blocks:** whether [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
+is amended, and whether the phase-2 helper (Q13) watches one Secret or two.
+
+Today the operator does not watch `spec.tls.secretName`; the kubelet refreshes the mounted files,
+but Mosquitto has already loaded them, so a renewed certificate reaches clients only when the pod
+restarts. A cert-manager renewal every 60 days therefore needs a manual roll — the same kind of
+manual step R3 is about.
+
+| Option | Mechanism | Cost |
+|---|---|---|
+| Leave it | ADR 0001 as written | Expired certificate on a broker that was never restarted. |
+| Roll on change | Operator reads the Secret's `resourceVersion`/content hash into a pod-template annotation | Operator needs `get;list;watch` on `secrets` — the grant Q12 weighs. Every renewal disconnects every client. |
+| Reload in place | The Q13 sidecar also watches the TLS mount and sends SIGHUP | No new RBAC, no disconnect. **Measured to work** (M12, 2026-10-05). Needs a cert/key match check before the signal: a mismatched pair makes every new handshake fail, with no fallback to the old certificate (M12). |
+
+*Updated 2026-10-05 with M12* ([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 2): Mosquitto 2.1
+re-reads `certfile`/`keyfile` on SIGHUP, existing TLS connections survive it, and a mismatched
+pair breaks new handshakes until a valid pair and a second SIGHUP arrive.
+
+**Recommendation:** reload in place, via the same sidecar Q13 introduced, with a cert/key match
+check before every signal. Amend ADR 0001 in place: the operator still never issues, renews or
+watches the TLS Secret; the rotation-only-on-restart consequence is replaced by in-pod reload.
+
+**Answer:** *2026-10-05* — **reload in place.** The Q13 sidecar also watches the TLS mount;
+before every SIGHUP it checks that `tls.crt` and `tls.key` form a valid pair and does not signal
+otherwise, so a half-edited Secret leaves the broker on its previous certificate instead of
+breaking every new handshake (M12). The sidecar is therefore present whenever `spec.tls` **or**
+users are configured. [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
+is amended in place in the same change as the code: the operator still never issues, renews or
+watches the TLS Secret; the "rotation reaches pods only on restart" consequence is replaced by
+in-pod reload. Not measured: that the kubelet swaps both keys atomically via `..data`, and the
+broker's behaviour on a mismatched pair at startup.
 
 ---
 
 # D. Upgrades and operation
 
 ### Q15 (P0) — What does "version update without interrupting operation" mean here?
+
+*Parked 2026-10-05 in [`HA_RESEARCH.md`](HA_RESEARCH.md) section 7 — not answered in this round.*
 
 **It has to be reworded before it can be built, and the rewording is the answer.**
 
@@ -481,9 +666,19 @@ version floor** — generate only what 2.1 accepts and 3.0 keeps, which is what
 toward. Then an image bump is a user decision and the generated file is version-safe by
 construction. Revisit if a 3.0 pin becomes real.
 
-**Answer:**
+**Answer:** *2026-10-05* — **`spec.image` stays free; supported is 2.1.x, documented.** No tag
+parsing, no version map. A 2.0 image fails in the phase-1 `--test-config` init container on the
+first 2.1-only directive, with file and line, instead of crash-looping (that 2.0 rejects
+`plugin_load` is expected from M7/Q16, not measured against a 2.0 image). Context checked
+2026-10-05: Docker Hub's newest line is 2.1 (`2.1.0` 2026-01-30, `2.1.1` 2026-02-05, `2.1.2`
+2026-09-18); the pin `2.1.2-alpine` has the same digest as `latest`, `alpine` and `2.1-alpine`
+(`sha256:38c0da4f2ef8…`); 2.0 (to `2.0.22`) and 1.6 are still rebuilt; upstream has no 3.0 tag and
+no `release/3.0` branch. 3.0 exists only as announced deprecations, so what it breaks cannot be
+checked yet — the Renovate cap `<3` (ADR 0007) stays the guard.
 
 ### Q17 (P1) — Are PodDisruptionBudget and NetworkPolicy in scope, and are they opt-in?
+
+*The PDB half is parked 2026-10-05 with HA; the NetworkPolicy half stays open.*
 
 Neither is shipped today. valkey has an opt-in PDB
 (its ADR 0004, in the `valkey-operator` repository) and a
@@ -503,7 +698,15 @@ exposure from different directions, and shipping auth without a way to bound rea
 the weaker half of the story in place. PDB opt-in, phase 4, once Q3 has a number to design it
 against.
 
-**Answer:**
+**Answer:** *2026-10-05, NetworkPolicy half* — **the operator ships no NetworkPolicy.** Weighed
+against an opt-in `spec.networkPolicy` (recommended, rejected) and a default-on policy (rejected:
+it would lock out clients in other namespaces while Flux reports green). Accepted risk, stated:
+the broker port is reachable on the pod IP from every pod in the cluster, so password guessing
+and connection load from any workload are bounded by nothing but authentication; enforcement
+would also have depended on the CNI. Mitigation without code: the README documents a
+NetworkPolicy users write themselves, selecting the stable selector labels
+(`app.kubernetes.io/instance=<name>`, `app.kubernetes.io/managed-by=mosquitto-operator`), and the
+security documentation records the exposure. The ClusterRole gains no `networkpolicies` rule.
 
 ---
 
@@ -524,7 +727,13 @@ user per broker, or `$SYS` access needs a carve-out.
 collide with a `MosquittoUser` (see Q19), with exactly one ACL: read on `$SYS/#`. Decide it in
 phase 2's ADR, build it in phase 6.
 
-**Answer:**
+**Answer:** *2026-10-05* — **a reserved, operator-rendered user `mko-exporter`** per broker, with
+exactly one ACL: `read $SYS/#`. Q8's `$` refusal applies to `MosquittoUser` objects, not to what
+the operator renders for itself; the `mko-` prefix (Q19) keeps the name unclaimable. Its password
+is generated by the operator and stored as a further key in `<name>-auth` (the operator's own
+credential, not one derived from a user Secret), mounted into the exporter sidecar. One connection
+per broker pod, consistent with `use_username_as_clientid` (Q27). Decided now, built in phase 6;
+ADR 0002's D4 is amended in place in that change.
 
 ### Q19 (P1) — What is the reserved namespace for operator-generated principals?
 
@@ -537,7 +746,151 @@ prefix, and rendering must refuse a CR that asks for it.**
 is a shape check and render is the authority, exactly the split
 [ADR 0009](../adr/0009-delete-only-through-owner-references.md) already draws for object writes.
 
-**Answer:**
+**Answer:** *2026-10-05* — **`mko-`, case-insensitive** (`MKO-`, `Mko-` are refused too). Matches
+the operator's existing `mko.gtrfc.com` prefix; no realistic migrated client name starts with it.
+`$` was rejected because how the `passwd` and `acl` parsers treat a leading `$` is unmeasured.
+Refused at render time from the first release (plan section 4.4). *Corrected the same day by
+Q24:* the username lives in the user's Secret, which CEL cannot see, so render time is the only
+place it is enforced.
+
+### Q24 (P0) — Where does the MQTT username come from, what may it contain, and who wins a collision?
+
+*Added 2026-10-05.* Three decisions, taken one at a time.
+
+**What it blocks:** the `MosquittoUser` spec, the renderer, and the migration of existing clients
+whose usernames are fixed in their own configuration.
+
+- **Source.** `metadata.name` only, an optional `spec.username` defaulting to `metadata.name`, or
+  a required `spec.username`. Existing names such as `Zigbee_2MQTT` are not valid Kubernetes
+  object names.
+- **Character set.** `passwd` is `user:hash` per line, so `:` and line breaks corrupt it; whether
+  the `acl` parser tolerates whitespace after `user` is unmeasured; `+`, `#`, `/` are dangerous
+  as soon as `pattern` lines with `%u` are rendered.
+- **Collision.** Two `MosquittoUser` objects on one broker claiming one username. Whichever rule
+  is chosen must not let a newly created object take over the credential of an existing one.
+
+**Answer, source:** *2026-10-05* — **username and password both come from the user's Secret.**
+The `MosquittoUser` names the Secret and the two keys; both keys are overridable in the CR and
+default to `username` and `password` — the keys of the built-in `kubernetes.io/basic-auth` Secret
+type, so a basic-auth Secret works without any key configuration and one Secret serves the broker
+and the client (Zigbee2MQTT, Home Assistant) alike. Shape, names illustrative until the API ADR:
+
+```yaml
+spec:
+  brokerRef:
+    name: broker
+  credentialsSecret:
+    name: z2m-mqtt
+    usernameKey: username   # default
+    passwordKey: password   # default
+```
+
+Consequences that follow from it:
+
+- The effective username is invisible in the CR, so the operator writes it to `status.username`
+  (a username is not a credential).
+- **CEL cannot see a value inside a Secret.** The reserved prefix (Q19) and the character set are
+  therefore enforced **at render time only** for the username, and a violation is `Ready=False`
+  with a reason — never a silently dropped user. Q19's "refused in CEL validation" applies to
+  nothing the user types into the CR for the username.
+- Editing the Secret's username key changes the login. That is now an explicit edit of the
+  credential, not a side effect of renaming an object.
+
+**Answer, character set:** *2026-10-05* — **allowlist** `^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$`,
+checked at render time (the value lives in a Secret). Chosen over a denylist because an
+unforeseen character is refused rather than passed into the files, and because loosening an
+allowlist later is non-breaking while tightening a denylist is not. The length bound is arbitrary
+and deliberately generous. Entry measurement for phase 2: `passwd` and `acl` parse usernames
+containing `@` and `.` correctly on the pinned image.
+
+**Answer, collision:** *2026-10-05* — **the oldest wins**: among the `MosquittoUser` objects of one
+broker that resolve to the same username, the one with the earliest `creationTimestamp` (ties by
+object name) is rendered; every other one is `Ready=False` with a reason naming the holder. Derived
+from the objects alone, deterministic, no status used as memory. A new object can therefore never
+take over a running client's identity. Accepted edge: an *older* user whose Secret is edited to a
+younger user's name takes that name over — not a new exposure while users are same-namespace,
+because whoever can edit that Secret can already rewrite the younger user's password directly.
+Trigger to move to "the current holder keeps it": cross-namespace users, where the right to create
+a user and the right to write another user's Secret stop having the same owner.
+
+
+
+### Q25 (P0) — What does an ACL entry on a `MosquittoUser` look like?
+
+*Added 2026-10-05 from requirement R1.* Blocks the `MosquittoUser` schema. Constraints already
+fixed: no entry may start with `$` (Q8); the shape must render to `acl-file` now and to dynsec
+later without a user-visible change (plan section 4.4); `acl-file` grants `read` (subscribe and
+receive), `write` (publish) and `readwrite`, and evaluates per message (M14).
+
+**Answer:** *2026-10-05* — **a list of topic + access**, mirroring `acl-file` one to one:
+
+```yaml
+acls:
+  - topic: zigbee2mqtt/#
+    access: readwrite      # read | write | readwrite
+  - topic: homeassistant/#
+    access: write
+```
+
+No `pattern` entries (`%u`/`%c`) for now — not needed for the migration, additive later, and dynsec
+has no placeholders, so they would have to be expanded per user at render time. Rejected:
+separate `publish`/`subscribe` lists, which force merging into `readwrite` at render time and make
+a later move to this shape breaking. Dynsec mapping for section 4.4: `read` → `subscribePattern` +
+`publishClientReceive`, `write` → `publishClientSend`. Not measured, and stated too strongly when
+this was decided: whether `acl-file` on 2.1 supports a `deny` access type and in which order it
+applies — the "no priorities" statement rests on the catalogue, not on a measurement.
+
+### Q26 (P0) — When does a broker require authentication?
+
+*Added 2026-10-05.* Today every broker is anonymous (ADR 0008); phase 2 renders
+`listener_allow_anonymous false`, and the question is when.
+
+**Answer:** *2026-10-05, final after Q27* — **never anonymous.** A broker the operator renders
+always requires authentication; there is no `allowAnonymous` field, and the Q14 allowlist keeps
+`spec.config` from reopening it. [ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+is amended in place in the phase-2 change. An opt-in exception remains possible later as an
+additive field, at the price recorded in Q27 option B. Not a `BREAKING CHANGE` commit (project
+stays on 0.x).
+
+~~*Provisional:* **closed by default, anonymous only as an explicit
+exception on the `Mosquitto`.** Rejected: implicit (anonymous until the first user exists — a
+deleted last user would silently reopen the broker), never-anonymous, and anonymous-by-default.
+Researched on request before fixing the shape: M16 and M17
+([`INITITAL_PLAN.md`](INITITAL_PLAN.md) section 2). What the exception does when users exist:
+anonymous clients connect but get nothing unless an anonymous ACL grants it (the `acl-file`
+section before the first `user` line, which users do not inherit); wrong credentials are refused,
+never downgraded. **The catch:** anonymous access cannot coexist with `use_username_as_clientid`,
+the only measured protection against client-ID session takeover (Q27). Provisional until Q27 is
+answered.~~
+
+### Q27 (P0) — Does every listener protect against client-ID session takeover?
+
+*Added 2026-10-05 from M17.* Security question. Blocks the generated listener block and Q26's
+final shape.
+
+**Answer:** *2026-10-05* — **`use_username_as_clientid true` on every generated listener,
+always.** Closes cross-user session takeover (M17). Accepted costs: client IDs sent by clients are
+ignored and sessions are keyed by username; one connection per username (a second connection of
+the same user takes the first over) — consistent with "one user per client" from Q5/Q24; and
+anonymous access is impossible, which settles Q26 as "never anonymous". Not measured: whether ACLs
+gate a taken-over delivery, and behaviour across several listeners.
+
+### Q28 (P1) — Which hash, and how many iterations, does the operator render?
+
+*Added 2026-10-05 from M18.* The operator renders `passwd` in Go (Q12), so it chooses the hash
+parameters. Only `$7$` (PBKDF2-SHA512) is usable on the pinned image (M18).
+
+**Answer:** *2026-10-05* — **`$7$` (PBKDF2-SHA512) at 1000 iterations, fixed** — what
+`mosquitto_passwd` of the pinned image produces (M18), and a format every 2.x build verifies,
+whatever `spec.image` names. No CR option: a `normal | strong` switch could only mean more
+iterations (argon2id is not available in the official image), whose protection applies only to a
+hash leaking without its plaintext — practically only from a compromised broker pod — while every
+failed login against a known username would cost the broker the full hashing time from any pod in
+the cluster (no NetworkPolicy, Q17). Trigger to re-decide: hash and plaintext no longer living in
+the same namespace. Entry measurement for phase 2: a `$7$` line rendered in Go is accepted by the
+broker, byte format identical to `mosquitto_passwd` (`$7$1000$<b64 64-byte salt>$<b64 64-byte
+hash>`). A measurement of iteration honouring and per-login cost was started and stopped by the
+maintainer; it is not needed for this answer.
 
 ---
 
@@ -556,7 +909,11 @@ a line in the README stating that `v1` is unstable until `v1.0.0` of the operato
 introduce `v1alpha1` — a conversion webhook needs a serving certificate, and that is the
 dependency this project does not take (Q14, ADR 0001).
 
-**Answer:**
+**Answer:** *2026-10-05* — **everything stays in `v1`**, including the new `MosquittoUser`; the
+README states that `v1` is unstable until operator release 1.0.0. No `v1alpha1` and no conversion
+webhook. Trigger to re-decide toward a separate `v1alpha1` for new kinds: the first user outside
+the maintainer. No commit of this work carries `BREAKING CHANGE` or `!`, even where it breaks —
+the project stays on 0.x.
 
 ### Q21 (P2) — Do the new kinds ship in the same chart and the same image?
 
@@ -569,7 +926,15 @@ hand-written.
 catches the hand-written half drifting — it already does exactly this and has been observed
 failing on purpose ([ADR 0010](../adr/0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md)).
 
-**Answer:**
+**Answer:** *2026-10-05* — **same image**, and the reload sidecar runs from it as a second entry
+point of the operator binary (asked as "which image does the sidecar use"). Rejected: a shell
+script in the broker image — it has no `openssl` (checked 2026-10-05: `inotifyd`, `sha256sum`,
+`cmp`, `pidof`, `kill` present, `openssl` missing), so the M12 cert/key check would be impossible;
+and a separate reloader image — a second release pipeline. Accepted cost: the sidecar's image tag
+is in the pod template, so **every operator release rolls every broker** (seconds of MQTT outage;
+sessions on a PVC survive). The operator learns its own image from install-time configuration
+set on both install paths. *Same chart* for the new CRD follows the recommendation above and was
+not asked separately.
 
 ---
 
@@ -578,12 +943,7 @@ failing on purpose ([ADR 0010](../adr/0010-a-check-is-not-a-check-until-it-has-f
 Answering out of order wastes work. The chain:
 
 ```
-Q1 (HA shape)
- ├─> Q2 (replicas semantics) ─> Q20 (API version story)
- ├─> Q3 (failover bound) ──┬─> Q4 (persistence backend)
- │                         └─> Q17 (PDB)
- ├─> Q15 (upgrade promise)
- └─> Q22 (flip-pair fencing)   <- security gate, phase 5 only
+Parked with HA (HA_RESEARCH.md section 7): Q1, Q2, Q3, Q4, Q15, Q22, Q17 (PDB half)
 
 Q5 (separate CRs)
  ├─> Q6 (which kinds) ─> Q19 (reserved names) ─> Q18 (exporter principal)
@@ -591,10 +951,13 @@ Q5 (separate CRs)
  └─> Q11 (mechanism)  <- also gated by Q10 (revocation latency)
       ├─> Q12 (password origin)   <- security gate
       ├─> Q13 (material delivery) <- constrained by measurement, not preference
+      │    └─> Q23 (TLS Secret change) <- may amend ADR 0001
       ├─> Q9  (deterministic render)
       └─> Q14 (spec.config validation)
 ```
 
-**The four that unblock the most: Q1, Q5, Q11, Q12.** Q8 and Q12 are the two where the wrong
-answer is a security property we would have to take back later, so they should not be answered
-quickly.
+~~**The four that unblock the most** (re-cut 2026-10-05, HA parked): **Q5, Q11, Q12, Q13.**~~
+*2026-10-05:* all answered, together with the questions added during the round (Q23–Q28). The
+security-relevant answers that accepted a stated risk rather than the recommendation: Q12's grant
+default `all` (cluster-wide read and write on Secrets) and Q17 (no NetworkPolicy). Both are to be
+documented as such in the security documentation in the phase-2 change.
