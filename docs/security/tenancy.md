@@ -110,9 +110,10 @@ now that every broker requires a login:
 
 What a cluster operator can do: write the policy — ingress to the broker pods (selector
 `app.kubernetes.io/instance=<name>`, `app.kubernetes.io/managed-by=mosquitto-operator`) from the
-intended clients only, an example of which is in
-[docs/operations/users.md](../operations/users.md#who-can-reach-the-broker) — and serve MQTTS. It
-depends on the CNI enforcing NetworkPolicy; none was tested here.
+intended clients only, an example of which is in the
+[README fast start](../../README.md#-tldr-fast-start), step 4 — and serve MQTTS. It depends on the
+CNI enforcing NetworkPolicy; none was tested here (the Kind run of that example applied the policy,
+but its clients ran inside the broker pod, which the policy does not restrict).
 
 <a id="h-11"></a>
 ### H-11 — `helm uninstall` deletes the CRD, and with it every broker in the cluster

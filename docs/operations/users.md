@@ -123,25 +123,6 @@ The operator ships no NetworkPolicy
 ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
 D16): every pod of the cluster can reach the broker's pod IP and try passwords, and without
 `spec.tls` it can read what crosses the network there. A policy of your own narrows that; it
-depends on your CNI enforcing NetworkPolicy, which this repository has not tested:
-
-```yaml
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: broker-clients
-  namespace: home                                  # example
-spec:
-  podSelector:
-    matchLabels:
-      app.kubernetes.io/instance: broker           # the broker's name
-      app.kubernetes.io/managed-by: mosquitto-operator
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchLabels:
-              mqtt.example.com/client: "true"     # example — label your clients
-      ports:
-        - port: 1883                               # 8883 with spec.tls
-```
+depends on your CNI enforcing NetworkPolicy, which this repository has not tested. The
+[README fast start](../../README.md#-tldr-fast-start), step 4, has one against the selector labels
+`app.kubernetes.io/instance=<name>` and `app.kubernetes.io/managed-by=mosquitto-operator`.

@@ -151,9 +151,9 @@ this operator running anywhere but CI.
 
 **Effort:** S, plus the owner's time.
 
-- README: a Flux example — a `Mosquitto`, a `MosquittoUser` and a SOPS-encrypted basic-auth Secret
-  per client, the Flux `Kustomization` with health checks on both kinds — and a user-written
-  NetworkPolicy against the selector labels (ADR 0008 D16).
+- *(Built 2026-10-05: the README Flux example, step 4 of the fast start, run on Kind with Flux
+  `v2.8.6` from an `OCIRepository` — [flux.md](../operations/flux.md). Learned there: plain
+  `healthChecks` pass before `Ready`, so the example uses `healthCheckExprs` with `wait: true`.)*
 - The owner migrates Home Assistant and Zigbee2MQTT onto the new broker through Flux.
 - **Done when** both clients run against it, a password rotated in Git reaches both without a
   manual step, and what was run and observed is written into

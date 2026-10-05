@@ -178,7 +178,7 @@ them through the chart's `fullname` template. The **names** differ between the t
 
 | Document | What it covers |
 |---|---|
-| [docs/operations/](docs/operations/README.md) | Installing through Helm or kustomize, upgrading and uninstalling, and what happens at runtime — what rolls the brokers, what the status means |
+| [docs/operations/](docs/operations/README.md) | Installing through Helm or kustomize, upgrading and uninstalling, users and their credentials, running brokers from Git with Flux, and what happens at runtime — what rolls the brokers, what the status means |
 | [docs/security/](docs/security/README.md) | The security architecture, one page per perspective — trust boundaries, credentials, tenancy, the privilege footprint, validation, rotation — each ending with what it does **not** cover |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability |
 | [docs/developer/](docs/developer/README.md) | Contributing: repository layout, per-package responsibilities, the reconcile pipeline, the test tiers, the build/test/lint matrix, CI and release, extension checklists, and what the pinned broker image measurably does |
@@ -189,9 +189,9 @@ them through the chart's `fullname` template. The **names** differ between the t
 | [cert-manager](https://cert-manager.io/docs/) | Optional, and never installed by this project — one of the two ways to fill the Secret `spec.tls.secretName` names |
 
 Read [docs/security/](docs/security/README.md) before granting anyone
-`create mosquittoes`: the generated broker accepts anonymous clients, the operator holds a
-cluster-wide grant, and whoever may write a `Mosquitto` in a namespace can read every Secret of
-that namespace unless the operator runs with `secretSecurity: true`
+`create mosquittoes`: the operator holds a cluster-wide Secret grant by default, and whoever may
+write a `Mosquitto` in a namespace can read every Secret of that namespace unless the operator
+runs with `secretSecurity: true`
 ([H-15](docs/security/trust-boundaries.md#h-15)).
 
 ## 🚀 TL;DR fast start
@@ -305,6 +305,161 @@ minute after the change — the time the kubelet takes to refresh a mounted Secr
 ([users.md](docs/operations/users.md)). From another pod in the cluster, the address is
 `broker.<namespace>.svc.cluster.local:1883`. The operator creates no LoadBalancer, NodePort or
 Ingress, and no NetworkPolicy: every pod of the cluster can reach the broker and try a password.
+
+**4. Run it from Git with Flux.** Commit the broker, one `MosquittoUser` and one SOPS-encrypted
+`basic-auth` Secret per client, and a NetworkPolicy, and let a Flux `Kustomization` apply them.
+**Use `healthCheckExprs`:** Flux's generic health check does not read the `Ready` condition of
+these kinds and passes before the broker is ready (observed: 13 ms after apply, with the broker
+still `Pending`). The CEL expressions below make Flux wait for `Ready`, after each change too.
+Run on Kind with Flux `v2.8.6`, from an `OCIRepository` instead of a `GitRepository`; what was
+observed: [flux.md](docs/operations/flux.md).
+
+<details>
+<summary>The files, the encryption and the Flux <code>Kustomization</code></summary>
+
+```text
+apps/mqtt/                           # example layout
+├── kustomization.yaml
+├── broker.yaml
+├── users.yaml
+├── credentials.sops.yaml            # encrypted before it is committed
+└── networkpolicy.yaml
+```
+
+```yaml
+# apps/mqtt/kustomization.yaml
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: home                       # example — the namespace must exist
+resources:
+  - broker.yaml
+  - users.yaml
+  - credentials.sops.yaml
+  - networkpolicy.yaml
+---
+# apps/mqtt/broker.yaml
+apiVersion: mko.gtrfc.com/v1
+kind: Mosquitto
+metadata:
+  name: broker
+spec:
+  replicas: 1
+  storage:
+    size: 1Gi                         # example — retained messages and sessions survive a restart
+---
+# apps/mqtt/users.yaml
+apiVersion: mko.gtrfc.com/v1
+kind: MosquittoUser
+metadata:
+  name: homeassistant
+spec:
+  brokerRef:
+    name: broker
+  credentialsSecret:
+    name: homeassistant-mqtt
+  acls:
+    - topic: homeassistant/#
+      access: readwrite
+    - topic: zigbee2mqtt/#
+      access: readwrite
+---
+apiVersion: mko.gtrfc.com/v1
+kind: MosquittoUser
+metadata:
+  name: zigbee2mqtt
+spec:
+  brokerRef:
+    name: broker
+  credentialsSecret:
+    name: zigbee2mqtt-mqtt
+  acls:
+    - topic: zigbee2mqtt/#
+      access: readwrite
+    - topic: homeassistant/#          # discovery messages and homeassistant/status
+      access: readwrite
+---
+# apps/mqtt/credentials.sops.yaml, before encryption
+apiVersion: v1
+kind: Secret
+metadata:
+  name: homeassistant-mqtt
+type: kubernetes.io/basic-auth
+stringData:
+  username: homeassistant
+  password: change-me                 # example
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: zigbee2mqtt-mqtt
+type: kubernetes.io/basic-auth
+stringData:
+  username: zigbee2mqtt
+  password: change-me-too             # example
+---
+# apps/mqtt/networkpolicy.yaml — yours to write; the operator ships none (ADR 0008 D16)
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: broker-clients
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/instance: broker              # the broker's name
+      app.kubernetes.io/managed-by: mosquitto-operator
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              mqtt.example.com/client: "true"         # example — label your client pods
+      ports:
+        - port: 1883                                  # 8883 with spec.tls
+```
+
+Encrypt the values only, so the Secrets' names stay readable in Git, and edit them later with
+`sops apps/mqtt/credentials.sops.yaml`:
+
+```bash
+sops --encrypt --age <your-age-recipient> --encrypted-regex '^(data|stringData)$' \
+  --in-place apps/mqtt/credentials.sops.yaml
+```
+
+```yaml
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: mqtt
+  namespace: flux-system
+spec:
+  interval: 10m
+  sourceRef:
+    kind: GitRepository
+    name: flux-system
+  path: ./apps/mqtt
+  prune: true                         # a user deleted in Git is deleted in the cluster
+  decryption:
+    provider: sops
+    secretRef:
+      name: sops-age                  # holds age.agekey
+  # dependsOn:                        # the Kustomization that installs the operator and its CRDs
+  #   - name: mosquitto-operator
+  wait: true                          # every applied object is health-checked
+  timeout: 3m
+  healthCheckExprs:
+    - apiVersion: mko.gtrfc.com/v1
+      kind: Mosquitto
+      current: status.observedGeneration == metadata.generation && status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+    - apiVersion: mko.gtrfc.com/v1
+      kind: MosquittoUser
+      current: status.observedGeneration == metadata.generation && status.conditions.exists(c, c.type == 'Ready' && c.status == 'True')
+```
+
+The client applications can read the same Secrets — one credential, one place. A password changed
+in the encrypted file reaches the broker about a minute after Flux applied it; a client that read
+it into an environment variable needs a restart to follow.
+
+</details>
 
 **Upgrade, rollback and uninstall:** [installation.md](docs/operations/installation.md#upgrade).
 **Upgrading from `0.1.x` makes every broker require a login**: anonymous clients are refused from
@@ -622,8 +777,8 @@ its client ID — the cost is one connection per username (D14).
 LoadBalancer or Ingress, and no NetworkPolicy: every pod of the cluster can reach the broker's pod
 IP, read what it sends there and try passwords against it, bounded by nothing but the login (D16).
 A NetworkPolicy of your own against the selector labels `app.kubernetes.io/instance=<name>` and
-`app.kubernetes.io/managed-by=mosquitto-operator` narrows who can connect;
-[docs/operations/users.md](docs/operations/users.md#who-can-reach-the-broker) has one.
+`app.kubernetes.io/managed-by=mosquitto-operator` narrows who can connect; the
+[fast start](#-tldr-fast-start), step 4, has one.
 
 ### Helm chart values
 
