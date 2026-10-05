@@ -91,7 +91,7 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0006](0006-both-install-paths-grant-the-same-authority.md) | Both install paths grant the same authority, and a test compares what they render | Partly built — D1–D8 implemented; D9 (users, `secrets` modes) not built |
-| [0009](0009-delete-only-through-owner-references.md) | Delete only through owner references, and never patch | Implemented |
+| [0009](0009-delete-only-through-owner-references.md) | Delete only through owner references, and never patch — and an update keeps foreign labels | Partly built — D1–D8 implemented; D9 not built |
 
 ### Observability
 

@@ -161,8 +161,9 @@ them through the chart's `fullname` template. The **names** differ between the t
 | [cert-manager](https://cert-manager.io/docs/) | Optional, and never installed by this project — one of the two ways to fill the Secret `spec.tls.secretName` names |
 
 Read [docs/security/](docs/security/README.md) before granting anyone
-`create mosquittoes`: the generated broker accepts anonymous clients, and the operator holds a
-cluster-wide grant.
+`create mosquittoes`: the generated broker accepts anonymous clients, the operator holds a
+cluster-wide grant, and whoever may write a `Mosquitto` in a namespace can read every Secret of
+that namespace ([H-15](docs/security/trust-boundaries.md#h-15)).
 
 ## 🚀 TL;DR fast start
 

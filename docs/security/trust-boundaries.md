@@ -103,3 +103,46 @@ What a cluster operator can do meanwhile: treat `create` and `update` on
 `mosquittoes.mko.gtrfc.com` as authority over a broker's code and configuration, grant it
 accordingly, and review `spec.image` and `spec.config` wherever changes reach the cluster — a
 GitOps review, or an admission policy of the cluster's own; none ships here.
+
+<a id="h-15"></a>
+### H-15 — Whoever may write a `Mosquitto` can read every Secret of its namespace
+
+Live today, in every namespace where a principal holds `create` or `update` on
+`mosquittoes.mko.gtrfc.com`, and it holds even when that principal may not `get` Secrets or
+`create` pods there. `spec.tls.secretName` may name **any** Secret of the resource's namespace:
+nothing checks its type or its keys, and `buildPodSpec` mounts it whole, with no `Items`
+projection, at `/mosquitto/tls`
+([`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)). `spec.image` is any
+image (H-2), and the broker container runs whatever that image puts at `/usr/sbin/mosquitto`. The
+StatefulSet is written by the operator with its own cluster-wide grant, so the CR author borrows
+the operator's authority to run code of their choice with a Secret of their choice mounted. A
+legacy ServiceAccount token Secret in the namespace turns the read into acting as that
+ServiceAccount. Derived from the code; not run on a cluster.
+
+The principal and the adversary: a subject granted `mosquittoes` more narrowly than Secrets —
+for example a team allowed to manage its broker but not to read the namespace's credentials.
+Where the same subjects already read Secrets in the namespace, nothing new is exposed.
+
+What a cluster operator can do meanwhile: treat `create` and `update` on
+`mosquittoes.mko.gtrfc.com` in a namespace as equivalent to reading every Secret of that
+namespace, and grant it only to subjects who may do that already; keep credentials a broker owner
+must not see in another namespace; and remove legacy ServiceAccount token Secrets the namespace
+does not need.
+
+<a id="h-16"></a>
+### H-16 — The `Failed` condition tells a `Mosquitto` writer which objects exist
+
+Live today, accepted by the owner. When a managed name is taken by an object the `Mosquitto` does
+not control, `ensureOwned` refuses it with `<Kind> <namespace>/<name> exists and is not owned by
+this Mosquitto`, and the reconcile copies that text into the `Ready` condition
+([`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)).
+The operator reads with its cluster-wide grant, so a subject who may create a `Mosquitto` and read
+its status, but may not list ConfigMaps, Services or StatefulSets in the namespace, learns whether
+an object of those kinds exists under a name derived from one they choose (`<name>`,
+`<name>-headless`, `<name>-config`). Names only, never content. The message stays precise because
+it is the administrator's one diagnostic for the refusal
+([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D5).
+
+What a cluster operator can do: nothing in the operator closes it; where it matters, grant
+`mosquittoes` only to subjects who may list those kinds in the namespace, which in most clusters
+they already may.

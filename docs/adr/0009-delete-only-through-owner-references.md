@@ -2,7 +2,15 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01.
+Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** D9 — an update keeps the
+labels other writers added, and the pod-template annotations. **And (decided, matches the tree):**
+D5's precise refusal message stays, with the existence oracle it gives a `Mosquitto` writer
+accepted by the owner and published on
+[docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-16). Today every update assigns the desired label map wholesale
+(`current.Labels = desired.Labels` in `reconcileConfigMap`, `reconcileService` and
+`reconcileStatefulSet`, and `current.Spec.Template = desired.Spec.Template`), which drops foreign
+labels whenever a write happens for another reason, while `MapEntriesMissing` documents the
+opposite intent.
 
 **Verified by reading:**
 [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)
@@ -147,6 +155,16 @@ Adoption is the alternative that was rejected, and the Services are the sharpest
 fields would make the API server reject the write — nothing at the API level stops the operator
 from repointing somebody else's Service at these pods. The ownership check is that stop.
 
+*(Amended 2026-10-05.)* **The message stays precise** — kind, namespace and name — although it is
+an existence oracle: the operator reads with its cluster-wide grant, so a subject who may write a
+`Mosquitto` and read its status, but may not list ConfigMaps, Services or StatefulSets in the
+namespace, learns whether an object exists under a name of their choosing. Accepted by the owner,
+because the message is the one diagnostic an administrator gets for the refusal, the oracle
+reveals names and nothing of their content, and a subject who may write `Mosquitto` objects can
+usually list those kinds anyway. A unit test pins the message's shape, so a later edit changes it
+deliberately. Rejected: a blunted message without namespace and name, which closes the oracle and
+costs every administrator a `kubectl get` to find the object.
+
 **D6 — A `Mosquitto` with a non-zero `DeletionTimestamp` gets no writes at all.** The check sits
 immediately after the initial `Get`, before any object is built:
 
@@ -176,6 +194,26 @@ clusters.
 **D8 — The `Mosquitto` CR itself is read-only to the reconciler.** Its rule is
 `get;list;watch` — no `create`, no `update`, no `delete`. The only thing the operator writes on
 the resource is the status subresource, which has its own rule carrying `update` alone.
+
+**D9 — An update keeps the labels other writers added, and the annotations they added to the pod
+template.** *(Added 2026-10-05; decided, not built.)*
+The operator's own keys are merged into the labels already on the object — its value wins for
+every key it sets, the selector labels and the version label included — and every other key is
+left as it is, on the managed objects' labels and on the StatefulSet's pod-template labels alike.
+This makes the write match what `MapEntriesMissing` already assumes when it decides whether to
+write: a label from Flux, a policy engine or `kubectl` is stable instead of disappearing at the
+next unrelated update. Accepted cost: a label the operator once set and later stops setting is
+never removed by merging; a change that renames one of its own keys removes the old one
+explicitly. Chosen over making the code match the wholesale replacement, which would revert a
+foreign label only at random — on an update made for another reason — and, done consistently on
+every pass, would fight every other tool that labels objects.
+
+The same merge applies to the StatefulSet's pod-template **annotations**: the operator's
+`mko.gtrfc.com/pod-spec-hash` and `mko.gtrfc.com/config-hash` always win, every other key is
+kept. Today the template write removes `kubectl.kubernetes.io/restartedAt`, so a write caused only
+by `spec.replicas` or by the object labels after a `kubectl rollout restart` rolls every pod a
+second time (derived from `reconcileStatefulSet`, not observed), and annotations other tools set
+on the pod template disappear at the next template write.
 
 ## Consequences
 

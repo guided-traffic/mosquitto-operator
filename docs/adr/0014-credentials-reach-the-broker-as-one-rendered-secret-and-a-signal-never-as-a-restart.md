@@ -50,7 +50,8 @@ plus, later, keys the operator needs for itself
 ([ADR 0002](0002-the-metrics-exporter-is-written-here.md) D4). There is no Secret per user
 password. It is written only after `ensureOwned`, owned through a controller reference, and
 collected with its `Mosquitto` ([ADR 0009](0009-delete-only-through-owner-references.md)). Because
-it lies in the same namespace as the plaintext Secrets it is rendered from, whoever can read it
+it lies in the same namespace as the plaintext Secrets it is rendered from — no reference crosses a
+namespace ([ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D1) — whoever can read it
 could already read the plaintext; the hashes expose nothing that was not already reachable. Because
 it holds the full state, a broker pod that restarts while the operator is down comes up with every
 user.
@@ -124,6 +125,25 @@ in Go and never through `mosquitto_ctrl -f` (M5), and three measurements — the
 its hash fields, whether `kickClient` ends a live session, whether `setClientPassword` drops
 existing connections.
 
+**D10 — Which Secret a `Mosquitto` or a `MosquittoUser` may name is an install-time switch,
+`secretSecurity`, default `false`.** *(Added 2026-10-05; decided, not built.)* With `true`, the
+operator mounts a TLS Secret and reads a `credentialsSecret` only when the Secret carries an opt-in
+label under `mko.gtrfc.com/` (the key is fixed when built); whoever can label a Secret is whoever
+can write it, so the label is the Secret owner's consent. A resource naming an unlabelled Secret
+reports `Ready=False` with a reason naming the label, and the operator's Secret cache is restricted
+to labelled Secrets. With `false`, any Secret of the resource's namespace may be named — the
+behaviour of the tree today — and the README and
+[docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-15) state the trust rule:
+`create` or `update` on `mosquittoes` (and on `mosquittousers`) in a namespace is equivalent to
+reading every Secret of that namespace, because the author also chooses the image that runs with
+the Secret mounted. It is a chart value and an operator flag, so both install paths offer it and
+default to `false`. **The default was chosen by the owner against the recommendation** (`true`),
+after the exposure was stated: a cluster that grants `mosquittoes` more narrowly than Secrets is
+exposed until its administrator turns the switch on. The finding was published on 2026-10-05 by the
+owner's decision, before the switch exists. With `true` in `namespaces` grant mode (D7), a TLS
+Secret in a namespace the grant does not cover cannot be checked, and the broker reports
+`Ready=False`.
+
 ## Consequences
 
 - The largest change to the privilege footprint since `v0.1.0`: from no `secrets` rule to
@@ -157,10 +177,15 @@ existing connections.
   second release pipeline. Lost.
 - **`namespaces`, or no Secret access, as the default.** Recommended and rejected by the owner, who
   runs `all` and accepted the risk for third-party installers with the documentation of D7.
+- **For D10 — only a type check** (`kubernetes.io/tls`, `kubernetes.io/basic-auth`). Another
+  service's Secret of the right type still passes. Lost.
+- **For D10 — `true` as the default.** Recommended; the owner chose `false`.
 
 ## Residual risks
 
 - The default `all` grant, accepted above.
+- D10's default `false`, accepted above: with it, writing a `Mosquitto` or a `MosquittoUser` is
+  reading the namespace's Secrets.
 - The entry measurements in Status. Until they run, D3's format, D4's signal and D8's latency are
   claims from documentation and from the rig, not from a cluster.
 - No kick for a client whose credential is still valid; D9's trigger.

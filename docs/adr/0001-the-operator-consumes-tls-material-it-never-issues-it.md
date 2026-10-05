@@ -75,7 +75,8 @@ notice when it changes.
 ## Decision
 
 **D1 — `spec.tls.secretName` is the only path TLS material takes into a broker, and it names an
-object this operator did not create.**
+object this operator did not create.** *(Amended 2026-10-05: which Secret of the namespace it may
+name is [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10's switch; by default any.)*
 `MosquittoTLS` has exactly one field, `SecretName`, with
 `+kubebuilder:validation:MinLength=1`. The rendered CRD spec has seven properties —
 `antiAffinity`, `config`, `image`, `replicas`, `resources`, `storage`, `tls` — and none of them
@@ -124,7 +125,9 @@ knowing that key exists. The generated configuration references only `TLSCertKey
 
 **D6 — The operator does not watch the referenced Secret, and holds no permission to read one.**
 *(Amended 2026-10-05: the first half stays; the second holds for the tree today and ends when
-[ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7's `secrets` grant is built. The operator still never reads the TLS Secret.)*
+[ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7's `secrets` grant is built. The operator still never reads the TLS Secret's
+content; with [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10's `secretSecurity: true` it reads the Secret's labels, to refuse one
+that does not carry the opt-in label.)*
 `SetupWithManager` registers `For(&mkov1.Mosquitto{})` plus `Owns` on `appsv1.StatefulSet`,
 `corev1.ConfigMap` and `corev1.Service`. There is no `Owns(&corev1.Secret{})` and no `Watches`
 call at all. The `+kubebuilder:rbac` markers grant `configmaps`, `services`, `statefulsets`,

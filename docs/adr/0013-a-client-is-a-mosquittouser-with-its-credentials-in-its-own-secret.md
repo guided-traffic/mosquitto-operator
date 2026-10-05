@@ -24,11 +24,13 @@ cannot rename it to fit Kubernetes naming rules.
 
 ## Decision
 
-**D1 — A client is a namespaced `MosquittoUser` that names its broker, in the same namespace.**
-`spec.brokerRef.name` names a `Mosquitto`; the reference points from the user to the broker, so
-adding a client never writes the broker object. A `brokerRef` into another namespace is refused at
-render time with `Ready=False`, not only in validation. A broker-side acceptance policy for other
-namespaces is a later, additive opt-in. The kind lives in `mko.gtrfc.com/v1` (D9).
+**D1 — A client is a namespaced `MosquittoUser` that names its broker, and everything it names
+lives in its own namespace.** `spec.brokerRef.name` names a `Mosquitto`; the reference points from
+the user to the broker, so adding a client never writes the broker object. **No reference in this
+API carries a namespace field** — not `brokerRef`, not `credentialsSecret` — so a user, its broker,
+its Secret and its ACLs are always in one namespace, and a reference across namespaces cannot be
+written, rather than being written and refused. The operator acts cluster-wide; each `Mosquitto`
+and each `MosquittoUser` acts only inside its namespace. The kind lives in `mko.gtrfc.com/v1` (D9).
 
 **D2 — The username and the password come from the user's own Secret, under configurable keys.**
 
@@ -46,7 +48,9 @@ The defaults are the keys of the built-in `kubernetes.io/basic-auth` Secret type
 Secret works without key configuration and one Secret serves the broker and the client. Field
 names are as above; the exact Go types are fixed when the kind is built. Because the effective
 username is invisible in the CR, the operator writes it to `status.username` — a username is not a
-credential. Editing the username key changes the login; renaming the object does not.
+credential. Editing the username key changes the login; renaming the object does not. Which Secret
+of the namespace may be named is the install-time switch of [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10: by default any, with
+`secretSecurity: true` only one that carries the opt-in label.
 
 **D3 — An ACL entry is a topic and an access mode, mirroring `acl-file`.**
 
@@ -85,8 +89,8 @@ reason.
 other one is `Ready=False` with a reason naming the holder. A new object can therefore never take
 over a running client's identity. The rule is derived from the objects alone and uses no status as
 memory. Accepted edge: an older user whose Secret is edited to a younger user's name takes that
-name over — not a new exposure while users are same-namespace, because whoever can edit that
-Secret can already rewrite the younger user's password directly. One username is one connection
+name over — not a new exposure, because user and Secret share one namespace (D1) and whoever can
+edit that Secret can already rewrite the younger user's password directly. One username is one connection
 ([ADR 0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) D14).
 
 **D7 — No roles yet.** A `MosquittoRole` — a named ACL set referenced by many users, mirroring the
@@ -105,8 +109,8 @@ says so. No `v1alpha1` and no conversion webhook — a webhook needs a serving c
 No commit of this work carries `BREAKING CHANGE` or `!`: the project stays on 0.x.
 
 **D10 — A user reports its own state.** Each `MosquittoUser` carries `observedGeneration` and one
-`Ready` condition whose reason says what is wrong — missing Secret or key, broker not found or in
-another namespace, refused username, collision, refused topic. Reason strings are fixed when the
+`Ready` condition whose reason says what is wrong — missing Secret or key, broker not found,
+refused username, collision, refused topic. Reason strings are fixed when the
 kind is built. A user's failure never changes the broker's readiness.
 
 ## Consequences
@@ -132,8 +136,8 @@ kind is built. A user's failure never changes the broker's readiness.
   is breaking. Lost.
 - **Collision: all claimants refused, or the newest wins.** The first lets anyone break a running
   client; the second lets anyone take over its identity. "The current holder keeps it" closes the
-  older-user edge but needs status as memory, for no gain while users are same-namespace. Lost; it
-  becomes the rule when cross-namespace users arrive.
+  older-user edge but needs status as memory, for no gain while everything shares one namespace
+  (D1). Lost.
 - **Separate `publish` and `subscribe` lists.** Readable for one-way clients, but `readwrite` has
   to be merged at render time, and moving to D3 later would be breaking. Lost.
 - **`v1alpha1` for the new kind.** Honest about maturity, but forces an `apiVersion` change in every
@@ -147,8 +151,10 @@ kind is built. A user's failure never changes the broker's readiness.
 - Not measured: how shared subscriptions (`$share/<group>/<topic>`) are checked against ACLs. If
   the check uses the `$share` form, D4 blocks them; no current client is known to need them.
 - The older-user edge of D6, accepted above.
-- Cross-namespace binding is closed by refusal; the day it opens, D6's rule and a topic-prefix
-  policy per broker are re-decided with it.
+- References across namespaces do not exist in this API (D1). Adding a namespace field to any
+  reference would be an amendment of D1, and D6's rule, the topic-prefix question and the hash
+  strength of [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
+  D3 would be re-decided with it.
 
 ## References
 

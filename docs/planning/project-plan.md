@@ -44,7 +44,8 @@ and in [docs/developer/](../developer/README.md).
 anything touches authentication.
 
 **Builds:** [ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)
-D4 and D5, [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D9 and D10.
+D4 and D5, [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D9 and D10,
+[ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10 for the TLS Secret.
 
 **Delivers:**
 
@@ -56,6 +57,9 @@ D4 and D5, [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-t
 - The `--test-config` init container from the broker image, with the broker container's security
   context, run against the mounted configuration.
 - The supported broker line (2.1.x) stated in the README and in the `image` field description.
+- The `secretSecurity` switch, default `false`, as a chart value and an operator flag: with `true`
+  a TLS Secret without the opt-in label is refused; the README states the trust rule of `false`
+  next to the install command, and H-15 on the security pages names the switch.
 - The restricted-admission guard: a rendered broker pod admitted by a real API server in a
   namespace labelled `pod-security.kubernetes.io/enforce=restricted` — an integration test that
   creates a Pod from the built template if envtest's API server enforces PodSecurity (it runs no
@@ -70,7 +74,9 @@ D4 and D5, [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-t
 - an E2E test applies a `spec.config` typo and finds the init container's message with file and
   line in its log, the broker container never started;
 - the admission guard passes, and was observed failing with the API server's own message against a
-  security context with `allowPrivilegeEscalation: true`.
+  security context with `allowPrivilegeEscalation: true`;
+- a unit test refuses an unlabelled TLS Secret with `secretSecurity: true` and accepts it with
+  `false`, observed failing once with the check removed.
 
 **Not verified yet, and settled here:** whether envtest's API server enforces PodSecurity labels.
 
@@ -111,7 +117,7 @@ E1 needs the hashing code of phase 3 in a minimal form; it is written here and k
 
 **Builds:** [ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)
 entire; [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
-D1–D4 and D6–D8; [ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+D1–D4, D6–D8 and D10 for `credentialsSecret`; [ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
 D13–D16; [ADR 0006](../adr/0006-both-install-paths-grant-the-same-authority.md) D9.
 
 **Delivers:**
@@ -210,7 +216,6 @@ reserved `mko-exporter` user with `read $SYS/#`, its password a key of `<name>-a
 | High availability, `replicas > 1` semantics, PDB, upgrade without message loss | [ha-research.md](ha-research.md), questions HA1–HA7 | the owner's call, at the latest a client that needs a bounded failover |
 | `MosquittoRole` | [ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D7 | many users with identical ACLs |
 | Dynamic-security mode | [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D9 | ACL priorities, or kicking a client with a valid credential |
-| Users bound across namespaces | [ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D1, D6 | a client team without write access to the broker's namespace |
 
 ## What is deliberately not planned
 
@@ -219,3 +224,7 @@ reserved `mko-exporter` user with `read $SYS/#`, its password a key of `<name>-a
 - Admission webhooks and conversion webhooks — each needs a serving certificate.
 - A NetworkPolicy shipped by the operator ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) D16).
 - Generating client passwords; the users own their Secrets.
+- References across namespaces. A `Mosquitto`, its users, their Secrets and their ACLs share one
+  namespace; no reference carries a namespace field
+  ([ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D1).
+  The operator itself acts cluster-wide.

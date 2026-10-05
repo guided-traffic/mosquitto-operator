@@ -33,7 +33,7 @@ is wrong unless the open question says otherwise.
 | [`build.yml:102-105`](../../.github/workflows/build.yml#L102-L105) | "no release has been built from this repository yet" | tags `v0.1.0` to `v0.1.8` exist; whether `build.yml` ran for them is not checkable from the tree |
 | [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) Consequences | a missing Secret, a Secret without `tls.crt` and a mismatched key all end with the broker "in `CrashLoopBackOff`" | the README and [`test/integration/tls_test.go`](../../test/integration/tls_test.go) describe a kubelet mount error for the missing Secret; Kubernetes holds a pod with a missing non-optional Secret volume in `ContainerCreating`, so the first case does not crash-loop — not observed here |
 
-One statement is not a stale fact but a disagreement between a comment and the code:
+One statement was a disagreement between a comment and the code, now decided for the comment:
 [`MapEntriesMissing`](../../internal/common/labels.go#L174-L177) says labels other controllers and
 users add are not reverted, and indeed ignores them when deciding whether to write — but every
 write the operator makes assigns `current.Labels = desired.Labels`
@@ -47,17 +47,9 @@ which drops them whenever an update happens for another reason.
    description becomes the README's pitch sentence, in all four places in one change.
 2. The ADR 0001 sentence: observed on Kind with a `Mosquitto` naming a Secret that does not
    exist, then written as observed.
-3. The label behaviour: per the answer below, either the comment or the three assignments change;
-   a unit test with a foreign label on the current object pins the chosen behaviour.
-
-## Open questions
-
-### Q1: Should an update keep labels that others added to the operator's objects?
-
-The comment says yes, the code says no. **Keep them (recommended):** merge the desired labels into
-the current ones on update — the comment's stated intent, and what a GitOps tool or a policy
-engine that labels objects expects; the cost is that a label the operator once set and later
-stops setting is never removed. **Drop them:** change the comment to the code; the operator owns
-its objects' labels outright, and a foreign label is reverted on the next unrelated update.
-
-**Answer:** _open_
+3. The label behaviour: [ADR 0009](../adr/0009-delete-only-through-owner-references.md) D9 —
+   the three label assignments, the pod-template labels and the pod-template annotations merge
+   instead of replacing, the operator's own keys winning; a unit test with a foreign label on each
+   of the three kinds and a foreign label and `kubectl.kubernetes.io/restartedAt` on the pod
+   template, observed failing against today's assignments. The runtime page's paragraph on
+   `kubectl rollout restart` rewritten in the same change.

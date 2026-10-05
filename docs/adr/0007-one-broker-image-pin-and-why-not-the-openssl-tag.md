@@ -171,7 +171,13 @@ the upstream image.
 2026-10-05; decided, not built.)* The supported broker line is 2.1.x, written in the README and
 the CRD field description. The operator does not parse the tag and keeps no map from versions to
 images: a tag check fails exactly where it would be needed — a digest pin or a mirrored image —
-and a version map takes away mirroring. The configuration the operator generates uses only what
+and a version map takes away mirroring. **Nor does the operator constrain which image may run**:
+no registry allowlist, no digest requirement. Whoever writes a `Mosquitto` chooses the code in its
+broker pod ([docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-2)); an image
+policy belongs to the cluster's own admission control (Kyverno, Gatekeeper), which covers every
+workload rather than brokers alone. Decided 2026-10-05 over an allowlist as a chart value — a
+second, weaker policy to keep in step — and a digest requirement, which does not stop a chosen
+digest and does not fit the tag pin of D1. The configuration the operator generates uses only what
 2.1 accepts and 3.0 is announced to keep (D7). What 3.0 breaks cannot be checked before a 3.0
 image exists; D6's `<3` cap is the guard until then.
 
