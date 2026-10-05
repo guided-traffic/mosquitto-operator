@@ -14,7 +14,7 @@ token minted from it: both secrets are empty strings in a fork run, so no token 
 there (D4); the jobs that mint it are the two D4 names; and D8's `persist-credentials: false` and
 `npm ci --ignore-scripts` now keep the app token out of `.git/config` and away from lifecycle
 scripts. The key does not expire and can mint tokens for every repository of the org
-([`SECURITY_ARCHITECTURE.md`](../../SECURITY_ARCHITECTURE.md) section 2.4).
+([docs/security/ci-and-supply-chain.md](../security/ci-and-supply-chain.md#credentials-in-ci)).
 
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the comment block above

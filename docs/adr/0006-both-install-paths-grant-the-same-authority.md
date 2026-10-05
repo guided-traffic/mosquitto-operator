@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01.
+Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** the grant table of D6
+gains the `MosquittoUser` kind of [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and a `secrets` rule whose scope is an install-time
+mode ([ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7) — D9. Until that is built, D6 describes the tree.
 
 **Verified by reading:** the `+kubebuilder:rbac` markers and the comment above them in
 [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go);
@@ -164,7 +166,9 @@ are decisions, not accidents, and each is stated where it is enforced:
   collector's job through the owner references, and nothing in the reconciler patches — see
   [ADR 0009](0009-delete-only-through-owner-references.md).
 * **No `secrets` rule at all.** `spec.tls.secretName` is mounted into the broker pods by the
-  kubelet, so the operator never reads the TLS material itself.
+  kubelet, so the operator never reads the TLS material itself. *(Superseded by D9 when it is
+  built, amended 2026-10-05; the TLS half stays true — the operator still never reads the TLS
+  Secret.)*
 * **The only `events` grant is namespaced**, and it exists for client-go, not for the operator:
   `LeaseLock.RecordEvent` in `k8s.io/client-go@v0.37.0/tools/leaderelection/resourcelock/leaselock.go`
   records a `LeaderElection` Event whose subject is the Lease, and controller-runtime wires an
@@ -187,6 +191,30 @@ a metrics `Service`, `kustomize build config/default` renders neither (`config/d
 `../rbac` and `../manager` only, and the CRD is applied separately by `make install` from
 `config/crd`). Only `ClusterRole` and `Role` documents are compared; everything else in either
 stream is skipped after a probe decode that reads no further than `kind`.
+
+**D9 — The table grows by the user kind and by a `secrets` rule in one of two modes, and both
+paths render both modes.** *(Added 2026-10-05; decided, not built.)*
+
+| Kind | apiGroup | Resource | Verbs | Mode |
+|---|---|---|---|---|
+| ClusterRole | `mko.gtrfc.com` | `mosquittousers` | `get, list, watch` | always |
+| ClusterRole | `mko.gtrfc.com` | `mosquittousers/status` | `update` | always |
+| ClusterRole | core (`""`) | `secrets` | `create, get, list, update, watch` | `all` (the default) |
+| Role, one per listed namespace | core (`""`) | `secrets` | `create, get, list, update, watch` | `namespaces` |
+
+`get;list;watch` reads the users' password Secrets and wakes the reconciler when one changes;
+`create;update` writes the one rendered Secret per broker ([ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D2). Still no `delete`
+and no `patch` ([ADR 0009](0009-delete-only-through-owner-references.md)): the rendered Secret is
+owned through a controller reference and collected with its `Mosquitto`. The mode is an
+install-time setting on both paths — a chart value, and a kustomize component per mode — with
+`all` as the default of both; a default `helm install` or `kustomize build config/default`
+therefore grants cluster-wide read **and write** on Secrets, which the owner accepted after the
+risk was stated, and which the README states before the install command and the chart's
+`NOTES.txt` prints. The operator cannot mint the `namespaces` Roles itself: RBAC's escalation
+prevention would require it to hold the grant already, so they are created at install time. The
+parity test renders and compares each mode; in `namespaces` mode the operator's Secret cache is
+restricted to the same list, so a namespace outside it is never listed rather than refused on
+every pass.
 
 ## Consequences
 

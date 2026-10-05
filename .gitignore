@@ -48,3 +48,8 @@ tmp/
 
 # Local agent workspace
 .claude/
+
+# Embargoed tickets: a live|boundary security finding stays untracked while
+# local_-prefixed, independent of anyone's global excludes file (docs/adr/0011).
+# The ** covers archive/ as well.
+docs/tickets/**/local_*

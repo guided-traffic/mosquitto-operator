@@ -2,7 +2,15 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01.
+Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** a renewed certificate
+reaches a running broker by an in-pod reload, not by a restart — new rule D10, which replaces D7
+and D8 once the reload sidecar of [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) is built. Measured first: Mosquitto 2.1
+re-reads `certfile`/`keyfile` on SIGHUP, keeps existing TLS connections, and does **not** fall
+back to the old certificate on a mismatched pair
+([broker-behaviour.md](../developer/broker-behaviour.md#m12--tls-material-reloads-on-sighup-a-broken-pair-breaks-the-listener-not-the-process)).
+D6's second half — the operator holds no permission to read a Secret — ends with the same change,
+because [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7 grants the operator read access to the users' password Secrets; the
+operator still neither watches nor reads the **TLS** Secret.
 
 **Verified by reading, in this repository:**
 [`api/v1/mosquitto_types.go`](../../api/v1/mosquitto_types.go) (`MosquittoTLS`, `SecretName`,
@@ -115,6 +123,8 @@ knowing that key exists. The generated configuration references only `TLSCertKey
 `TLSKeyKey = "tls.key"`.
 
 **D6 — The operator does not watch the referenced Secret, and holds no permission to read one.**
+*(Amended 2026-10-05: the first half stays; the second holds for the tree today and ends when
+[ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7's `secrets` grant is built. The operator still never reads the TLS Secret.)*
 `SetupWithManager` registers `For(&mkov1.Mosquitto{})` plus `Owns` on `appsv1.StatefulSet`,
 `corev1.ConfigMap` and `corev1.Service`. There is no `Owns(&corev1.Secret{})` and no `Watches`
 call at all. The `+kubebuilder:rbac` markers grant `configmaps`, `services`, `statefulsets`,
@@ -125,7 +135,8 @@ call at all. The `+kubebuilder:rbac` markers grant `configmaps`, `services`, `st
 an oversight; it is the privilege boundary.**
 
 **D7 — A rotated certificate reaches a running broker only when its pod restarts, and this is
-stated in the API rather than worked around.**
+stated in the API rather than worked around.** *(Superseded by D10, amended 2026-10-05; it
+describes the tree until D10 is built.)*
 The pod template carries two annotations, `mko.gtrfc.com/pod-spec-hash` (a digest of the pod spec)
 and `mko.gtrfc.com/config-hash` (a digest of the generated `mosquitto.conf`), and
 `StatefulSetHasChanged` compares exactly those two plus the replica count and the labels. The pod
@@ -137,7 +148,9 @@ Secret changes neither hash, because neither digest has ever seen those bytes. T
 once the pods restart, for example
 `kubectl rollout restart statefulset/<name>`.
 
-**D8 — What would close D7's gap is named, and deliberately not built.**
+**D8 — What would close D7's gap is named, and deliberately not built.** *(Superseded by D10,
+amended 2026-10-05: the gap is closed by an in-pod reload instead of a roll, so neither the
+content digest nor the roll below is built.)*
 The closing move is a third annotation: a digest of the *content* of the referenced Secret,
 computed by the operator and written into the pod template, so that a rotation changes the pod
 template and the StatefulSet controller rolls the pods on its own. It is not built because it is
@@ -163,6 +176,16 @@ therefore an *encrypted anonymous* broker: any client that can route to the Clus
 complete a TLS handshake can publish and subscribe. This is stated in the type documentation of
 `MosquittoSpec`, on `MosquittoTLS`, in the generator's own comment and in the README. **It is a
 confidentiality feature, not an access-control feature, and it must not be sold as one.**
+
+**D10 — A renewed certificate reaches a running broker through an in-pod reload, checked
+before it is signalled.** *(Added 2026-10-05; decided, not built.)* The reload sidecar of
+[ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D5 watches the mounted TLS directory as well as the rendered credentials; after the
+kubelet swaps the mount it checks that `tls.crt` and `tls.key` form a valid pair and only then
+sends the broker SIGHUP. A mismatched pair is never signalled, so a half-edited Secret leaves the
+broker serving its previous certificate instead of failing every new handshake. Existing TLS
+connections survive the reload; nothing restarts and nobody is disconnected. The operator still
+does not watch, read or hash the TLS Secret — the kubelet mounts it and the sidecar reads the
+mounted files — so D1 to D5 and D9 are unchanged.
 
 ## Consequences
 
@@ -237,6 +260,11 @@ all, let alone `pods/exec`, the broker container runs with `readOnlyRootFilesyst
 `AutomountServiceAccountToken` set to `false`, and no `lifecycle` hook or sidecar exists to deliver
 a signal. Whether a signal would even work is the unverified half — see Residual risks.
 
+*Amended 2026-10-05:* this alternative won, in a form that needs no operator permission — a
+sidecar inside the broker pod sends the signal (D10). Both halves of the objection were settled:
+the signal works on the pinned image (measured), and the sidecar delivers it without `pods` or
+`pods/exec`.
+
 ### Require client certificates (`require_certificate true`)
 
 Not taken. It would make every client of every broker hold issued material this operator does not
@@ -245,13 +273,17 @@ TLS buys is read as a stated limit and not as an oversight.
 
 ## Residual risks
 
-* **The rotation gap is open and accepted (D7).** Nothing in this repository notices a changed
+* **The rotation gap is open and accepted (D7)** — until D10 is built. Nothing in this repository notices a changed
   Secret. The mitigation is documentation in three places and a manual
   `kubectl rollout restart`.
 * **Whether the `mosquitto` process could re-read rotated material on a signal is not verified.**
   It does not matter for the current behaviour — the operator sends nothing and can send nothing
   (no `pods` RBAC, no lifecycle hook) — but it decides whether a future fix is "roll the pods" or
-  "signal the pods", and this ADR does not answer it. It was not tested here.
+  "signal the pods", and this ADR does not answer it. It was not tested here. *(Answered 2026-10-05:
+  it does — measured on the pinned image, see D10's Status note; a mismatched pair breaks new
+  handshakes until a valid pair and a second signal arrive. Still not measured: whether the
+  kubelet swaps `tls.crt` and `tls.key` together, and what the broker does with a mismatched pair
+  at start.)*
 * **No behaviour in this ADR has been observed on a real cluster.** The unit and integration tiers
   never start a container: envtest runs an API server and etcd and no kubelet. Everything about
   what the *broker* does with the mounted files is asserted only by `test/e2e/tls_test.go`, and no

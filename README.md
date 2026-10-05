@@ -32,17 +32,16 @@ flowchart LR
 ```
 
 Every claim in this document was verified by reading this repository. What was **not** done:
-running any of it against a real Kubernetes cluster. This tree is greenfield — two commits on `feat/initial-build` and
-an uncommitted working tree — so the E2E suite in [`test/e2e/`](test/e2e/) that exercises the
-provisioning path in CI has no observed run to point at. Commands below are transcribed from
-the code and from that suite; the ones that need no cluster were executed while writing this
-file.
+running any of it against a real Kubernetes cluster. The E2E suite in [`test/e2e/`](test/e2e/)
+exercises the provisioning path, but its CI jobs have been commented out since 2026-09-01 and no
+run of it has been observed. Commands below are transcribed from the code and from that suite;
+the ones that need no cluster were executed while writing this file.
 
 ## ✨ Key Features
 
 - 🦟 **One resource, four objects** — a `Mosquitto` produces a StatefulSet, a ConfigMap, a headless Service and a ClusterIP Service, all carrying its owner reference.
 - 🧾 **Generated `mosquitto.conf`** — logging to stdout, persistence into `/mosquitto/data/`, one listener, and your own directives from `spec.config` appended verbatim.
-- ♻️ **Config changes reach running pods** — the rendered configuration is hashed into a pod-template annotation, so a ConfigMap edit rolls the StatefulSet instead of sitting unread.
+- ♻️ **Config changes reach running pods** — the rendered configuration is hashed into a pod-template annotation, so a change to `spec.config` rolls the StatefulSet instead of sitting unread. A hand edit of the ConfigMap is overwritten on the next pass.
 - 🔐 **Optional MQTTS** — `spec.tls.secretName` mounts an existing `tls.crt`/`tls.key` Secret and moves the listener to 8883. The operator consumes TLS material; it never issues or renews it.
 - 💾 **Optional persistence** — `spec.storage` renders a `data` PVC template; without it the persistence directory is an `emptyDir` at the same path.
 - 🧭 **Opt-in anti-affinity** — `off` (default), `soft` (scheduler preference) or `hard` (one broker pod per node, surplus pods stay `Pending`), over `kubernetes.io/hostname`.
@@ -116,10 +115,8 @@ The selector deliberately omits `component` and `version`
 would stop matching the running pods exactly when the image changes and the Service has to
 keep routing.
 
-The two annotations are how a change the StatefulSet controller would otherwise not see
-becomes part of the pod template. Mosquitto reads its configuration once at startup and a
-ConfigMap update restarts nothing, so `mko.gtrfc.com/config-hash` is what turns a config edit
-into a rollout.
+How the two hashes carry a change into running pods:
+[runtime.md](docs/operations/runtime.md#which-changes-restart-the-broker-pods).
 
 ### Operator install
 
@@ -153,14 +150,17 @@ them through the chart's `fullname` template. The **names** differ between the t
 
 | Document | What it covers |
 |---|---|
-| [DEVELOPER.md](DEVELOPER.md) | Repository layout, per-package responsibilities, the reconcile pipeline, how to add a field, the build/test/lint matrix and the release process |
-| [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) | Trust boundaries, every RBAC rule and what it permits, where the TLS material lives, what the isolation does **not** cover, and the hardening checklist |
-| [docs/adr/](docs/adr/README.md) | Architecture Decision Records — what was decided, why, what was rejected and what it costs |
+| [docs/operations/](docs/operations/README.md) | Installing through Helm or kustomize, upgrading and uninstalling, and what happens at runtime — what rolls the brokers, what the status means |
+| [docs/security/](docs/security/README.md) | The security architecture, one page per perspective — trust boundaries, credentials, tenancy, the privilege footprint, validation, rotation — each ending with what it does **not** cover |
+| [SECURITY.md](SECURITY.md) | How to report a vulnerability |
+| [docs/developer/](docs/developer/README.md) | Contributing: repository layout, per-package responsibilities, the reconcile pipeline, the test tiers, the build/test/lint matrix, CI and release, extension checklists, and what the pinned broker image measurably does |
+| [docs/adr/](docs/adr/README.md) | Architecture Decision Records — what was decided, why, what was rejected and what it costs, and which decisions are not built yet |
+| [docs/planning/project-plan.md](docs/planning/project-plan.md) | The plan for the next release: users, permissions and credentials that follow every change, run from Git through Flux |
 | [Full reference](#-full-reference) (below) | Every `spec` field, its default and its effect |
 | [Eclipse Mosquitto documentation](https://mosquitto.org/documentation/) | Upstream broker behaviour and every `mosquitto.conf` option `spec.config` can carry |
 | [cert-manager](https://cert-manager.io/docs/) | Optional, and never installed by this project — one of the two ways to fill the Secret `spec.tls.secretName` names |
 
-Read [SECURITY_ARCHITECTURE.md](SECURITY_ARCHITECTURE.md) before granting anyone
+Read [docs/security/](docs/security/README.md) before granting anyone
 `create mosquittoes`: the generated broker accepts anonymous clients, and the operator holds a
 cluster-wide grant.
 
@@ -180,12 +180,8 @@ helm install mosquitto-operator deploy/helm/mosquitto-operator \
 ```
 
 The chart carries the CRD, the ClusterRole, the leader-election Role and the Deployment, so
-one command installs all four. `helm lint` and `helm template` on this chart were run while
-writing this file; the install itself was not. A chart repository is published to
-`https://guided-traffic.github.io/mosquitto-operator/` by
-[`.github/workflows/build.yml`](.github/workflows/build.yml) when a GitHub release is
-published — whether one has been is not something this tree can tell you, so the checked-out
-chart above is the path documented here.
+one command installs all four. Which image a checked-out chart runs, the published chart
+repository, and the kustomize path: [installation.md](docs/operations/installation.md#install-with-helm).
 
 **2. Create a broker.**
 
@@ -233,50 +229,10 @@ the cluster is something you add yourself — and worth reading
 [Two modes, and what each one protects](#two-modes-and-what-each-one-protects) first, because
 the generated broker authenticates nobody.
 
-<details>
-<summary>Upgrade, rollback and uninstall</summary>
-
-**Upgrade.** `helm upgrade` with the chart is the supported path. The CRD lives in the
-chart's `templates/`, so schema, permissions and image move forward together:
-
-```bash
-helm upgrade mosquitto-operator deploy/helm/mosquitto-operator \
-  --namespace mosquitto-operator-system
-```
-
-Updating the operator image on its own — `kubectl set image`, or a bumped tag applied against
-an older chart — leaves the CRD and the ClusterRole behind and is not a supported upgrade
-path.
-
-An operator upgrade does **not** restart running brokers by itself. The broker pod template
-contains no operator image and no sidecar; it changes only when the `Mosquitto` spec changes
-or when the generated configuration does.
-
-**Rollback.**
-
-```bash
-helm rollback mosquitto-operator --namespace mosquitto-operator-system
-```
-
-The CRD is part of the release, so a rollback restores the previous CRD schema with it. Spec
-fields only the newer schema knows are pruned from existing resources by the API server, so
-roll back before adopting new fields, or re-apply them after upgrading again.
-
-**Uninstall.**
-
-```bash
-kubectl delete mq --all --all-namespaces   # do this knowingly, see below
-helm uninstall mosquitto-operator --namespace mosquitto-operator-system
-```
-
-The CRD is a normal chart template with no `helm.sh/resource-policy: keep`, so
-`helm uninstall` deletes it — and deleting the CRD removes every `Mosquitto` with it, which
-garbage-collects the StatefulSets, Services and ConfigMaps they own.
-PersistentVolumeClaims created from `spec.storage` are **not** removed: the StatefulSet sets
-no PVC retention policy ([`buildVolumeClaimTemplates`](internal/builder/statefulset.go)), so
-the data stays on disk and is reattached when a broker of the same name is created again.
-
-</details>
+**Upgrade, rollback and uninstall:** [installation.md](docs/operations/installation.md#upgrade).
+**Uninstalling the chart deletes the CRD and with it every broker in the cluster**; claims
+created from `spec.storage` stay
+([installation.md](docs/operations/installation.md#uninstall)).
 
 ## 📖 Full reference
 
@@ -339,45 +295,17 @@ therefore reduces a digest to its 12-character hex prefix
 `[A-Za-z0-9._-]`, truncates to 63 bytes, and falls back to `unknown` when nothing usable is left.
 So the label identifies the image by eye without ever being a value the API server refuses.
 
-This is a fix, not a design: before it, a digest reference produced `sha256:<64 hex>` and **every**
-object written for that resource was rejected, leaving it in `Failed` indefinitely.
-`TestExtractVersionFromImage_AlwaysProducesAValidLabel` now asserts the result against
-apimachinery's `validation.IsValidLabelValue` rather than against expected strings, so no future
-edit can pin an invalid value as intended behaviour. Verified by running that test; **not**
-verified against a live API server.
-
 ### `spec.tls`
 
 | Field | Type | Default | Effect |
 |---|---|---|---|
 | `secretName` | `string` | *(required)* | Name of a Secret **in the resource's own namespace** carrying `tls.crt` and `tls.key`. Minimum length 1; an empty value is treated as TLS off ([`Mosquitto.IsTLSEnabled`](api/v1/mosquitto_types.go)) so a half-filled spec cannot produce a listener with no certificate. |
 
-The operator neither creates nor renews that Secret. Both ways of filling it are first class
-and neither needs anything from this project:
-
-```bash
-kubectl create secret tls broker-tls --cert=tls.crt --key=tls.key
-```
-
-or a cert-manager `Certificate` on a cluster that already runs cert-manager — the
-administrator owns that object; this project has no cert-manager dependency, ships no
-`Certificate` and installs nothing. (`make cert-manager-install` exists to give the E2E suite
-a real issuer to test against; it is a test fixture, not part of any install path.)
-
-**Rotation does not reach a running pod.** The operator does not watch the Secret. Renewing
-the certificate changes the Secret, and the kubelet updates the mounted files, but Mosquitto
-reads them once at startup — so the pods keep serving the old material until they restart:
-
-```bash
-kubectl rollout restart statefulset/broker
-```
-
-Turning TLS on is a pod-template change, not a recreate: the operator rewrites the
-StatefulSet's template and the pods roll. It does not wait for the Secret either —
-[`test/integration/tls_test.go`](test/integration/tls_test.go) pins that the StatefulSet is
-written whether or not the named Secret exists, and that the operator never creates it. A
-missing Secret then surfaces as a kubelet-level mount error on the pod rather than as a
-reconcile failure.
+The operator neither creates nor renews that Secret. Filling it — by hand or through a
+cert-manager `Certificate` the administrator owns:
+[installation.md](docs/operations/installation.md#tls-for-the-brokers). **A renewed certificate
+reaches running pods only when they restart**:
+[runtime.md](docs/operations/runtime.md#a-renewed-certificate).
 
 ### `spec.storage`
 
@@ -386,9 +314,8 @@ reconcile failure.
 | `size` | `string` | *(required)* | PVC size, e.g. `1Gi`. An unparsable quantity fails the reconcile visibly instead of being silently replaced. |
 | `storageClassName` | `string` | *(unset → cluster default class)* | Storage class for the PVC template. |
 
-`volumeClaimTemplates` are immutable once the StatefulSet exists, and the operator writes them
-only on creation. Changing `spec.storage` afterwards therefore does **not** converge; the
-StatefulSet has to be deleted and recreated by hand.
+Changing `spec.storage` on an existing broker does **not** converge; the StatefulSet has to be
+recreated by hand: [runtime.md](docs/operations/runtime.md#changing-specstorage-on-an-existing-broker).
 
 ### `status`
 
@@ -421,12 +348,7 @@ status:
 | `Failed` | The operator could not write one of the objects it manages | `ReconcileFailed` |
 
 `Failed` describes the operator, not the brokers: pods that were already running keep running.
-The most likely cause is the ownership refusal — an object under a managed name that this
-resource does not control is never adopted, and the message names it:
-
-```
-ConfigMap default/broker-config exists and is not owned by this Mosquitto
-```
+What each phase means in practice: [runtime.md](docs/operations/runtime.md#status).
 
 ### The generated `mosquitto.conf`
 
@@ -533,17 +455,10 @@ Defaults from [`deploy/helm/mosquitto-operator/values.yaml`](deploy/helm/mosquit
 | `leaderElection.enabled` | `true` | Passes `--leader-elect` and renders the namespaced leader-election `Role`/`RoleBinding`. With it off, neither is created. |
 | `metrics.enabled` | `true` | Renders the metrics Service and passes `--metrics-bind-address=:8080`; `false` passes `0`, which is what controller-runtime reads as "do not start the metrics server". |
 
-That endpoint serves controller-runtime's own reconcile, work-queue, client and Go runtime
-series. **This operator registers no metric of its own, and there is no broker metrics
-exporter** — Mosquitto publishes broker statistics as `$SYS/#` topics and nothing here
-translates them yet; the decision on how that will be done is recorded in
-[ADR 0002](docs/adr/0002-the-metrics-exporter-is-written-here.md), with none of it implemented.
-
-Security note on the metrics endpoint: it is plain HTTP with no authentication or
-authorization filter. Anything that can route to the operator pod reads it whether or not the
-Service exists — `metrics.enabled: false` closes the port, deleting the Service only hides the
-DNS name. The chart ships no NetworkPolicy on purpose; restricting ingress is left to the
-cluster administrator.
+**Security note:** the metrics endpoint is plain HTTP with no authentication; `metrics.enabled:
+false` closes the port, deleting the Service only hides the DNS name. What it serves, and that no
+broker metrics exist yet ([ADR 0002](docs/adr/0002-the-metrics-exporter-is-written-here.md)):
+[runtime.md](docs/operations/runtime.md#the-operators-ports-and-probes).
 
 ### Operator flags
 
@@ -573,8 +488,8 @@ make e2e-local                # Kind cluster, cert-manager, Helm install, full E
 `make generate-all` must leave `git status` clean — CI fails the build otherwise, because a
 stale checked-in CRD would ship in the chart while the Go types said something else.
 
-[DEVELOPER.md](DEVELOPER.md) has the repository layout, the reconcile pipeline, the extension
-checklists and the CI/release process.
+[docs/developer/](docs/developer/README.md) has the repository layout, the reconcile pipeline,
+the test tiers, the extension checklists and the CI/release process.
 
 ## License
 

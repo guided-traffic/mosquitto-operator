@@ -2,7 +2,13 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01.
+Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** D9 states what
+`spec.image` supports, and D10 adds a `--test-config` init container to every broker pod. Checked
+the same day against Docker Hub and the upstream repository: the newest line is 2.1 (`2.1.0`
+2026-01-30, `2.1.1` 2026-02-05, `2.1.2` 2026-09-18); the pin `2.1.2-alpine` has the same digest as
+`latest`, `alpine` and `2.1-alpine` (`sha256:38c0da4f2ef8…`); 2.0 (to `2.0.22`) and 1.6 are still
+rebuilt; upstream has no 3.0 tag and no `release/3.0` branch, so 3.0 exists only as announced
+deprecations.
 
 **Verified by reading, in this repository:**
 [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) (`DefaultImage`,
@@ -160,6 +166,24 @@ follows a change to that command instead of probing a path that is no longer use
 contains `mosquitto_passwd` and `mosquitto_ctrl` (Context), and the check deliberately does not
 assert them: nothing here runs them, and an assertion on an unused binary is a false constraint on
 the upstream image.
+
+**D9 — `spec.image` stays free, and what it supports is stated, not enforced.** *(Added
+2026-10-05; decided, not built.)* The supported broker line is 2.1.x, written in the README and
+the CRD field description. The operator does not parse the tag and keeps no map from versions to
+images: a tag check fails exactly where it would be needed — a digest pin or a mirrored image —
+and a version map takes away mirroring. The configuration the operator generates uses only what
+2.1 accepts and 3.0 is announced to keep (D7). What 3.0 breaks cannot be checked before a 3.0
+image exists; D6's `<3` cap is the guard until then.
+
+**D10 — Every broker pod first runs `mosquitto --test-config` on the generated file.** *(Added
+2026-10-05; decided, not built.)* An init container from the broker image itself runs the
+broker binary in test mode against the mounted configuration, with the broker container's
+security context. A typo in `spec.config` or an image that does not know a generated directive —
+a 2.0 image refusing `plugin_load` is the expected case, not measured against a 2.0 image — then
+fails with the broker's own message, file and line, instead of a crash loop. It is a syntax gate,
+not a correctness gate: `--test-config` validates directive names and nothing a plugin decides
+([broker-behaviour.md](../developer/broker-behaviour.md#m8----test-config-is-a-syntax-gate-not-a-correctness-gate)).
+Because the init container executes the broker binary, D8's list of executed tools does not grow.
 
 ## Consequences
 

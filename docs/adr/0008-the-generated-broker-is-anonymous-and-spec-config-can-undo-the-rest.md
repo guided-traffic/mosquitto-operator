@@ -5,6 +5,26 @@
 Accepted. Date: 2026-09-01. Both decision groups are **implemented** as described; the future work
 named in D11 and D12 is not.
 
+**Amended 2026-10-05 (decided, not built).** The title describes the tree today and stops being
+true when the first release of [ADR 0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) ships. New rules, added as Group C:
+
+* **D13** — a broker the operator renders is **never** anonymous; there is no opt-in. Replaces D1
+  and D2.
+* **D14** — every generated listener sets `use_username_as_clientid true`, closing a measured
+  cross-user session takeover.
+* **D15** — `spec.config` is limited to an **allowlist of directives**, enforced at render time,
+  shipped in the same release as authentication. Replaces D6, D7, D9 and narrows D8 and D10.
+* **D16** — the operator ships **no NetworkPolicy**; the owner accepted the exposure after it was
+  stated.
+
+D11 and D12 are fulfilled by [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md): credentials are Secret
+references, rendered as the `password-file` and `acl-file` plugins. The measurements these rest
+on — M13 to M17 — are in [broker-behaviour.md](../developer/broker-behaviour.md); they were taken on 2026-10-05 against the pinned image and
+corrected an earlier assumption here: a global `allow_anonymous true` in `spec.config` does **not**
+override the generated listener-scoped `listener_allow_anonymous false` (M15), so D6's "a repeated
+global option overrides the generated one" does not apply to the authentication setting once D13
+is built.
+
 Verified by reading, on 2026-09-01:
 
 * [`internal/builder/configmap.go`](../../internal/builder/configmap.go) in full — `GenerateMosquittoConf`
@@ -88,13 +108,13 @@ generator states conditional.
 
 ### Group A — the posture, stated without euphemism
 
-**D1 — The generated `mosquitto.conf` enables anonymous access, always.**
+**D1 — The generated `mosquitto.conf` enables anonymous access, always.** *(Superseded by D13, amended 2026-10-05; describes the tree until D13 is built.)*
 `GenerateMosquittoConf` appends `allow_anonymous true` on every path, TLS or not. Stated plainly:
 **every broker this operator provisions accepts publish and subscribe from anything that can open
 a TCP connection to it.** Not "by default in some configurations" — on every `Mosquitto` resource
 the current API can express, unless the user closes it themselves through `spec.config` (D6).
 
-**D2 — The generated file says so, in the file.** The block carries the reason inline:
+**D2 — The generated file says so, in the file.** *(Superseded by D13 with D1.)* The block carries the reason inline:
 "This broker accepts anonymous clients: the CRD models no authentication, and Mosquitto 2.x would
 otherwise reject every client." A `kubectl get configmap <name>-config -o yaml` is a complete
 answer about the posture; the reader does not have to find this ADR.
@@ -144,7 +164,7 @@ currently satisfied everywhere.
 ### Group B — `spec.config` is appended verbatim, and wins
 
 **D6 — `spec.config` goes in last, unmodified, and a repeated global option therefore overrides the
-generated one.** The only transformations are `strings.TrimSpace` on the emptiness check and
+generated one.** *(Superseded by D15, amended 2026-10-05; describes the tree until D15 is built.)* The only transformations are `strings.TrimSpace` on the emptiness check and
 `strings.TrimRight(m.Spec.Config, "\n")` on the content. It is preceded by the marker comment
 `# spec.config, appended verbatim.`, so the boundary between operator output and user input is
 visible in the rendered file. `TestGenerateMosquittoConf_SpecConfigIsAppendedVerbatim` pins the
@@ -152,13 +172,15 @@ ordering by string index, with `allow_anonymous false` as one of its cases — *
 anonymous default is a supported, tested use of the field, not a loophole.**
 
 **D7 — `spec.config` can declare listeners, bridges and log destinations the operator does not
-model, and the operator does not learn about them.** The container port list and both Service port
+model, and the operator does not learn about them.** *(Superseded by D15: none of the three is on
+the allowlist.)* The container port list and both Service port
 lists come from `BrokerPort(m)` / `BrokerPortName(m)`, which read `IsTLSEnabled()` and nothing
 else. A listener declared in `spec.config` is served by the broker process and exposed by no
 Kubernetes object.
 
 **D8 — "Enabling TLS closes the plaintext port" is a guarantee about the *generated block*, not
-about the *file*.** [ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D4
+about the *file*.** *(Narrowed by D15, amended 2026-10-05: with `listener` off the allowlist the
+guarantee extends to the file once D15 is built.)* [ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D4
 decides that the generated block declares exactly one listener either way, so `spec.tls` moves the
 listener rather than adding one; **this decision is the scope on that guarantee, and the scope is
 the part that matters here.** The one-listener half is what
@@ -171,7 +193,7 @@ firewall, so any pod that can route to the broker pod's IP reaches any port the 
 listening on. **This scoping is the single most important sentence in this ADR**, because the
 unscoped version of it is the one everybody remembers.
 
-**D9 — Nothing validates `spec.config`, and that is a deliberate non-goal.** The CRD types it as
+**D9 — Nothing validates `spec.config`, and that is a deliberate non-goal.** *(Superseded by D15, amended 2026-10-05.)* The CRD types it as
 `string` with no `maxLength` and no `pattern`; no admission webhook exists in this repository. The
 broker sees the file for the first time at startup, so a rejected configuration is a
 `CrashLoopBackOff`, not a rejected `kubectl apply`. Validating it would mean reimplementing
@@ -179,7 +201,8 @@ Mosquitto's configuration parser and keeping it in step with an image this repos
 does not build.
 
 **D10 — Anyone who can create or update a `Mosquitto` in a namespace controls that broker's entire
-configuration file.** `create`/`update` on `mosquittoes.mko.gtrfc.com` in a namespace is, in
+configuration file.** *(Narrowed by D15, amended 2026-10-05: once built, that authority covers the
+allowlisted tuning directives, not listeners, plugins, authentication or bridges.)* `create`/`update` on `mosquittoes.mko.gtrfc.com` in a namespace is, in
 practice, authority to write `mosquitto.conf` — to open listeners, to bridge messages to an
 external broker, to redirect logs. **For a cluster operator this means RBAC on `mosquittoes` is the
 control surface for `spec.config`, and there is no second one.** There is no webhook to constrain
@@ -197,6 +220,56 @@ never as `spec.config` content, for the reason in Consequences. Not implemented.
 **D12 — Authorization is an ACL plugin, and it is a separate decision from D11.** Same reasoning:
 the `acl-file` plugin, not `acl_file`. Authenticated-but-unrestricted is a different posture from
 anonymous and needs its own field. Not implemented.
+
+*(D11 and D12 fulfilled by decision 2026-10-05 in [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md); not built.)*
+
+### Group C — the broker requires a login, and `spec.config` cannot take it back
+
+*Added 2026-10-05; decided, not built.*
+
+**D13 — A broker the operator renders is never anonymous.** The single generated listener carries
+`listener_allow_anonymous false` and binds the `password-file` and `acl-file` plugins
+(`plugin_use`); `allow_anonymous true` is no longer generated, and there is no field that turns
+anonymous access back on. A broker with no `MosquittoUser` bound to it accepts nobody and says so
+in its status. The listener-scoped form is chosen over the global `allow_anonymous false` because
+the global one belongs to the deprecated `per_listener_settings` model. Anonymous access was
+weighed as an explicit opt-in and lost to D14: the measured protection against session takeover
+cannot coexist with anonymous clients on the same listener. Implicit anonymity ("open until the
+first user exists") lost first, because deleting the last user — a Flux prune, a wrong path —
+would silently reopen the broker. Measured basis: M15, M16.
+
+**D14 — Every generated listener sets `use_username_as_clientid true`.** Without it any client
+that may connect takes over another client's session by using its client ID: it disconnects the
+owner and receives the owner's queued messages — measured for an anonymous client and for a
+second authenticated user (M17). With it, the client ID is the username, a second user cannot
+reach another's session, and anonymous clients are refused outright. The cost, accepted: client
+IDs sent by clients are ignored, and one username holds one connection — a second connection of
+the same user takes the first over, which matches "one user per client" of [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md).
+
+**D15 — `spec.config` takes only allowlisted directives, checked at render time.** A line whose
+directive is not on the list is refused: the `Mosquitto` reports `Ready=False` with a reason
+naming the line, the previously rendered configuration stays in force, and nothing rolls. The
+list holds tuning only — limits, queues, keepalive, persistence intervals, log types — and is
+fixed from `mosquitto.conf(5)` of the pinned version when D15 is built, never from memory.
+`listener`, `port`, every `*allow_anonymous`, every `plugin*` and `global_plugin`,
+`password_file`, `acl_file`, `per_listener_settings`, `include_dir`, `use_username_as_clientid`
+and the bridge directives (`connection`, `address`, `topic`) are not on it. An allowlist was
+chosen over a denylist because M15 shows one overlooked directive — a second `listener` with
+`listener_allow_anonymous true` — opens an anonymous, ACL-free listener that sees every user's
+topics, and a bridge block is an unrelated second way to copy every topic out; a denylist depends
+on nobody missing a third. Extending the list is non-breaking; a needed directive costs an
+operator release. D15 ships in the same release as D13: authentication without it would ship
+with the bypass open. The `--test-config` init container of
+[ADR 0007](0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D10 remains for typos in
+values.
+
+**D16 — The operator ships no NetworkPolicy.** An opt-in policy and a default-on one were weighed;
+the owner chose neither after the exposure was stated: the broker port is reachable on the pod IP
+from every pod in the cluster, so password guessing and connection load from any workload are
+bounded by nothing but authentication, and enforcement would also have depended on the CNI. The
+README shows a NetworkPolicy users write themselves against the stable selector labels
+(`app.kubernetes.io/instance=<name>`, `app.kubernetes.io/managed-by=mosquitto-operator`), and the
+security documentation records the exposure. The ClusterRole gains no `networkpolicies` rule.
 
 ## Consequences
 
@@ -244,12 +317,14 @@ the right instinct. It loses on one measured fact: the deny happens *after* the 
 would look healthy and serve nobody, with the failure visible only in broker logs. **Failing closed
 is only a virtue when the failure is visible**, and here it is not — and there is no field in the
 current API a user could set to fix it. The right time to revisit this is D11, not before.
+*(Revisited 2026-10-05 with D11: D13 fails closed, and the failure is visible — a broker without
+users says so in its status, and every `MosquittoUser` reports its own `Ready` condition.)*
 
 ### Ship `allow_anonymous false` and require every user to write `spec.config`
 
 Same failure mode as above, plus it makes the minimal example in the README a non-working one.
 Rejected. It becomes the obvious posture once D11 exists, because then there is something to
-configure instead of an escape hatch.
+configure instead of an escape hatch. *(It did: D13, 2026-10-05.)*
 
 ### Generate a password file and a random credential per resource
 
@@ -262,7 +337,7 @@ have to reach clients somehow, which is the part nobody solves for the user.
 
 Rejected as scope, not as direction — D11 and D12 are that direction. Doing it here would mean
 choosing the plugin configuration shape before the generator, the tests and the image checks
-support it.
+support it. *(Taken 2026-10-05: the plugin shape was measured first, see the Status amendment.)*
 
 ### Parse and validate `spec.config` in the operator
 
@@ -274,7 +349,9 @@ either rejects valid configurations or blesses invalid ones.
 ### Restrict `spec.config` to an allowlist of modelled directives
 
 Rejected: it converts the escape hatch into a second, weaker API, and every option a user actually
-needs arrives as a feature request against the allowlist rather than against the CRD.
+needs arrives as a feature request against the allowlist rather than against the CRD. *(Chosen
+2026-10-05 as D15: once the broker carries authentication, an escape hatch that can open an
+anonymous listener (M15) is a bypass, and the feature-request cost is the price of closing it.)*
 
 ### An admission webhook constraining `spec.config`
 
