@@ -27,10 +27,12 @@ import (
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -38,6 +40,7 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	mkov1 "github.com/guided-traffic/mosquitto-operator/api/v1"
+	"github.com/guided-traffic/mosquitto-operator/internal/builder"
 	"github.com/guided-traffic/mosquitto-operator/internal/controller"
 )
 
@@ -50,6 +53,9 @@ var (
 	testCancel context.CancelFunc
 	k8sClient  client.Client
 	testEnv    *envtest.Environment
+	// apiReader reads past the manager cache, which holds Secrets without their
+	// data.
+	apiReader client.Reader
 
 	// namespaceCounter gives every test its own namespace. The manager reconciles
 	// everything in the cluster at once, so tests that shared a namespace would
@@ -64,6 +70,9 @@ const (
 	eventuallyTimeout  = 30 * time.Second
 	eventuallyInterval = 200 * time.Millisecond
 )
+
+// testReloaderImage is the --reloader-image of the reconciler under test.
+const testReloaderImage = "guidedtraffic/mosquitto-operator:integration"
 
 // TestMain starts envtest, registers the schemes, runs the controller manager and
 // then the tests.
@@ -93,17 +102,25 @@ func TestMain(m *testing.M) {
 	// The metrics listener is switched off: the suite asserts nothing about it,
 	// and controller-runtime would otherwise take :8080 on every interface for
 	// the lifetime of the test binary.
+	// Secrets are cached the way cmd/main.go caches them: stripped of their data,
+	// so the reconciler under test reads credentials only through the uncached
+	// reader, as in production.
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:  scheme.Scheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
+		Cache: cache.Options{ByObject: map[client.Object]cache.ByObject{
+			&corev1.Secret{}: {Transform: controller.StripSecret},
+		}},
 	})
 	if err != nil {
 		panic("failed to create the manager: " + err.Error())
 	}
 
 	reconciler := &controller.MosquittoReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		APIReader:     mgr.GetAPIReader(),
+		ReloaderImage: testReloaderImage,
 	}
 	if err := reconciler.SetupWithManager(mgr); err != nil {
 		panic("failed to set up the controller: " + err.Error())
@@ -122,6 +139,7 @@ func TestMain(m *testing.M) {
 	}
 
 	k8sClient = mgr.GetClient()
+	apiReader = mgr.GetAPIReader()
 
 	code := m.Run()
 
@@ -218,4 +236,26 @@ func isControlledBy(obj metav1.Object, name string) bool {
 		owner.Kind == "Mosquitto" &&
 		owner.APIVersion == mkov1.GroupVersion.String() &&
 		owner.Name == name
+}
+
+// brokerContainer returns the broker container of a broker StatefulSet's pod
+// template; the template also carries the reloader sidecar.
+func brokerContainer(t *testing.T, sts *appsv1.StatefulSet) corev1.Container {
+	t.Helper()
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == builder.BrokerContainerName {
+			return c
+		}
+	}
+	require.Fail(t, "no broker container", "%s/%s", sts.Namespace, sts.Name)
+	return corev1.Container{}
+}
+
+// readyCondition returns a Mosquitto's Ready condition; its status also
+// carries the Users condition.
+func readyCondition(t *testing.T, m *mkov1.Mosquitto) metav1.Condition {
+	t.Helper()
+	cond := meta.FindStatusCondition(m.Status.Conditions, mkov1.ConditionTypeReady)
+	require.NotNil(t, cond, "Mosquitto %s/%s has no Ready condition", m.Namespace, m.Name)
+	return *cond
 }

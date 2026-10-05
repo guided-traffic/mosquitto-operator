@@ -1,0 +1,19 @@
+{{- if eq .Values.secretAccess.mode "all" }}
+SECRET GRANT: this operator may read and write every Secret in every namespace of
+the cluster (secretAccess.mode=all, the default). It reads the credentials Secrets
+the MosquittoUser objects name and writes one rendered Secret per broker. Whoever
+controls the operator's ServiceAccount, image or process can therefore read and
+overwrite any Secret of the cluster, including GitOps deploy keys and the SOPS key.
+To narrow it, install with
+  --set secretAccess.mode=namespaces --set 'secretAccess.namespaces={<ns>,...}'
+See docs/adr/0014 D7 and docs/security/privilege-footprint.md.
+{{- else }}
+Secret grant: namespaces {{ join ", " .Values.secretAccess.namespaces }} only
+(secretAccess.mode=namespaces). A Mosquitto in any other namespace is refused with
+reason NamespaceNotGranted.
+{{- end }}
+{{- if not .Values.secretSecurity }}
+
+secretSecurity=false: a Mosquitto or a MosquittoUser may name any Secret of its
+namespace, so whoever may write one of them may read every Secret of that namespace.
+{{- end }}

@@ -3,12 +3,14 @@ package main
 import (
 	"flag"
 	"io"
+	"net/http"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -61,6 +63,9 @@ func TestBindOperatorFlags_Defaults(t *testing.T) {
 	assert.Equal(t, controller.DefaultMaxConcurrentReconciles, f.maxConcurrentReconciles,
 		"an operator started without the flag must not fall back to a single worker")
 	assert.False(t, f.secretSecurity, "ADR 0014 D10: the owner chose false as the default")
+	assert.Equal(t, "guidedtraffic/mosquitto-operator:dev", f.reloaderImage,
+		"without the flag the reloader runs the published image of this build")
+	assert.Empty(t, f.namespaces(), "ADR 0014 D7: the default grant is every namespace")
 }
 
 // TestBindOperatorFlags_AllFlagsParsed is the guard behind the chart: these are
@@ -76,6 +81,8 @@ func TestBindOperatorFlags_AllFlagsParsed(t *testing.T) {
 		"--max-concurrent-reconciles=8",
 		"--secret-security=false",
 		"--secret-security=true",
+		"--reloader-image=registry.example.com/mko:1.2.3",
+		"--secret-namespaces= home, ,iot ",
 	}))
 
 	assert.Equal(t, ":9090", f.metricsAddr)
@@ -84,6 +91,26 @@ func TestBindOperatorFlags_AllFlagsParsed(t *testing.T) {
 	assert.Equal(t, 8, f.maxConcurrentReconciles)
 	assert.True(t, f.secretSecurity,
 		"the last occurrence wins: the kustomize component appends --secret-security=true after the default")
+	assert.Equal(t, "registry.example.com/mko:1.2.3", f.reloaderImage)
+	assert.Equal(t, []string{"home", "iot"}, f.namespaces(), "blanks and empty entries are dropped")
+}
+
+// TestManagerOptions_SecretCache: the cache holds Secrets without their data,
+// and with --secret-namespaces only in those namespaces (ADR 0014 D7).
+func TestManagerOptions_SecretCache(t *testing.T) {
+	everywhere := managerOptions(&operatorFlags{}).Cache.ByObject
+	require.Len(t, everywhere, 1)
+	for obj, byObject := range everywhere {
+		assert.IsType(t, &corev1.Secret{}, obj)
+		assert.NotNil(t, byObject.Transform, "Secrets are cached stripped of their data")
+		assert.Nil(t, byObject.Namespaces, "every namespace without --secret-namespaces")
+	}
+
+	for _, byObject := range managerOptions(&operatorFlags{secretNamespaces: "home,iot"}).Cache.ByObject {
+		assert.Len(t, byObject.Namespaces, 2)
+		assert.Contains(t, byObject.Namespaces, "home")
+		assert.Contains(t, byObject.Namespaces, "iot")
+	}
 }
 
 // TestZapFlagsAreBound covers the other half of the chart's argument list: the
@@ -140,21 +167,44 @@ func TestNewReconciler(t *testing.T) {
 	mgr, err := ctrl.NewManager(&rest.Config{Host: "http://127.0.0.1:1"}, ctrl.Options{Scheme: scheme})
 	require.NoError(t, err)
 
-	r := newReconciler(mgr, &operatorFlags{maxConcurrentReconciles: 6, secretSecurity: true})
+	r := newReconciler(mgr, &operatorFlags{maxConcurrentReconciles: 6, secretSecurity: true,
+		reloaderImage: "mko:test", secretNamespaces: "home"})
 
 	assert.NotNil(t, r.Client, "without a client the reconciler can neither read nor write objects")
 	assert.Same(t, scheme, r.Scheme, "the scheme must be the manager's, or SetControllerReference fails")
 	assert.Equal(t, 6, r.MaxConcurrentReconciles,
 		"the flag is only worth having if it reaches the reconciler")
 	assert.True(t, r.SecretSecurity)
+	assert.Equal(t, "mko:test", r.ReloaderImage)
+	assert.Equal(t, []string{"home"}, r.SecretNamespaces)
 	assert.Same(t, mgr.GetAPIReader(), r.APIReader,
 		"the Secret check reads uncached, or it needs list and watch on every Secret")
 }
 
+// staticMapper answers the REST mapping of every kind the operator watches
+// without a discovery call, so the field indexes register against a manager
+// whose API server does not exist.
+func staticMapper(*rest.Config, *http.Client) (meta.RESTMapper, error) {
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{
+		mkov1.GroupVersion.WithKind("Mosquitto"),
+		mkov1.GroupVersion.WithKind("MosquittoUser"),
+		corev1.SchemeGroupVersion.WithKind("ConfigMap"),
+		corev1.SchemeGroupVersion.WithKind("Service"),
+		corev1.SchemeGroupVersion.WithKind("Secret"),
+		appsv1.SchemeGroupVersion.WithKind("StatefulSet"),
+	} {
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	return mapper, nil
+}
+
 // TestSetupWithManagerRegistersTheController covers the watch wiring: a typo in
-// an Owns() type shows up here rather than as a controller that never wakes.
+// an Owns() type or an index shows up here rather than as a controller that
+// never wakes.
 func TestSetupWithManagerRegistersTheController(t *testing.T) {
-	mgr, err := ctrl.NewManager(&rest.Config{Host: "http://127.0.0.1:1"}, ctrl.Options{Scheme: scheme})
+	mgr, err := ctrl.NewManager(&rest.Config{Host: "http://127.0.0.1:1"},
+		ctrl.Options{Scheme: scheme, MapperProvider: staticMapper})
 	require.NoError(t, err)
 
 	require.NoError(t, newReconciler(mgr, &operatorFlags{}).SetupWithManager(mgr))

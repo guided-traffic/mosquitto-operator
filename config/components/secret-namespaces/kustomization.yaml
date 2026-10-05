@@ -1,0 +1,38 @@
+# secretAccess mode "namespaces" for the kustomize install path
+# (docs/adr/0014 D7, docs/adr/0006 D9): the Secret grant leaves the ClusterRole
+# and becomes a Role and RoleBinding per namespace, and the operator caches and
+# touches Secrets in those namespaces only. The Helm chart's equivalent is
+# secretAccess.mode: namespaces with secretAccess.namespaces.
+#
+# The namespace is a placeholder, "mosquitto": copy secret-role.yaml once per
+# namespace your brokers live in, and list the same namespaces in the
+# --secret-namespaces patch below, comma-separated. Use it from an overlay of
+# your own:
+#
+#   resources:
+#     - <this repository>/config/default
+#   components:
+#     - <this repository>/config/components/secret-namespaces
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+resources:
+  - secret-role.yaml
+patches:
+  # Removes "secrets" from the first rule of the generated ClusterRole, where
+  # controller-gen merges it with configmaps and services. The test operation
+  # makes the build fail instead of removing something else if the generated
+  # rule ever changes shape.
+  - target:
+      kind: ClusterRole
+    patch: |-
+      - op: test
+        path: /rules/0/resources/1
+        value: secrets
+      - op: remove
+        path: /rules/0/resources/1
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --secret-namespaces=mosquitto

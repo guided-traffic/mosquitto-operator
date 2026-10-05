@@ -167,6 +167,12 @@ func HeadlessServiceName(m *mkov1.Mosquitto) string {
 	return fmt.Sprintf("%s-headless", m.Name)
 }
 
+// AuthSecretName returns the name of the Secret holding a broker's rendered
+// credentials (ADR 0014 D2).
+func AuthSecretName(m *mkov1.Mosquitto) string {
+	return fmt.Sprintf("%s-auth", m.Name)
+}
+
 // ClientServiceName returns the name of the ClusterIP Service clients connect to.
 func ClientServiceName(m *mkov1.Mosquitto) string {
 	return m.Name

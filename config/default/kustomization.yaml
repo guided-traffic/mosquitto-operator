@@ -5,3 +5,20 @@ namePrefix: mosquitto-operator-
 resources:
   - ../rbac
   - ../manager
+
+# --reloader-image follows the manager's image: whatever `kustomize edit set
+# image controller=...` set in config/manager is copied into the value of the
+# third argument (docs/adr/0014 D6). test/rbacparity checks that the rendered
+# flag names the rendered image.
+replacements:
+  - source:
+      kind: Deployment
+      fieldPath: spec.template.spec.containers.[name=manager].image
+    targets:
+      - select:
+          kind: Deployment
+        fieldPaths:
+          - spec.template.spec.containers.[name=manager].args.2
+        options:
+          delimiter: "="
+          index: 1

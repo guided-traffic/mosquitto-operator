@@ -3,9 +3,11 @@
 package e2e
 
 // The config-check init container runs the broker binary of the pod's own image
-// in --test-config mode before the broker starts (ADR 0007 D10). A directive
-// the broker does not know stops the pod there, with the broker's own message,
-// file and line - not in a crash loop of the broker container.
+// in --test-config mode before the broker starts (ADR 0007 D10). A value the
+// broker refuses stops the pod there, with the broker's own message, file and
+// line - not in a crash loop of the broker container. A misspelled directive
+// never gets this far: the spec.config allowlist refuses it before anything is
+// written (ADR 0008 D15).
 
 import (
 	"context"
@@ -25,10 +27,12 @@ import (
 const (
 	configCheckContainer = "config-check"
 	configPath           = "/mosquitto/config/mosquitto.conf"
-	misspelledDirective  = "max_queued_mesages"
+	// refusedLine is an allowlisted directive with a value the broker refuses
+	// (docs/developer/broker-behaviour.md M8).
+	refusedLine = "max_qos 7"
 )
 
-// TestE2E_ConfigCheck_StopsATypoBeforeTheBroker: a misspelled directive in
+// TestE2E_ConfigCheck_StopsATypoBeforeTheBroker: a value the broker refuses in
 // spec.config leaves the broker container unstarted, and the init container's
 // log names the directive and the line of the generated file it sits on.
 func TestE2E_ConfigCheck_StopsATypoBeforeTheBroker(t *testing.T) {
@@ -43,7 +47,7 @@ func TestE2E_ConfigCheck_StopsATypoBeforeTheBroker(t *testing.T) {
 	tc.createMosquitto(t, ns, buildMosquittoObject(name, ns, map[string]interface{}{
 		"replicas": int64(1),
 		"image":    testimages.Default(),
-		"config":   misspelledDirective + " 100\n",
+		"config":   refusedLine + "\n",
 	}))
 	defer tc.deleteMosquitto(t, ns, name)
 
@@ -57,7 +61,7 @@ func TestE2E_ConfigCheck_StopsATypoBeforeTheBroker(t *testing.T) {
 			return false
 		}
 		for i, l := range strings.Split(cm.Data["mosquitto.conf"], "\n") {
-			if strings.HasPrefix(l, misspelledDirective) {
+			if l == refusedLine {
 				line = i + 1
 			}
 		}
@@ -91,7 +95,7 @@ func TestE2E_ConfigCheck_StopsATypoBeforeTheBroker(t *testing.T) {
 	// still holds: between restarts the current container is the last
 	// terminated one, and on the CI runners the previous one has been observed
 	// as "unable to retrieve container logs" for a moment after a restart.
-	wantMessage := fmt.Sprintf("Error: Unknown configuration variable '%s'.", misspelledDirective)
+	wantMessage := "Error: 'max_qos' must be between 0 and 2 inclusive."
 	var logs string
 	err = wait.PollUntilContextTimeout(context.Background(), pollInterval, testTimeout, true,
 		func(ctx context.Context) (bool, error) {

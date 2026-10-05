@@ -28,6 +28,17 @@ const (
 	// in --test-config mode against the generated file before the broker starts.
 	ConfigCheckContainerName = "config-check"
 
+	// AuthInitContainerName is the init container that copies the rendered
+	// credentials into the broker's directory on every start (ADR 0014 D4).
+	AuthInitContainerName = "auth-init"
+	// ReloaderContainerName is the sidecar that copies a change of the rendered
+	// credentials in and signals the broker (ADR 0014 D4-D6).
+	ReloaderContainerName = "reloader"
+
+	// OperatorBinary is where the operator image keeps its binary; auth-init and
+	// the reloader run its "reload" entry point.
+	OperatorBinary = "/app/manager"
+
 	// ConfigVolumeName is the volume carrying the generated mosquitto.conf.
 	ConfigVolumeName = "config"
 	// TLSVolumeName is the volume carrying the referenced TLS secret.
@@ -43,6 +54,13 @@ const (
 	// every retained message and session with nothing
 	// (docs/developer/broker-behaviour.md, M19).
 	ConfigCheckScratchVolumeName = "config-check-scratch"
+	// AuthSecretVolumeName mounts the rendered Secret <name>-auth whole, without
+	// subPath, so the kubelet refreshes it (ADR 0014 D4).
+	AuthSecretVolumeName = "auth-secret"
+	// AuthVolumeName is the emptyDir the broker reads its credentials from.
+	AuthVolumeName = "auth"
+	// AuthSecretMountPath is where auth-init and the reloader see the Secret.
+	AuthSecretMountPath = "/mosquitto/auth-secret" // #nosec G101 -- a mount path, not a credential
 
 	// AnnotationPodSpecHash carries a digest of the pod spec the operator built.
 	// The StatefulSet controller rolls the pods when the template changes, and
@@ -55,6 +73,10 @@ const (
 	// does not restart anything, so without this annotation a config change would
 	// sit in the ConfigMap and never reach a running broker.
 	AnnotationConfigHash = "mko.gtrfc.com/config-hash"
+
+	// AnnotationDefaultContainer is kubectl's own annotation naming the
+	// container kubectl logs and kubectl exec use when none is given.
+	AnnotationDefaultContainer = "kubectl.kubernetes.io/default-container"
 
 	// AnnotationAppliedPodLabels and AnnotationAppliedPodAnnotations sit on the
 	// StatefulSet object, not on its pods, and list the keys of spec.podLabels and
@@ -78,7 +100,33 @@ const (
 	// Secret volume to. It is written out so the desired object matches what the
 	// API server stores, which keeps the pod-spec hash stable across passes.
 	volumeDefaultMode int32 = 0o644
+
+	// authSecretMode is 0440 on the mount of <name>-auth: the files are
+	// root-owned and the group is the pod's fsGroup 1883, so auth-init and the
+	// reloader read them and nobody else in the pod has a reason to.
+	authSecretMode int32 = 0o440
 )
+
+// PodOptions is what the broker pod needs from the operator's own
+// configuration rather than from the Mosquitto.
+type PodOptions struct {
+	// ReloaderImage is the operator's own image, which auth-init and the
+	// reloader run (ADR 0014 D6): --reloader-image.
+	ReloaderImage string
+}
+
+// reloaderResources bound the two containers of the operator image in a broker
+// pod. They copy two small files and poll; the requests let a namespace whose
+// quota demands them admit the pod.
+var reloaderResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("10m"),
+		corev1.ResourceMemory: resource.MustParse("32Mi"),
+	},
+	Limits: corev1.ResourceList{
+		corev1.ResourceMemory: resource.MustParse("64Mi"),
+	},
+}
 
 // ResolveImage returns the broker image the pods run: the spec value, or the
 // pinned default when the spec leaves it empty.
@@ -91,11 +139,15 @@ func ResolveImage(m *mkov1.Mosquitto) string {
 
 // BuildStatefulSet builds the broker StatefulSet.
 //
-// It fails only on an unparsable spec.storage.size: that value reaches the PVC
+// It fails on an unparsable spec.storage.size: that value reaches the PVC
 // template, which is immutable once created, so a wrong quantity is worth a
-// visible reconcile failure rather than a silently substituted default.
-func BuildStatefulSet(m *mkov1.Mosquitto) (*appsv1.StatefulSet, error) {
-	podSpec := buildPodSpec(m)
+// visible reconcile failure rather than a silently substituted default. And it
+// fails without a reloader image, which only a misconfigured operator lacks.
+func BuildStatefulSet(m *mkov1.Mosquitto, opts PodOptions) (*appsv1.StatefulSet, error) {
+	if opts.ReloaderImage == "" {
+		return nil, fmt.Errorf("no reloader image is configured (--reloader-image)")
+	}
+	podSpec := buildPodSpec(m, opts)
 	labels := common.BaseLabels(m, ResolveImage(m))
 	replicas := m.Spec.Replicas
 
@@ -124,6 +176,8 @@ func BuildStatefulSet(m *mkov1.Mosquitto) (*appsv1.StatefulSet, error) {
 					Annotations: common.MergeLabels(m.Spec.PodAnnotations, map[string]string{
 						AnnotationPodSpecHash: hashOf(podSpec),
 						AnnotationConfigHash:  hashOf(GenerateMosquittoConf(m)),
+						// kubectl logs and exec pick the broker, not the reloader.
+						AnnotationDefaultContainer: BrokerContainerName,
 					}),
 				},
 				Spec: podSpec,
@@ -143,7 +197,7 @@ func BuildStatefulSet(m *mkov1.Mosquitto) (*appsv1.StatefulSet, error) {
 }
 
 // buildPodSpec constructs the PodSpec of a broker pod.
-func buildPodSpec(m *mkov1.Mosquitto) corev1.PodSpec {
+func buildPodSpec(m *mkov1.Mosquitto, opts PodOptions) corev1.PodSpec {
 	volumes := []corev1.Volume{
 		{
 			Name: ConfigVolumeName,
@@ -153,6 +207,19 @@ func buildPodSpec(m *mkov1.Mosquitto) corev1.PodSpec {
 					DefaultMode:          ptr.To(volumeDefaultMode),
 				},
 			},
+		},
+		{
+			Name: AuthSecretVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName:  common.AuthSecretName(m),
+					DefaultMode: ptr.To(authSecretMode),
+				},
+			},
+		},
+		{
+			Name:         AuthVolumeName,
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
 		},
 	}
 
@@ -199,10 +266,19 @@ func buildPodSpec(m *mkov1.Mosquitto) corev1.PodSpec {
 			// inherits it instead of needing its own copy.
 			SeccompProfile: &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
 		},
-		InitContainers: []corev1.Container{buildConfigCheckContainer(m)},
-		Containers:     []corev1.Container{buildBrokerContainer(m)},
-		Volumes:        volumes,
-		Affinity:       BuildPodAntiAffinity(m),
+		// The reloader signals the broker across the pod's process namespace; it
+		// shares the broker's uid, so it needs no capability (ADR 0014 D4, M22).
+		ShareProcessNamespace: ptr.To(true),
+		InitContainers: []corev1.Container{
+			buildReloadContainer(AuthInitContainerName, opts, "--once"),
+			buildConfigCheckContainer(m),
+		},
+		Containers: []corev1.Container{
+			buildBrokerContainer(m),
+			buildReloadContainer(ReloaderContainerName, opts),
+		},
+		Volumes:  volumes,
+		Affinity: BuildPodAntiAffinity(m),
 	}
 }
 
@@ -244,11 +320,34 @@ func buildConfigCheckContainer(m *mkov1.Mosquitto) corev1.Container {
 	}
 }
 
+// buildReloadContainer constructs auth-init (with --once) or the reloader
+// sidecar: the operator image's "reload" entry point, between the Secret mount
+// and the broker's directory, with the broker container's security context.
+func buildReloadContainer(name string, opts PodOptions, extraArgs ...string) corev1.Container {
+	args := append([]string{"reload",
+		"--source", AuthSecretMountPath,
+		"--target", AuthMountPath,
+	}, extraArgs...)
+	return corev1.Container{
+		Name:    name,
+		Image:   opts.ReloaderImage,
+		Command: []string{OperatorBinary},
+		Args:    args,
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: AuthSecretVolumeName, MountPath: AuthSecretMountPath, ReadOnly: true},
+			{Name: AuthVolumeName, MountPath: AuthMountPath},
+		},
+		Resources:       reloaderResources,
+		SecurityContext: containerSecurityContext(),
+	}
+}
+
 // buildBrokerContainer constructs the broker container of a broker pod.
 func buildBrokerContainer(m *mkov1.Mosquitto) corev1.Container {
 	volumeMounts := []corev1.VolumeMount{
 		{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
 		{Name: DataVolumeName, MountPath: DataMountPath},
+		{Name: AuthVolumeName, MountPath: AuthMountPath, ReadOnly: true},
 	}
 	if m.IsTLSEnabled() {
 		volumeMounts = append(volumeMounts, corev1.VolumeMount{

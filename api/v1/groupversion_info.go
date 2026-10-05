@@ -24,6 +24,8 @@ func addKnownTypes(scheme *runtime.Scheme) error {
 	scheme.AddKnownTypes(GroupVersion,
 		&Mosquitto{},
 		&MosquittoList{},
+		&MosquittoUser{},
+		&MosquittoUserList{},
 	)
 	metav1.AddToGroupVersion(scheme, GroupVersion)
 	return nil

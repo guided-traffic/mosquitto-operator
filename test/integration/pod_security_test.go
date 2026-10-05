@@ -37,7 +37,7 @@ func restrictedNamespace(t *testing.T) string {
 func brokerPod(t *testing.T, m *mkov1.Mosquitto) *corev1.Pod {
 	t.Helper()
 
-	sts, err := builder.BuildStatefulSet(m)
+	sts, err := builder.BuildStatefulSet(m, builder.PodOptions{ReloaderImage: testReloaderImage})
 	require.NoError(t, err)
 	spec := *sts.Spec.Template.Spec.DeepCopy()
 	for _, claim := range sts.Spec.VolumeClaimTemplates {

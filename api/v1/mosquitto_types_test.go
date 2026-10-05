@@ -119,6 +119,8 @@ func TestAddToSchemeRegistersBothKinds(t *testing.T) {
 
 	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("Mosquitto")))
 	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("MosquittoList")))
+	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("MosquittoUser")))
+	assert.True(t, scheme.Recognizes(GroupVersion.WithKind("MosquittoUserList")))
 	assert.Equal(t, "mko.gtrfc.com", GroupVersion.Group)
 	assert.Equal(t, "v1", GroupVersion.Version)
 }
@@ -182,4 +184,26 @@ func TestSubTypeDeepCopy(t *testing.T) {
 		assert.Equal(t, "broker", list.Items[0].Name)
 		assert.Nil(t, (&MosquittoList{}).DeepCopy().Items)
 	})
+}
+
+func TestMosquittoUser_KeysFallBackToTheBasicAuthDefaults(t *testing.T) {
+	u := &MosquittoUser{}
+	assert.Equal(t, "username", u.UsernameKey())
+	assert.Equal(t, "password", u.PasswordKey())
+
+	u.Spec.CredentialsSecret.UsernameKey = "user"
+	u.Spec.CredentialsSecret.PasswordKey = "pass"
+	assert.Equal(t, "user", u.UsernameKey())
+	assert.Equal(t, "pass", u.PasswordKey())
+}
+
+func TestMosquittoUser_DeepCopyIsIndependent(t *testing.T) {
+	u := &MosquittoUser{Spec: MosquittoUserSpec{ACLs: []MosquittoACL{{Topic: "home/#", Access: AccessRead}}}}
+	c := u.DeepCopy()
+	c.Spec.ACLs[0].Topic = "other/#"
+	assert.Equal(t, "home/#", u.Spec.ACLs[0].Topic)
+	_, ok := c.DeepCopyObject().(*MosquittoUser)
+	assert.True(t, ok)
+	_, ok = (&MosquittoUserList{Items: []MosquittoUser{*u}}).DeepCopyObject().(*MosquittoUserList)
+	assert.True(t, ok)
 }

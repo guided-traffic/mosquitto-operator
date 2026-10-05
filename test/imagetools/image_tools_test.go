@@ -100,13 +100,28 @@ func brokerCommand(t *testing.T) []string {
 	sts, err := builder.BuildStatefulSet(&mkov1.Mosquitto{
 		ObjectMeta: metav1.ObjectMeta{Name: "probe", Namespace: "probe"},
 		Spec:       mkov1.MosquittoSpec{Replicas: 1},
-	})
+	}, builder.PodOptions{ReloaderImage: "probe"})
 	require.NoError(t, err, "the builder could not produce a StatefulSet to read the command from")
-	require.Len(t, sts.Spec.Template.Spec.Containers, 1)
 
-	command := sts.Spec.Template.Spec.Containers[0].Command
-	require.NotEmpty(t, command, "the broker container names no command")
-	return command
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == builder.BrokerContainerName {
+			require.NotEmpty(t, c.Command, "the broker container names no command")
+			return c.Command
+		}
+	}
+	require.Fail(t, "the StatefulSet has no broker container")
+	return nil
+}
+
+// TestImageProvidesTheFilePlugins: the generated configuration loads the
+// password-file and acl-file plugins by absolute path (ADR 0014 D1); an image
+// without them would fail every broker at start.
+func TestImageProvidesTheFilePlugins(t *testing.T) {
+	t.Parallel()
+
+	script := fmt.Sprintf(`missing=""; for f in %s %s; do [ -f "$f" ] || missing="$missing $f"; done; `+
+		`[ -z "$missing" ] && echo OK || echo "MISSING:$missing"`, builder.PasswordPluginPath, builder.ACLPluginPath)
+	assert.Equal(t, "OK", runInImage(t, testimages.MosquittoImage, script))
 }
 
 // TestImageProvidesEveryExecutedTool is the check the whole package exists for.

@@ -14,12 +14,27 @@ import (
 	"github.com/guided-traffic/mosquitto-operator/internal/common"
 )
 
+// testOptions are the pod options every builder test uses.
+var testOptions = PodOptions{ReloaderImage: "guidedtraffic/mosquitto-operator:test"}
+
 // mustBuild builds the StatefulSet and fails the test if the spec is unbuildable.
 func mustBuild(t *testing.T, m *mkov1.Mosquitto) *appsv1.StatefulSet {
 	t.Helper()
-	sts, err := BuildStatefulSet(m)
+	sts, err := BuildStatefulSet(m, testOptions)
 	require.NoError(t, err)
 	return sts
+}
+
+// initContainer returns the init container with the given name, or fails.
+func initContainer(t *testing.T, spec corev1.PodSpec, name string) corev1.Container {
+	t.Helper()
+	for _, c := range spec.InitContainers {
+		if c.Name == name {
+			return c
+		}
+	}
+	require.Failf(t, "no such init container", "%s", name)
+	return corev1.Container{}
 }
 
 // containerVolumeMount returns the mount with the given name, or nil.
@@ -331,7 +346,7 @@ func TestBuildStatefulSet_StorageClassName(t *testing.T) {
 // substituting a default would silently give the user a volume they did not ask
 // for.
 func TestBuildStatefulSet_UnparsableStorageSizeFails(t *testing.T) {
-	sts, err := BuildStatefulSet(newMosquitto(withStorage("5 gigabytes")))
+	sts, err := BuildStatefulSet(newMosquitto(withStorage("5 gigabytes")), testOptions)
 
 	require.Error(t, err)
 	assert.Nil(t, sts)
@@ -566,8 +581,7 @@ func TestBuildStatefulSet_ConfigCheckInitContainer(t *testing.T) {
 		m := newMosquitto(append(mutators, func(m *mkov1.Mosquitto) { m.Spec.Image = "eclipse-mosquitto:2.1.1-alpine" })...)
 		spec := mustBuild(t, m).Spec.Template.Spec
 
-		require.Len(t, spec.InitContainers, 1)
-		check := spec.InitContainers[0]
+		check := initContainer(t, spec, ConfigCheckContainerName)
 		assert.Equal(t, ConfigCheckContainerName, check.Name)
 		assert.Equal(t, "eclipse-mosquitto:2.1.1-alpine", check.Image, "the check runs the image the broker runs")
 		assert.Equal(t, []string{"/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf", "--test-config"}, check.Command)
@@ -584,4 +598,92 @@ func TestBuildStatefulSet_ConfigCheckInitContainer(t *testing.T) {
 		require.NotNil(t, podVolume(spec, ConfigCheckScratchVolumeName))
 		assert.NotNil(t, podVolume(spec, ConfigCheckScratchVolumeName).EmptyDir)
 	}
+}
+
+// containerNamed returns the container with the given name, or fails.
+func containerNamed(t *testing.T, spec corev1.PodSpec, name string) corev1.Container {
+	t.Helper()
+	for _, c := range spec.Containers {
+		if c.Name == name {
+			return c
+		}
+	}
+	require.Failf(t, "no such container", "%s", name)
+	return corev1.Container{}
+}
+
+// TestBuildStatefulSet_TheCredentialsPath is ADR 0014 D4-D6 in the pod spec:
+// the rendered Secret mounted whole, copied into an emptyDir by auth-init on
+// every start and by the reloader on every change, both from the operator's own
+// image, signalling across a shared process namespace.
+func TestBuildStatefulSet_TheCredentialsPath(t *testing.T) {
+	m := newMosquitto()
+	spec := mustBuild(t, m).Spec.Template.Spec
+
+	require.NotNil(t, spec.ShareProcessNamespace)
+	assert.True(t, *spec.ShareProcessNamespace, "the reloader signals the broker across the pod's process namespace")
+
+	secretVolume := podVolume(spec, AuthSecretVolumeName)
+	require.NotNil(t, secretVolume)
+	require.NotNil(t, secretVolume.Secret)
+	assert.Equal(t, "broker-auth", secretVolume.Secret.SecretName)
+	assert.Equal(t, ptr.To(int32(0o440)), secretVolume.Secret.DefaultMode)
+	require.NotNil(t, podVolume(spec, AuthVolumeName))
+	assert.NotNil(t, podVolume(spec, AuthVolumeName).EmptyDir)
+
+	assert.Equal(t, []string{AuthInitContainerName, ConfigCheckContainerName}, []string{spec.InitContainers[0].Name, spec.InitContainers[1].Name},
+		"the copy exists before anything reads the configuration")
+	for name, wantArgs := range map[string][]string{
+		AuthInitContainerName: {"reload", "--source", "/mosquitto/auth-secret", "--target", "/mosquitto/auth", "--once"},
+		ReloaderContainerName: {"reload", "--source", "/mosquitto/auth-secret", "--target", "/mosquitto/auth"},
+	} {
+		var c corev1.Container
+		if name == AuthInitContainerName {
+			c = initContainer(t, spec, name)
+		} else {
+			c = containerNamed(t, spec, name)
+		}
+		assert.Equal(t, testOptions.ReloaderImage, c.Image, "%s runs the operator's own image (D6)", name)
+		assert.Equal(t, []string{"/app/manager"}, c.Command)
+		assert.Equal(t, wantArgs, c.Args)
+		assert.Equal(t, containerSecurityContext(), c.SecurityContext, "%s", name)
+		require.NotNil(t, containerVolumeMount(c, AuthSecretVolumeName))
+		assert.True(t, containerVolumeMount(c, AuthSecretVolumeName).ReadOnly)
+		require.NotNil(t, containerVolumeMount(c, AuthVolumeName))
+		assert.False(t, containerVolumeMount(c, AuthVolumeName).ReadOnly, "%s writes the copy", name)
+		assert.NotEmpty(t, c.Resources.Requests)
+	}
+
+	broker := containerNamed(t, spec, BrokerContainerName)
+	auth := containerVolumeMount(broker, AuthVolumeName)
+	require.NotNil(t, auth)
+	assert.Equal(t, "/mosquitto/auth", auth.MountPath)
+	assert.True(t, auth.ReadOnly, "the broker reads the copy; only the reloader writes it")
+	assert.Nil(t, containerVolumeMount(broker, AuthSecretVolumeName), "the broker never reads the Secret mount itself")
+}
+
+func TestBuildStatefulSet_TheReloaderImageRollsThePods(t *testing.T) {
+	m := newMosquitto()
+	before, err := BuildStatefulSet(m, PodOptions{ReloaderImage: "guidedtraffic/mosquitto-operator:0.2.0"})
+	require.NoError(t, err)
+	after, err := BuildStatefulSet(m, PodOptions{ReloaderImage: "guidedtraffic/mosquitto-operator:0.2.1"})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, before.Spec.Template.Annotations[AnnotationPodSpecHash], after.Spec.Template.Annotations[AnnotationPodSpecHash],
+		"every operator release rolls every broker, the cost ADR 0014 D6 accepted")
+
+	_, err = BuildStatefulSet(m, PodOptions{})
+	assert.ErrorContains(t, err, "--reloader-image")
+}
+
+func TestBuildAuthSecret(t *testing.T) {
+	m := newMosquitto()
+	data := map[string][]byte{"passwd": []byte("a:$7$x\n"), "acl": []byte("user a\n")}
+	secret := BuildAuthSecret(m, data)
+
+	assert.Equal(t, "broker-auth", secret.Name)
+	assert.Equal(t, "messaging", secret.Namespace)
+	assert.Equal(t, common.BaseLabels(m, DefaultImage), secret.Labels)
+	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
+	assert.Equal(t, data, secret.Data)
 }

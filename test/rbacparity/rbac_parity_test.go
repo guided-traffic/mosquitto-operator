@@ -141,20 +141,31 @@ func authority(t *testing.T, manifest string) map[grant][]string {
 // installSetting is one install-time setting both paths must render alike: the
 // Helm values that select it and the kustomize components that do.
 type installSetting struct {
-	name           string
-	helmSet        []string
-	components     []string
-	secretSecurity string
+	name             string
+	helmSet          []string
+	components       []string
+	secretSecurity   string
+	secretNamespaces string
 }
 
 var installSettings = []installSetting{
 	{name: "defaults", secretSecurity: "false"},
 	{
-		// docs/adr/0014 D10: the switch adds get on secrets, on both paths.
+		// docs/adr/0014 D10: the switch changes the flag and nothing else.
 		name:           "secretSecurity",
 		helmSet:        []string{"secretSecurity=true"},
 		components:     []string{"config/components/secret-security"},
 		secretSecurity: "true",
+	},
+	{
+		// docs/adr/0014 D7, docs/adr/0006 D9: the Secret grant leaves the
+		// ClusterRole for a Role in each listed namespace. The kustomize
+		// component's placeholder namespace is "mosquitto".
+		name:             "secretNamespaces",
+		helmSet:          []string{"secretAccess.mode=namespaces", "secretAccess.namespaces={mosquitto}"},
+		components:       []string{"config/components/secret-namespaces"},
+		secretSecurity:   "false",
+		secretNamespaces: "mosquitto",
 	},
 }
 
@@ -211,6 +222,37 @@ func effectiveFlag(t *testing.T, manifest, name string) string {
 	return value
 }
 
+// managerImage returns the image of the manager container of a rendered
+// manifest.
+func managerImage(t *testing.T, manifest string) string {
+	t.Helper()
+	for _, doc := range strings.Split(manifest, "\n---") {
+		var deployment struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name  string `json:"name"`
+							Image string `json:"image"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if yaml.Unmarshal([]byte(doc), &deployment) != nil || deployment.Kind != "Deployment" {
+			continue
+		}
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			if container.Name == "manager" {
+				return container.Image
+			}
+		}
+	}
+	require.Fail(t, "no manager container in the rendered manifest")
+	return ""
+}
+
 func TestRBACParity_BothInstallPathsGrantTheSameAuthority(t *testing.T) {
 	root := repoRoot(t)
 
@@ -234,10 +276,14 @@ func TestRBACParity_BothInstallPathsGrantTheSameAuthority(t *testing.T) {
 
 			// The rule is only half of a setting: the flag that makes the operator
 			// use it has to reach the manager on both paths as well.
-			require.Equal(t, setting.secretSecurity, effectiveFlag(t, helmOut, "secret-security"),
-				"the chart passes the wrong --secret-security")
-			require.Equal(t, setting.secretSecurity, effectiveFlag(t, kustomizeOut, "secret-security"),
-				"kustomize passes the wrong --secret-security")
+			for path, out := range map[string]string{"the chart": helmOut, "kustomize": kustomizeOut} {
+				require.Equal(t, setting.secretSecurity, effectiveFlag(t, out, "secret-security"),
+					"%s passes the wrong --secret-security", path)
+				require.Equal(t, setting.secretNamespaces, effectiveFlag(t, out, "secret-namespaces"),
+					"%s passes the wrong --secret-namespaces", path)
+				require.Equal(t, managerImage(t, out), effectiveFlag(t, out, "reloader-image"),
+					"%s: auth-init and the reloader must run the operator's own image (docs/adr/0014 D6)", path)
+			}
 		})
 	}
 }

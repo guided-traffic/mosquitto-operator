@@ -74,6 +74,29 @@ const (
 // and it is present on every Mosquitto once one pass has completed.
 const ConditionTypeReady = "Ready"
 
+// ConditionTypeUsers says whom the broker accepts: True with the number of
+// MosquittoUser objects rendered into its credentials, False when that number
+// is zero - the broker requires a login and then accepts nobody (ADR 0008
+// D13). It never affects Ready: a user's failure is the user's (ADR 0012 D6).
+const ConditionTypeUsers = "Users"
+
+// Reasons of the Users condition.
+const (
+	ReasonUsersAccepted = "UsersAccepted"
+	ReasonNoUsers       = "NoUsers"
+)
+
+// Reasons of a Mosquitto's Ready condition that refuse the whole pass.
+const (
+	// ReasonConfigDirectiveRefused: a line of spec.config names a directive
+	// outside the allowlist (ADR 0008 D15). Nothing is written.
+	ReasonConfigDirectiveRefused = "ConfigDirectiveRefused"
+	// ReasonNamespaceNotGranted: the operator runs with --secret-namespaces and
+	// this namespace is not among them, so it can neither read the users'
+	// Secrets nor write the broker's (ADR 0014 D7). Nothing is written.
+	ReasonNamespaceNotGranted = "NamespaceNotGranted"
+)
+
 // MosquittoSpec defines the desired state of a Mosquitto broker.
 //
 // Authentication posture, because this is the surprising part: the generated
@@ -198,8 +221,13 @@ type MosquittoStatus struct {
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 	// ObservedGeneration is the .metadata.generation the operator last acted on.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Users is how many MosquittoUser objects are rendered into the broker's
+	// credentials. Zero means the broker accepts nobody.
+	// +optional
+	Users int32 `json:"users"`
 	// Conditions follows the standard Kubernetes condition convention.
-	// Type "Ready" is always present once a pass completed.
+	// Type "Ready" is always present once a pass completed; type "Users" once a
+	// pass rendered the users.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -212,6 +240,7 @@ type MosquittoStatus struct {
 // +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".spec.replicas",description="Desired number of broker pods"
 // +kubebuilder:printcolumn:name="Ready",type="integer",JSONPath=".status.readyReplicas",description="Number of ready broker pods"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Current phase"
+// +kubebuilder:printcolumn:name="Users",type="integer",JSONPath=".status.users",description="Users the broker accepts"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // Mosquitto is the Schema for the mosquittoes API.

@@ -202,3 +202,7 @@ func TestRemovedKeys(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthSecretName(t *testing.T) {
+	assert.Equal(t, "broker-auth", AuthSecretName(testMosquitto()))
+}

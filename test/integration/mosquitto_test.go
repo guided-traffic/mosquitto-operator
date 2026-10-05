@@ -76,8 +76,7 @@ func TestIntegration_Reconcile_CreatesEveryOwnedObject(t *testing.T) {
 		assert.Equal(t, int32(2), *sts.Spec.Replicas)
 		assert.Equal(t, name+"-headless", sts.Spec.ServiceName)
 
-		require.Len(t, sts.Spec.Template.Spec.Containers, 1)
-		assert.Equal(t, fixtureImage, sts.Spec.Template.Spec.Containers[0].Image)
+		assert.Equal(t, fixtureImage, brokerContainer(t, sts).Image)
 	})
 
 	t.Run("the phase reports the missing pods rather than success", func(t *testing.T) {
@@ -90,9 +89,7 @@ func TestIntegration_Reconcile_CreatesEveryOwnedObject(t *testing.T) {
 		assert.Equal(t, int32(0), m.Status.ReadyReplicas)
 		assert.Equal(t, m.Generation, m.Status.ObservedGeneration)
 
-		require.Len(t, m.Status.Conditions, 1)
-		assert.Equal(t, mkov1.ConditionTypeReady, m.Status.Conditions[0].Type)
-		assert.Equal(t, metav1.ConditionFalse, m.Status.Conditions[0].Status)
+		assert.Equal(t, metav1.ConditionFalse, readyCondition(t, m).Status)
 	})
 }
 
@@ -123,9 +120,8 @@ func TestIntegration_Reconcile_ReadyReplicasDriveThePhase(t *testing.T) {
 
 	m := waitForPhase(t, ns, name, mkov1.PhaseReady)
 	assert.Equal(t, int32(1), m.Status.ReadyReplicas)
-	require.Len(t, m.Status.Conditions, 1)
-	assert.Equal(t, metav1.ConditionTrue, m.Status.Conditions[0].Status)
-	assert.Equal(t, "AllReplicasReady", m.Status.Conditions[0].Reason)
+	assert.Equal(t, metav1.ConditionTrue, readyCondition(t, m).Status)
+	assert.Equal(t, "AllReplicasReady", readyCondition(t, m).Reason)
 }
 
 // TestIntegration_Reconcile_ConfigChangeReachesThePodTemplate covers the reason
@@ -179,9 +175,8 @@ func TestIntegration_Reconcile_RefusesAnObjectItDoesNotOwn(t *testing.T) {
 	createMosquitto(t, ns, name, mkov1.MosquittoSpec{Replicas: 1, Image: fixtureImage})
 
 	m := waitForPhase(t, ns, name, mkov1.PhaseFailed)
-	require.Len(t, m.Status.Conditions, 1)
-	assert.Equal(t, "ReconcileFailed", m.Status.Conditions[0].Reason)
-	assert.Contains(t, m.Status.Conditions[0].Message, "not owned by this Mosquitto")
+	assert.Equal(t, "ReconcileFailed", readyCondition(t, m).Reason)
+	assert.Contains(t, readyCondition(t, m).Message, "not owned by this Mosquitto")
 
 	kept := &corev1.ConfigMap{}
 	require.NoError(t, k8sClient.Get(testCtx,

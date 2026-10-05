@@ -60,11 +60,17 @@ func newReconcilerFor(t *testing.T, objs ...client.Object) (*MosquittoReconciler
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objs...).
-		WithStatusSubresource(&mkov1.Mosquitto{}).
+		WithStatusSubresource(&mkov1.Mosquitto{}, &mkov1.MosquittoUser{}).
+		WithIndex(&mkov1.MosquittoUser{}, userBrokerField, indexUserBroker).
+		WithIndex(&mkov1.MosquittoUser{}, userSecretField, indexUserSecret).
+		WithIndex(&mkov1.Mosquitto{}, tlsSecretField, indexTLSSecret).
 		Build()
 
-	return &MosquittoReconciler{Client: c, Scheme: scheme}, c
+	return &MosquittoReconciler{Client: c, Scheme: scheme, ReloaderImage: testReloaderImage}, c
 }
+
+// testReloaderImage is the --reloader-image every test reconciler runs with.
+const testReloaderImage = "guidedtraffic/mosquitto-operator:test"
 
 func request() ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Name: testName, Namespace: testNamespace}}
@@ -627,8 +633,8 @@ func TestReconcile_SecretSecurity(t *testing.T) {
 			assert.Equal(t, tt.wantReason, readyCondition(t, stored).Reason)
 			assert.Contains(t, readyCondition(t, stored).Message, mkov1.ConsumableLabel,
 				"the message names the label, so the fix is readable from kubectl get")
-			assert.Equal(t, secretRecheckInterval, result.RequeueAfter,
-				"no Secret is watched, so a label added later is noticed by the requeue")
+			assert.Zero(t, result.RequeueAfter,
+				"the Secret watch wakes the broker when the label arrives; nothing polls")
 		})
 	}
 }

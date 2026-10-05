@@ -29,6 +29,10 @@ spec:
       jsonPath: .status.phase
       name: Phase
       type: string
+    - description: Users the broker accepts
+      jsonPath: .status.users
+      name: Users
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -243,7 +247,8 @@ spec:
               conditions:
                 description: |-
                   Conditions follows the standard Kubernetes condition convention.
-                  Type "Ready" is always present once a pass completed.
+                  Type "Ready" is always present once a pass completed; type "Users" once a
+                  pass rendered the users.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -311,6 +316,12 @@ spec:
               readyReplicas:
                 description: ReadyReplicas mirrors the StatefulSet's ready replica
                   count.
+                format: int32
+                type: integer
+              users:
+                description: |-
+                  Users is how many MosquittoUser objects are rendered into the broker's
+                  credentials. Zero means the broker accepts nobody.
                 format: int32
                 type: integer
             type: object
