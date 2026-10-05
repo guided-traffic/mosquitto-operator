@@ -870,9 +870,9 @@ Defaults from [`deploy/helm/mosquitto-operator/values.yaml`](deploy/helm/mosquit
 | `secretSecurity` | `false` | Passes `--secret-security`. `true` makes a `Mosquitto` use a TLS Secret, and a `MosquittoUser` a credentials Secret, only when it carries `mko.gtrfc.com/consumable=true`; it grants nothing of its own. **Security:** with `false`, whoever may write a `Mosquitto` or a `MosquittoUser` in a namespace may make the operator read every Secret there, and a `Mosquitto` author may mount any of them ([TL;DR](#-tldr-fast-start)). On the kustomize path the same switch is the component [`config/components/secret-security`](config/components/secret-security/kustomization.yaml). |
 
 **Security note:** the metrics endpoint is plain HTTP with no authentication; `metrics.enabled:
-false` closes the port, deleting the Service only hides the DNS name. What it serves, and that no
-broker metrics exist yet ([ADR 0002](docs/adr/0002-the-metrics-exporter-is-written-here.md)):
-[runtime.md](docs/operations/runtime.md#the-operators-ports-and-probes).
+false` closes the port, deleting the Service only hides the DNS name. What it serves:
+[runtime.md](docs/operations/runtime.md#the-operators-ports-and-probes). It is the operator's own
+endpoint; the brokers' statistics are [`spec.metrics`](#specmetrics-the-broker-exporter).
 
 ### Operator flags
 

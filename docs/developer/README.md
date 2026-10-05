@@ -35,12 +35,13 @@ change.
   Service: no bridging, no shared sessions, no shared retained messages. `spec.replicas` buys
   process redundancy, not a highly available broker. Do not write a line that implies otherwise
   ([architecture.md](architecture.md#what-runs-where)).
-- **Pure builders and renderer, one loop, one binary with two entry points.**
+- **Pure builders and renderer, one loop, one image with two binaries.**
   [`internal/builder`](../../internal/builder) turns a CR into objects and
   [`internal/auth`](../../internal/auth) users into credentials, both without a client;
   [`internal/controller`](../../internal/controller) is the only code that talks to the API
   server; [`internal/reloader`](../../internal/reloader) is `manager reload`, which runs in every
-  broker pod ([package-map.md](package-map.md)).
+  broker pod; [`internal/exporter`](../../internal/exporter) is `/app/exporter`, the second binary,
+  which runs in a broker pod with `spec.metrics` ([package-map.md](package-map.md)).
 - **Ownership before every write, deletion only through owner references.** `ensureOwned` refuses
   any object this CR does not control; the ClusterRole has no `delete` and no `patch`; a CR being
   deleted gets no writes ([ADR 0009](../adr/0009-delete-only-through-owner-references.md)).
