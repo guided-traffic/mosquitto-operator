@@ -87,10 +87,25 @@ func TestE2E_ConfigCheck_StopsATypoBeforeTheBroker(t *testing.T) {
 		assert.Zero(t, status.RestartCount, "the failure belongs to the init container, not to a broker crash loop")
 	}
 
-	logs, err := tc.kube.CoreV1().Pods(ns).GetLogs(podName, &corev1.PodLogOptions{
-		Container: configCheckContainer, Previous: true,
-	}).DoRaw(context.Background())
-	require.NoError(t, err, "reading the log of the failed config-check attempt")
-	assert.Contains(t, string(logs), fmt.Sprintf("Error: Unknown configuration variable '%s'.", misspelledDirective))
-	assert.Contains(t, string(logs), fmt.Sprintf("Error found at %s:%d.", configPath, line))
+	// The log of a failed attempt is read from whichever attempt the kubelet
+	// still holds: between restarts the current container is the last
+	// terminated one, and on the CI runners the previous one has been observed
+	// as "unable to retrieve container logs" for a moment after a restart.
+	wantMessage := fmt.Sprintf("Error: Unknown configuration variable '%s'.", misspelledDirective)
+	var logs string
+	err = wait.PollUntilContextTimeout(context.Background(), pollInterval, testTimeout, true,
+		func(ctx context.Context) (bool, error) {
+			for _, previous := range []bool{false, true} {
+				raw, err := tc.kube.CoreV1().Pods(ns).GetLogs(podName, &corev1.PodLogOptions{
+					Container: configCheckContainer, Previous: previous,
+				}).DoRaw(ctx)
+				if err == nil && strings.Contains(string(raw), wantMessage) {
+					logs = string(raw)
+					return true, nil
+				}
+			}
+			return false, nil
+		})
+	require.NoError(t, err, "no log of a config-check attempt carried %q", wantMessage)
+	assert.Contains(t, logs, fmt.Sprintf("Error found at %s:%d.", configPath, line))
 }
