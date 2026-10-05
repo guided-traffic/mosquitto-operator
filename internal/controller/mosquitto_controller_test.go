@@ -228,34 +228,43 @@ func TestReconcile_ScalesTheStatefulSet(t *testing.T) {
 // managed name is derived from the resource name, so a pre-existing object can
 // hold one, and writing it would hand somebody else's workload or traffic to
 // this operator.
+//
+// The message is pinned exactly, on the error and on the Ready condition: it is
+// what a user reads in kubectl get, and ADR 0009 D5 keeps it precise - kind,
+// namespace and name - with the existence oracle that precision gives accepted.
 func TestReconcile_RefusesForeignObjects(t *testing.T) {
 	tests := []struct {
-		name    string
-		foreign client.Object
+		name        string
+		foreign     client.Object
+		wantMessage string
 	}{
 		{
-			name: "ConfigMap",
+			name:        "ConfigMap",
+			wantMessage: "ConfigMap messaging/broker-config exists and is not owned by this Mosquitto",
 			foreign: &corev1.ConfigMap{
 				ObjectMeta: metav1.ObjectMeta{Name: "broker-config", Namespace: testNamespace},
 				Data:       map[string]string{"unrelated": "content"},
 			},
 		},
 		{
-			name: "headless Service",
+			name:        "headless Service",
+			wantMessage: "Service messaging/broker-headless exists and is not owned by this Mosquitto",
 			foreign: &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{Name: "broker-headless", Namespace: testNamespace},
 				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "someone-else"}},
 			},
 		},
 		{
-			name: "client Service",
+			name:        "client Service",
+			wantMessage: "Service messaging/broker exists and is not owned by this Mosquitto",
 			foreign: &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{Name: testName, Namespace: testNamespace},
 				Spec:       corev1.ServiceSpec{Selector: map[string]string{"app": "someone-else"}},
 			},
 		},
 		{
-			name: "StatefulSet",
+			name:        "StatefulSet",
+			wantMessage: "StatefulSet messaging/broker exists and is not owned by this Mosquitto",
 			foreign: &appsv1.StatefulSet{
 				ObjectMeta: metav1.ObjectMeta{Name: testName, Namespace: testNamespace},
 			},
@@ -269,7 +278,7 @@ func TestReconcile_RefusesForeignObjects(t *testing.T) {
 			_, err := r.Reconcile(context.Background(), request())
 
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "not owned by this Mosquitto")
+			assert.Equal(t, tt.wantMessage, err.Error())
 
 			stored := &mkov1.Mosquitto{}
 			require.NoError(t, c.Get(context.Background(), request().NamespacedName, stored))
@@ -277,6 +286,7 @@ func TestReconcile_RefusesForeignObjects(t *testing.T) {
 				"the refusal has to be visible on the resource, not only in the operator log")
 			assert.Equal(t, metav1.ConditionFalse, readyCondition(t, stored).Status)
 			assert.Equal(t, "ReconcileFailed", readyCondition(t, stored).Reason)
+			assert.Equal(t, tt.wantMessage, readyCondition(t, stored).Message)
 		})
 	}
 }

@@ -46,11 +46,20 @@ itself — two `Namespaces().Delete` calls and the `deleteMosquitto` helper that
 under test. None of them is operator code, and none of them runs with the operator's
 ServiceAccount.
 
-**Not verified.** Nothing in this repository has ever run against a real cluster, so the
-central claim — *the garbage collector actually removes these objects* — is verified as
-**intent** (the references are set, and asserted to be set) and as **encoded expectation** (the
-E2E subtest below), never as an observation. The E2E leg that would observe it exists in the
-tree; I did not run it and no run of it is recorded anywhere here.
+**D5's message is pinned (2026-10-05).** `TestReconcile_RefusesForeignObjects` asserts the exact
+text for the ConfigMap, both Services and the StatefulSet — on the returned error and on the
+`Ready` condition — and was observed failing against the format string edited to `is not
+controlled by`: `expected: "ConfigMap messaging/broker-config exists and is not owned by this
+Mosquitto"`, `actual  : "ConfigMap messaging/broker-config exists and is not controlled by this
+Mosquitto"`, and the same for the other three kinds
+([ADR 0010](0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md)).
+
+**Observed (2026-10-05).** The central claim — *the garbage collector actually removes these
+objects* — was first observed on a local Kind cluster (kind `v0.32.0`, `kindest/node:v1.36.1`,
+`make e2e-local KIND_WORKERS=0`): the E2E subtest
+`TestE2E_Mosquitto_ProvisionsAReachableBroker/deleting_the_CR_removes_everything_it_owns`
+passed. The CI run of the same leg is named in
+[ADR 0004](0004-two-e2e-legs-and-no-version-matrix.md)'s `Status`.
 
 ## Context
 
