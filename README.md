@@ -56,6 +56,7 @@ executed while writing this file.
 - 🧾 **Generated `mosquitto.conf`** — logging to stdout, persistence into `/mosquitto/data/`, one listener, and your own tuning from `spec.config`, checked line by line against an allowlist of tuning directives.
 - 🔎 **Typos stop before the broker starts** — an init container runs the broker's own `--test-config` on the generated file and fails with the broker's message, file and line.
 - 🔐 **Optional MQTTS** — `spec.tls.secretName` mounts an existing `tls.crt`/`tls.key` Secret and moves the listener to 8883. The operator consumes TLS material; it never issues or renews it. A renewed Secret is reloaded without a restart.
+- 📈 **Optional broker metrics** — `spec.metrics.enabled` adds an exporter container that logs in to its own broker over localhost as the reserved user `mko-exporter`, reads `$SYS` and serves it as Prometheus series on port `9234` of each pod; a value the broker does not publish is absent, never zero.
 - 💾 **Optional persistence** — `spec.storage` renders a `data` PVC template; without it the persistence directory is an `emptyDir` at the same path.
 - 🧭 **Opt-in anti-affinity** — `off` (default), `soft` (scheduler preference) or `hard` (one broker pod per node, surplus pods stay `Pending`), over `kubernetes.io/hostname`.
 - 🏷 **Pod labels and annotations from the resource** — `spec.podLabels` and `spec.podAnnotations` reach the broker pods, under the operator's own keys; a key removed from the resource leaves the pods.
@@ -78,10 +79,11 @@ Everything below is derived deterministically from the resource. For a `Mosquitt
 | Client Service (ClusterIP) | `<name>` | [`common.ClientServiceName`](internal/common/labels.go) |
 | ConfigMap | `<name>-config` | [`builder.ConfigMapName`](internal/builder/configmap.go) |
 | ConfigMap key | `mosquitto.conf` | [`builder.ConfigKey`](internal/builder/configmap.go) |
-| Rendered credentials Secret | `<name>-auth`, keys `passwd` and `acl` | [`common.AuthSecretName`](internal/common/labels.go), [`auth.PasswdKey`, `ACLKey`](internal/auth/files.go) |
-| Containers | `mosquitto` (the broker, the default for `kubectl logs` and `exec`), `reloader` | [`builder.BrokerContainerName`, `ReloaderContainerName`](internal/builder/statefulset.go) |
+| Rendered credentials Secret | `<name>-auth`, keys `passwd` and `acl`, and `exporter-password` with `spec.metrics` | [`common.AuthSecretName`](internal/common/labels.go), [`auth.PasswdKey`, `ACLKey`](internal/auth/files.go), [`builder.ExporterPasswordKey`](internal/builder/statefulset.go) |
+| Containers | `mosquitto` (the broker, the default for `kubectl logs` and `exec`), `reloader`, and `exporter` with `spec.metrics` | [`builder.BrokerContainerName`, `ReloaderContainerName`, `ExporterContainerName`](internal/builder/statefulset.go) |
+| The exporter's MQTT user | `mko-exporter`, read access to `$SYS/#` only; no `MosquittoUser` can hold the name | [`auth.ExporterUsername`](internal/auth/render.go) |
 | Init containers, in order | `auth-init`, `config-check` | [`builder.AuthInitContainerName`, `ConfigCheckContainerName`](internal/builder/statefulset.go) |
-| Volumes | `config`, `auth-secret` (the `<name>-auth` Secret), `auth` (an `emptyDir` with the broker's copy), `tls` (only with `spec.tls`), `data`, `config-check-scratch` (an `emptyDir` the init container sees at the persistence path) | [`builder.ConfigVolumeName`, `AuthSecretVolumeName`, `AuthVolumeName`, `TLSVolumeName`, `DataVolumeName`, `ConfigCheckScratchVolumeName`](internal/builder/statefulset.go) |
+| Volumes | `config`, `auth-secret` (the keys `passwd` and `acl` of `<name>-auth`), `auth` (an `emptyDir` with the broker's copy), `tls` (only with `spec.tls`), `data`, `config-check-scratch` (an `emptyDir` the init container sees at the persistence path), `exporter-secret` (the key `exporter-password` of `<name>-auth`, only with `spec.metrics`) | [`builder.ConfigVolumeName`, `AuthSecretVolumeName`, `AuthVolumeName`, `TLSVolumeName`, `DataVolumeName`, `ConfigCheckScratchVolumeName`, `ExporterSecretVolumeName`](internal/builder/statefulset.go) |
 | PVC template (only with `spec.storage`) | `data` | [`builder.DataVolumeName`](internal/builder/statefulset.go) |
 
 Kubernetes derives two more names from those, by its own StatefulSet rules rather than by
@@ -114,9 +116,13 @@ StatefulSet; the cluster domain is whatever the cluster uses, `cluster.local` by
 | Broker command | `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf` | [`buildBrokerContainer`](internal/builder/statefulset.go) |
 | Config-check command | `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf --test-config` | [`buildConfigCheckContainer`](internal/builder/statefulset.go) |
 | `auth-init` / `reloader` command | `/app/manager reload --source /mosquitto/auth-secret --target /mosquitto/auth` (`--once` for `auth-init`; `--tls-dir /mosquitto/tls` for `reloader` with `spec.tls`), in the operator's own image | [`buildReloadContainer`, `buildReloaderSidecar`](internal/builder/statefulset.go) |
+| Exporter port / port name | `9234` / `metrics`, plain HTTP, path `/metrics`, only with `spec.metrics` | [`builder.ExporterPort`, `ExporterPortName`](internal/builder/statefulset.go) |
+| Exporter command | `/app/exporter --broker tcp://127.0.0.1:1883 --password-file /mosquitto/exporter/password --listen :9234`; with `spec.tls` `--broker ssl://127.0.0.1:8883 … --tls-cert /mosquitto/tls/tls.crt`, in the operator's own image | [`buildExporterContainer`](internal/builder/statefulset.go) |
+| The exporter's password | `/mosquitto/exporter/password` (the `exporter` container only, mode `0440`) | [`builder.ExporterSecretMountPath`](internal/builder/statefulset.go) |
 
-Exactly one container port is declared: `mqtt` or `mqtts`, never both. Enabling TLS **moves**
-the generated listener rather than adding one.
+Exactly one MQTT container port is declared: `mqtt` or `mqtts`, never both. Enabling TLS
+**moves** the generated listener rather than adding one. The exporter's `metrics` port is on the
+`exporter` container and on no Service.
 
 ### Labels and annotations
 
@@ -178,7 +184,7 @@ them through the chart's `fullname` template. The **names** differ between the t
 
 | Document | What it covers |
 |---|---|
-| [docs/operations/](docs/operations/README.md) | Installing through Helm or kustomize, upgrading and uninstalling, users and their credentials, running brokers from Git with Flux, and what happens at runtime — what rolls the brokers, what the status means |
+| [docs/operations/](docs/operations/README.md) | Installing through Helm or kustomize, upgrading and uninstalling, users and their credentials, running brokers from Git with Flux, broker metrics, and what happens at runtime — what rolls the brokers, what the status means |
 | [docs/security/](docs/security/README.md) | The security architecture, one page per perspective — trust boundaries, credentials, tenancy, the privilege footprint, validation, rotation — each ending with what it does **not** cover |
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability |
 | [docs/developer/](docs/developer/README.md) | Contributing: repository layout, per-package responsibilities, the reconcile pipeline, the test tiers, the build/test/lint matrix, CI and release, extension checklists, and what the pinned broker image measurably does |
@@ -505,6 +511,8 @@ spec:
     network.example.com/mqtt-clients: allowed
   podAnnotations:                         # example — omitted means the two hash annotations only
     prometheus.io/scrape: "false"
+  metrics:                                # example — omitted means no exporter container
+    enabled: false                        # default
 ```
 
 ### `spec`
@@ -520,6 +528,7 @@ spec:
 | `resources` | `corev1.ResourceRequirements` | *(unset)* | Passed to the broker container unchanged — `requests`, `limits` and `claims`, the standard Kubernetes type — and to the `config-check` init container, which runs before the broker and therefore raises no request. `auth-init` and `reloader` carry fixed resources: requests `10m` CPU and `32Mi` memory, a `64Mi` memory limit. |
 | `podLabels` | `map[string]string` | *(unset)* | Added to the broker pods' labels, under the operator's own: a key the operator sets (the selector labels, `app.kubernetes.io/component`, `app.kubernetes.io/version`) always wins, so a Service cannot be detached from its pods. A change rolls the pods; a key removed here is removed from the pods. Not put on the StatefulSet, the Services or the ConfigMap. |
 | `podAnnotations` | `map[string]string` | *(unset)* | Added to the broker pods' annotations, under the operator's own: `mko.gtrfc.com/pod-spec-hash` and `mko.gtrfc.com/config-hash` always win, so a hash cannot be forged. A change rolls the pods; a key removed here is removed from the pods. |
+| `metrics.enabled` | `bool` | `false` | Adds the `exporter` container to every broker pod ([below](#specmetrics-the-broker-exporter)). Turning it on or off rolls the pods. **Security:** the endpoint has no authentication; whatever reaches the pod IP on `9234` reads the broker's statistics. |
 
 `spec.antiAffinity: hard` guarantees the spread by refusing to place two broker pods of this
 resource on one node, so replicas beyond the number of schedulable nodes stay `Pending`. Any
@@ -563,6 +572,55 @@ and key form a pair; an invalid pair is never loaded:
 
 Changing `spec.storage` on an existing broker does **not** converge; the StatefulSet has to be
 recreated by hand: [runtime.md](docs/operations/runtime.md#changing-specstorage-on-an-existing-broker).
+
+### `spec.metrics`: the broker exporter
+
+With `spec.metrics.enabled: true` every broker pod gets an `exporter` container: the operator
+image's second binary, `/app/exporter` ([ADR 0002](docs/adr/0002-the-metrics-exporter-is-written-here.md)).
+It logs in to the broker **of its own pod** over `127.0.0.1` as `mko-exporter` — a user the
+operator renders into `<name>-auth` with a password it generates once and keeps, and with
+`topic read $SYS/#` as its only grant — subscribes to `$SYS/broker/#`, and serves what it reads
+as `/metrics` on port `9234`. Under `spec.tls` it connects to `8883` and accepts exactly the
+certificate mounted at `/mosquitto/tls/tls.crt`, re-read on every handshake. It has no readiness
+or liveness probe: a broken exporter never takes a broker out of its Services. Scrape each pod —
+`$SYS` describes one broker process, and the pods of one `Mosquitto` are independent brokers, so
+a sum across pods describes nothing that exists. No Service exposes the port and no
+ServiceMonitor or PodMonitor is shipped: [metrics.md](docs/operations/metrics.md) shows how to
+find the pods.
+
+`mosquitto_exporter_connected` is `1` while the exporter holds its MQTT session and `0`
+otherwise; without a session **no broker series is served at all**, never a stale or zero value.
+The generated `mosquitto.conf` states `sys_interval 10`, so the values change every 10 seconds;
+`spec.config` may set another interval.
+
+<details>
+<summary>Every series, and the <code>$SYS</code> topic it comes from</summary>
+
+| Series | Type | `$SYS/broker/…` |
+|---|---|---|
+| `mosquitto_exporter_connected` | gauge | *(the exporter's own)* |
+| `mosquitto_version_info{version}` | gauge, always `1` | `version` (`mosquitto version 2.1.2` → `version="2.1.2"`) |
+| `mosquitto_uptime_seconds` | gauge | `uptime` |
+| `mosquitto_bytes_received_total`, `mosquitto_bytes_sent_total` | counter | `bytes/received`, `bytes/sent` |
+| `mosquitto_messages_received_total`, `mosquitto_messages_sent_total` | counter | `messages/received`, `messages/sent` (MQTT packets of any type) |
+| `mosquitto_messages_stored` | gauge | `messages/stored` |
+| `mosquitto_publish_messages_received_total`, `…_sent_total`, `…_dropped_total` | counter | `publish/messages/received`, `sent`, `dropped` |
+| `mosquitto_publish_bytes_received_total`, `mosquitto_publish_bytes_sent_total` | counter | `publish/bytes/received`, `sent` |
+| `mosquitto_clients_connected`, `_active`, `_disconnected`, `_inactive`, `_total`, `_expired` | gauge | `clients/…` |
+| `mosquitto_clients_maximum` | gauge | `clients/maximum` (published by 2.0 only) |
+| `mosquitto_connections_socket_count` | gauge | `connections/socket/count` |
+| `mosquitto_heap_current_bytes`, `mosquitto_heap_maximum_bytes` | gauge | `heap/current`, `heap/maximum` |
+| `mosquitto_packet_out_count`, `mosquitto_packet_out_bytes` | gauge | `packet/out/count`, `packet/out/bytes` |
+| `mosquitto_retained_messages` | gauge | `retained messages/count` |
+| `mosquitto_store_messages`, `mosquitto_store_messages_bytes` | gauge | `store/messages/count`, `store/messages/bytes` |
+| `mosquitto_subscriptions`, `mosquitto_shared_subscriptions` | gauge | `subscriptions/count`, `shared_subscriptions/count` |
+| `mosquitto_load_<what>{window}` | gauge | `load/<what>/<window>`, `<what>` with `/` as `_`: `bytes_received`, `bytes_sent`, `messages_received`, `messages_sent`, `publish_received`, `publish_sent`, `publish_dropped`, `connections`, `sockets`; `window` is `1min`, `5min` or `15min` |
+
+A topic outside this table is skipped. The table is the set the pinned image publishes
+([broker-behaviour.md](docs/developer/broker-behaviour.md) M28), in
+[`internal/exporter/mapping.go`](internal/exporter/mapping.go).
+
+</details>
 
 ### `status`
 
@@ -723,6 +781,12 @@ log_type information
 persistence true
 persistence_location /mosquitto/data/
 
+# Two broker defaults, stated rather than inherited (M28, M29): how often
+# $SYS is published, which is the resolution of the metrics exporter, and
+# the packet limit 2.1 lowered. A line in spec.config overrides either.
+sys_interval 10
+max_packet_size 2000000
+
 # Users. The operator renders every MosquittoUser bound to this broker into
 # these two files; the reloader sidecar copies a change in and reloads the
 # broker without a restart. There is no anonymous access.
@@ -840,11 +904,24 @@ pod ([`internal/reloader`](internal/reloader/run.go)); nothing passes it to the 
 | `--process` | `mosquitto` | The `/proc/<pid>/comm` name of the process that gets `SIGHUP` after a change |
 | `--tls-dir` | *(empty)* | The broker's TLS mount. A changed `tls.crt`/`tls.key` that forms a valid pair is signalled; while the mounted pair is invalid **no signal is sent at all**, because the same `SIGHUP` would load it and fail every new handshake. Empty: no TLS. Set to `/mosquitto/tls` whenever `spec.tls` is set |
 
+### `exporter`
+
+The operator image's second binary, `/app/exporter`, run by the `exporter` container of a broker
+pod with `spec.metrics.enabled` ([`internal/exporter`](internal/exporter/run.go)).
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--broker` | `tcp://127.0.0.1:1883` | The pod's own broker. `ssl://127.0.0.1:8883` under `spec.tls` |
+| `--username` | `mko-exporter` | The reserved user the operator renders; also the client ID, as the broker requires |
+| `--password-file` | `/mosquitto/exporter/password` | Read on every connection attempt |
+| `--tls-cert` | *(empty)* | The certificate to accept, re-read on every handshake: exactly this one, with no chain or host-name check — the peer is `127.0.0.1` in the same pod. Empty: plain MQTT. Set to `/mosquitto/tls/tls.crt` under `spec.tls` |
+| `--listen` | `:9234` | Where `/metrics` is served, plain HTTP, no authentication |
+
 ## 🛠 Development
 
 ```bash
 make help                     # every target with its one-line description
-make build                    # gofmt, go vet, then bin/manager
+make build                    # gofmt, go vet, then bin/manager and bin/exporter
 make test-unit                # unit tier (envtest binaries are fetched on demand)
 make test-integration         # controller tier against envtest 1.29.0
 make lint gosec vuln cyclo    # golangci-lint, gosec, govulncheck, gocyclo

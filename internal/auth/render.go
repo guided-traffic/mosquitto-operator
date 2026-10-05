@@ -16,6 +16,29 @@ import (
 // renders itself, compared case-insensitively (ADR 0013 D5, ADR 0002 D4).
 const ReservedPrefix = "mko-"
 
+// ExporterUsername is the principal of the metrics exporter: rendered by the
+// operator with read access to $SYS/# and nothing else (ADR 0002 D4).
+const ExporterUsername = ReservedPrefix + "exporter"
+
+// ExporterPrincipal is the exporter's principal with its one ACL entry.
+func ExporterPrincipal(password string) Principal {
+	return Principal{
+		Username: ExporterUsername,
+		Password: password,
+		ACLs:     []mkov1.MosquittoACL{{Topic: "$SYS/#", Access: mkov1.AccessRead}},
+	}
+}
+
+// Principal is a user the operator renders for itself under the reserved
+// prefix. It bypasses the checks a MosquittoUser passes - the prefix and the $
+// refusal exist to keep exactly these names and topics for it - and is never
+// counted as a user.
+type Principal struct {
+	Username string
+	Password string
+	ACLs     []mkov1.MosquittoACL
+}
+
 // usernamePattern is the username allowlist of ADR 0013 D5: a character nobody
 // thought of is refused rather than written into a file whose format uses ":"
 // and line breaks, and +, # and / can never reach a later %u pattern.
@@ -77,7 +100,8 @@ type Result struct {
 // hashes the rest with random, and hands the accepted users to payload sorted by
 // username, so the same users always render the same bytes whatever order they
 // arrive in. previous is the data of the broker's current rendered Secret.
-func Render(payload Payload, inputs []Input, previous map[string][]byte, random io.Reader) (Result, error) {
+// reserved are the operator's own principals, rendered next to the users.
+func Render(payload Payload, inputs []Input, reserved []Principal, previous map[string][]byte, random io.Reader) (Result, error) {
 	result := Result{Verdicts: make(map[string]Verdict, len(inputs))}
 
 	var candidates []Input
@@ -92,25 +116,41 @@ func Render(payload Payload, inputs []Input, previous map[string][]byte, random 
 	winners := resolveCollisions(candidates, result.Verdicts)
 
 	known := payload.Hashes(previous)
-	accepted := make([]Accepted, 0, len(winners))
+	accepted := make([]Accepted, 0, len(winners)+len(reserved))
 	for _, in := range winners {
-		hash := known[in.Username]
-		if hash == "" || !VerifyPassword(hash, in.Password) {
-			fresh, err := HashPassword(in.Password, random)
-			if err != nil {
-				return Result{}, fmt.Errorf("hashing the password of MosquittoUser %s: %w", in.Name, err)
-			}
-			hash = fresh
+		hash, err := keepOrHash(known[in.Username], in.Password, random)
+		if err != nil {
+			return Result{}, fmt.Errorf("hashing the password of MosquittoUser %s: %w", in.Name, err)
 		}
 		accepted = append(accepted, Accepted{Username: in.Username, Hash: hash, ACLs: canonicalACLs(in.ACLs)})
 		result.Verdicts[in.Name] = Verdict{Accepted: true, Reason: mkov1.ReasonUserAccepted,
 			Message: fmt.Sprintf("rendered into the broker's credentials as %q", in.Username)}
 	}
+	result.Accepted = len(accepted)
+
+	for _, p := range reserved {
+		if !strings.HasPrefix(p.Username, ReservedPrefix) || p.Password == "" {
+			return Result{}, fmt.Errorf("the operator's principal %q needs the prefix %s and a password", p.Username, ReservedPrefix)
+		}
+		hash, err := keepOrHash(known[p.Username], p.Password, random)
+		if err != nil {
+			return Result{}, fmt.Errorf("hashing the password of %s: %w", p.Username, err)
+		}
+		accepted = append(accepted, Accepted{Username: p.Username, Hash: hash, ACLs: canonicalACLs(p.ACLs)})
+	}
 
 	sort.Slice(accepted, func(i, j int) bool { return accepted[i].Username < accepted[j].Username })
 	result.Data = payload.Render(accepted)
-	result.Accepted = len(accepted)
 	return result, nil
+}
+
+// keepOrHash keeps a previous hash while the password still verifies against
+// it, so an unchanged password renders the same bytes, and hashes it otherwise.
+func keepOrHash(previous, password string, random io.Reader) (string, error) {
+	if previous != "" && VerifyPassword(previous, password) {
+		return previous, nil
+	}
+	return HashPassword(password, random)
 }
 
 // check applies the render-time rules to one input: the username allowlist,

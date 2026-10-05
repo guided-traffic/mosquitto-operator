@@ -27,7 +27,7 @@ func acl(topic, access string) mkov1.MosquittoACL {
 
 func mustRender(t *testing.T, inputs []Input, previous map[string][]byte) Result {
 	t.Helper()
-	result, err := Render(FilePayload{}, inputs, previous, rand.Reader)
+	result, err := Render(FilePayload{}, inputs, nil, previous, rand.Reader)
 	require.NoError(t, err)
 	return result
 }
@@ -185,7 +185,7 @@ func TestRender_TheOldestUserKeepsTheUsername(t *testing.T) {
 }
 
 func TestRender_FailsWhenNoSaltCanBeRead(t *testing.T) {
-	_, err := Render(FilePayload{}, migrationUsers(), nil, bytes.NewReader(nil))
+	_, err := Render(FilePayload{}, migrationUsers(), nil, nil, bytes.NewReader(nil))
 	assert.Error(t, err)
 }
 
@@ -193,4 +193,34 @@ func TestFilePayload_Hashes(t *testing.T) {
 	hashes := FilePayload{}.Hashes(map[string][]byte{PasswdKey: []byte("a:$7$x\nb:$7$y\n\nbroken\n")})
 	assert.Equal(t, map[string]string{"a": "$7$x", "b": "$7$y"}, hashes)
 	assert.Empty(t, FilePayload{}.Hashes(nil))
+}
+
+// TestRender_TheExporterPrincipal is ADR 0002 D4: the operator renders its own
+// exporter user next to the MosquittoUser objects - under the reserved prefix
+// no MosquittoUser can claim, with the $SYS grant no MosquittoUser can hold -
+// keeps its hash while the password stays, and never counts it as a user.
+func TestRender_TheExporterPrincipal(t *testing.T) {
+	users := []Input{
+		input("ha", "homeassistant", "pw", 0, acl("homeassistant/#", mkov1.AccessReadWrite)),
+		input("claim", "mko-exporter", "stolen", time.Hour, acl("$SYS/#", mkov1.AccessRead)),
+	}
+	render := func(previous map[string][]byte) Result {
+		t.Helper()
+		result, err := Render(FilePayload{}, users, []Principal{ExporterPrincipal("exp-pw")}, previous, rand.Reader)
+		require.NoError(t, err)
+		return result
+	}
+
+	first := render(nil)
+	assert.Equal(t, 1, first.Accepted, "the exporter is not a user")
+	assert.Equal(t, mkov1.ReasonUsernameReserved, first.Verdicts["claim"].Reason, "a MosquittoUser still cannot claim the name")
+	hashes := FilePayload{}.Hashes(first.Data)
+	assert.True(t, VerifyPassword(hashes[ExporterUsername], "exp-pw"), "the operator's password, not the claimant's")
+	assert.Equal(t, "user homeassistant\ntopic readwrite homeassistant/#\n\nuser mko-exporter\ntopic read $SYS/#\n",
+		string(first.Data[ACLKey]))
+
+	assert.Equal(t, first.Data, render(first.Data).Data, "an unchanged exporter password keeps its hash")
+
+	_, err := Render(FilePayload{}, nil, []Principal{{Username: "exporter", Password: "pw"}}, nil, rand.Reader)
+	assert.ErrorContains(t, err, "needs the prefix", "the bypass is for the reserved prefix only")
 }

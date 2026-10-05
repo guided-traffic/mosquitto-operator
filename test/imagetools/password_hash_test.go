@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	mkov1 "github.com/guided-traffic/mosquitto-operator/api/v1"
 	"github.com/guided-traffic/mosquitto-operator/internal/auth"
 	"github.com/guided-traffic/mosquitto-operator/test/testimages"
 )
@@ -74,4 +75,41 @@ func TestOperatorVerifiesTheImagesHash(t *testing.T) {
 
 	assert.True(t, auth.VerifyPassword(hash, "image-pw"), "the operator cannot verify the image's own hash %q", hash)
 	assert.False(t, auth.VerifyPassword(hash, "other"))
+}
+
+// TestImageGrantsTheExporterItsSysTreeAndNothingElse renders the exporter's
+// principal next to a user the way the operator does, and asks the pinned
+// image what each may read (ADR 0002 D4, M13): mko-exporter reads $SYS and no
+// application topic; a user granted # reads no $SYS topic.
+func TestImageGrantsTheExporterItsSysTreeAndNothingElse(t *testing.T) {
+	t.Parallel()
+
+	result, err := auth.Render(auth.FilePayload{},
+		[]auth.Input{{Name: "probe", Username: "probe", Password: "probe-pw",
+			ACLs: []mkov1.MosquittoACL{{Topic: "#", Access: mkov1.AccessReadWrite}}}},
+		[]auth.Principal{auth.ExporterPrincipal("exporter-pw")}, nil, rand.Reader)
+	require.NoError(t, err)
+
+	script := fmt.Sprintf(`set -e
+mkdir -p /tmp/auth && cd /tmp/auth
+cat > passwd <<'PW'
+%sPW
+cat > acl <<'ACL'
+%sACL
+chmod 0600 passwd acl
+cat > mosquitto.conf <<'CONF'
+%sCONF
+/usr/sbin/mosquitto -c mosquitto.conf > broker.log 2>&1 &
+sleep 1
+mosquitto_pub -h 127.0.0.1 -u probe -P probe-pw -r -t app/state -m on
+set +e
+echo "exporter-sys=$(mosquitto_sub -h 127.0.0.1 -u mko-exporter -P exporter-pw -t '$SYS/broker/version' -C 1 -W 5)"
+echo "exporter-app=$(mosquitto_sub -h 127.0.0.1 -u mko-exporter -P exporter-pw -t 'app/#' -C 1 -W 3 2>&1)"
+echo "user-sys=$(mosquitto_sub -h 127.0.0.1 -u probe -P probe-pw -t '$SYS/broker/version' -C 1 -W 3 2>&1)"
+`, result.Data[auth.PasswdKey], result.Data[auth.ACLKey], brokerWithPasswordFile)
+
+	out := runInImageAs(t, testimages.MosquittoImage, "1883:1883", script)
+	assert.Contains(t, out, "exporter-sys=mosquitto version", "mko-exporter must read $SYS")
+	assert.Contains(t, out, "exporter-app=Timed out", "mko-exporter must read nothing else")
+	assert.Contains(t, out, "user-sys=Timed out", "a user granted # must not read $SYS")
 }

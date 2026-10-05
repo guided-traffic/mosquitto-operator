@@ -207,3 +207,22 @@ func TestMosquittoUser_DeepCopyIsIndependent(t *testing.T) {
 	_, ok = (&MosquittoUserList{Items: []MosquittoUser{*u}}).DeepCopyObject().(*MosquittoUserList)
 	assert.True(t, ok)
 }
+
+func TestIsMetricsEnabled(t *testing.T) {
+	tests := []struct {
+		name    string
+		metrics *MosquittoMetrics
+		want    bool
+	}{
+		{"no metrics block means no exporter", nil, false},
+		{"an empty block is not a switch", &MosquittoMetrics{}, false},
+		{"enabled", &MosquittoMetrics{Enabled: true}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &Mosquitto{Spec: MosquittoSpec{Metrics: tt.metrics}}
+			assert.Equal(t, tt.want, m.IsMetricsEnabled())
+		})
+	}
+}

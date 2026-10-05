@@ -76,6 +76,8 @@ Tests that hold an invariant a reader might otherwise break:
 | `TestBrokersForSecret`, `TestUserBrokers_AMoveWakesBothBrokers` | the Secret and user watches map to the right brokers |
 | `TestSync_*`, `TestFindProcess`, `TestRun_SignalsOnChangeAndRetriesUntilTheBrokerIsThere`, `TestMain_Once` ([`internal/reloader`](../../internal/reloader/reloader_test.go)) | the copy through one resolved `..data`, mode `0600`, no temporary file left, a broken Secret changing nothing, one signal per change and a pending one retried; observed failing with the retry removed |
 | `TestCheckTLS`, `TestRound_ARenewedCertificateIsSignalled`, `TestRound_AnInvalidPairBlocksEverySignal` ([`tls_test.go`](../../internal/reloader/tls_test.go)) | a renewed pair is signalled once; a certificate with another pair's key is never signalled, and while it is mounted a credential change is copied but not signalled until a valid pair arrives. Observed failing with the pair check, the block and the pending signal each removed |
+| `TestParse`, `TestParse_SkipsWhatItCannotMap`, `TestTable_CoversTheMeasuredTopics`, `TestCollector_ServesWhatItHoldsAndDropsItOnALostSession` ([`internal/exporter`](../../internal/exporter/exporter_test.go)) | every measured `$SYS` topic (M28) maps to one series, counters end in `_total`, an unknown topic or an unreadable payload is skipped, and a lost session leaves no stale value — observed failing with `Lost` keeping the values. Assertions match whole lines of the scrape: the HELP text of `mosquitto_exporter_connected` once contained a sample line |
+| `TestRender_TheExporterPrincipal`, `TestReconcile_TheExporterPrincipal`, `TestBuildStatefulSet_TheExporter`, `TestGenerateMosquittoConf_StatesTwoDefaults` | `mko-exporter` rendered with `$SYS/#` only and never counted as a user, its generated password kept across passes, the container and its projected password only with `spec.metrics`, `sys_interval` and `max_packet_size` stated before `spec.config` ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md)). Observed failing with the prefix check, the metrics gate and the kept password each removed |
 | `TestReconcile_RefusesForeignObjects`, `TestEnsureOwned` | an object this CR does not control is refused, not adopted, with the exact message of [ADR 0009](../adr/0009-delete-only-through-owner-references.md) D5 |
 | `TestReconcile_DeletionIsLeftToGarbageCollection` | a CR with a `DeletionTimestamp` gets no writes |
 | `TestReconcile_UnbuildableSpecFailsVisibly` | the one builder error surfaces as `Failed` |
@@ -139,6 +141,7 @@ graph.
 | `TestE2E_TLS_CertManagerIssuedSecretServesMQTTS` | [`tls_test.go`](../../test/e2e/tls_test.go) | A `Certificate` from the ClusterIssuer `e2e-ca-issuer` yields `tls.crt`, `tls.key`, `ca.crt`; the broker mounts it read-only at `/mosquitto/tls`, serves `mqtts`/8883 only, completes a publish/subscribe round trip verified against `ca.crt` by the pod's DNS name; the operator creates no `Certificate` of its own |
 | `TestE2E_TLS_ACertManagerRenewalIsReloaded` | [`tls_renewal_test.go`](../../test/e2e/tls_renewal_test.go) | A renewal triggered as `cmctl renew` does reaches a fresh handshake — read through `kubectl port-forward` with Go's TLS client, the image has no `openssl` — as the new serial; the broker container did not restart; a TLS subscriber connected before the renewal still receives after it |
 | `TestE2E_TLS_AMismatchedPairIsNeverLoaded` | `tls_renewal_test.go` | A hand-written TLS Secret edited to a certificate with another pair's key: the `reloader` logs `the TLS pair is not valid`, a fresh handshake still gets the previous certificate, nothing restarted; the next valid pair is served |
+| `TestE2E_Metrics_TheExporterServesTheBrokersSysTree` | [`metrics_test.go`](../../test/e2e/metrics_test.go) | A broker with a plain listener and one under TLS each serve `mosquitto_exporter_connected 1`, the version and the client count through a port-forward to `9234`; a `MosquittoUser` claiming `mko-exporter` reports `UsernameReserved` and its password does not log in. Observed failing against an image without the certificate pin |
 | `TestE2E_AntiAffinity_OffByDefault` | [`affinity_test.go`](../../test/e2e/affinity_test.go) | No affinity block without an opt-in |
 | `TestE2E_AntiAffinity_SoftWhenRequested` | `affinity_test.go` | Three replicas become ready even where the spread cannot be satisfied; one preferred term at weight 100 |
 | `TestE2E_AntiAffinity_HardSpreadsAcrossNodes` | `affinity_test.go` | Three replicas on three distinct nodes. Skips below three schedulable nodes (Ready, not cordoned, no `NoSchedule`/`NoExecute` taint) unless `E2E_REQUIRE_MULTI_NODE=true` |
@@ -159,6 +162,7 @@ connections and rejects every CONNECT still reports Ready. Only a real MQTT sess
 | `tc.podExec(t, ns, pod, cmd…)` | `e2e_test.go` | `kubectl exec`, stdout only, 5 attempts with growing backoff, 30 s each |
 | `tc.requireThreeSchedulableNodes(t)` | `affinity_test.go` | The node-count guard |
 | `tc.createCertificate`, `tc.waitForCertificateReady`, `tc.waitForSecret`, `tc.getSecret` | `tls_test.go` | The cert-manager side, as an administrator would own it |
+| `portForward`, `tc.eventuallyScraped`, `tc.waitForUserReason` | `tls_renewal_test.go`, `metrics_test.go`, `users_test.go` | A `kubectl port-forward` to any pod port; a scrape until one whole line matches; a user's `Ready=False` reason |
 | `tc.servedSerial`, `tc.eventuallyServed`, `tc.renewCertificate`, `tc.setTLSPair`, `tc.waitForReloaderLog`, `newTestCA` | `tls_renewal_test.go` | One verified handshake through `kubectl port-forward` and the serial it served; a renewal as `cmctl renew` triggers it; a hand-written pair; the reloader's log as the proof the kubelet published an edit |
 | `tc.updateMosquittoSpec(t, ns, name, fields)`, `tc.waitForBrokerPod(t, ns, name, what, accept)` | `pod_metadata_test.go` | A spec update that retries on the conflict the operator's status writes cause; a wait for a ready pod whose labels and annotations satisfy a predicate |
 | `tc.createCredentials`, `tc.setPassword`, `tc.createUser`, `tc.waitForUserReady`, `acl(topic, access)` | `users_test.go` | A basic-auth Secret, a password change, a `MosquittoUser` through the dynamic client |
@@ -219,6 +223,10 @@ job does preload it, reading the tag out of `test/testimages/images.go`.
   `spec.config` directive appended at a sample value — `allowlistSamples` must cover the allowlist
   exactly. Observed failing on a generated typo: `Error: Unknown configuration variable
   'use_username_as_client_id'.`
+- `TestImageGrantsTheExporterItsSysTreeAndNothingElse` renders `mko-exporter` next to a user
+  granted `#` and asks the pinned image: the exporter reads `$SYS/broker/version` and not a
+  retained application message, the user no `$SYS` topic. Observed failing with the exporter's ACL
+  widened to `#`: `exporter-sys=` empty.
 - `TestImageAcceptsTheHashTheOperatorRenders` and `TestOperatorVerifiesTheImagesHash`
   ([`password_hash_test.go`](../../test/imagetools/password_hash_test.go)) repeat
   [broker-behaviour.md](broker-behaviour.md) M20 on every pull request: inside one container run

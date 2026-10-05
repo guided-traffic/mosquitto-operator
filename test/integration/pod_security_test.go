@@ -87,6 +87,7 @@ func TestIntegration_PodSecurity_RestrictedAdmitsEveryShape(t *testing.T) {
 	withTLS := func(m *mkov1.Mosquitto) { m.Spec.TLS = &mkov1.MosquittoTLS{SecretName: "broker-tls"} }
 	withStorage := func(m *mkov1.Mosquitto) { m.Spec.Storage = &mkov1.MosquittoStorage{Size: "1Gi"} }
 	withHardAntiAffinity := func(m *mkov1.Mosquitto) { m.Spec.AntiAffinity = mkov1.AntiAffinityModeHard }
+	withMetrics := func(m *mkov1.Mosquitto) { m.Spec.Metrics = &mkov1.MosquittoMetrics{Enabled: true} }
 
 	t.Run("control: a pod the restricted profile forbids is refused", func(t *testing.T) {
 		pod := brokerPod(t, base())
@@ -106,6 +107,7 @@ func TestIntegration_PodSecurity_RestrictedAdmitsEveryShape(t *testing.T) {
 		{"PVC-backed persistence", base(withStorage)},
 		{"TLS and storage together", base(withTLS, withStorage)},
 		{"hard anti-affinity", base(withHardAntiAffinity)},
+		{"metrics exporter, with TLS", base(withMetrics, withTLS)},
 	}
 	for _, shape := range shapes {
 		t.Run(shape.name, func(t *testing.T) {

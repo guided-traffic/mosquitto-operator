@@ -268,13 +268,10 @@ func (tc *testClients) eventuallyServed(t *testing.T, ns, pod, serverName string
 
 var forwardingLine = regexp.MustCompile(`Forwarding from 127\.0\.0\.1:(\d+)`)
 
-// servedSerial opens a port-forward to the broker pod's MQTTS port, completes
-// one verified TLS handshake through it and returns the serial of the served
-// certificate.
-func (tc *testClients) servedSerial(ns, pod, serverName string, roots *x509.CertPool) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "kubectl", "port-forward", "-n", ns, "pod/"+pod, ":8883")
+// portForward starts `kubectl port-forward` to a port of a pod and returns the
+// local address. It ends with ctx.
+func portForward(ctx context.Context, ns, pod string, port int) (string, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "port-forward", "-n", ns, "pod/"+pod, fmt.Sprintf(":%d", port))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return "", err
@@ -282,29 +279,40 @@ func (tc *testClients) servedSerial(ns, pod, serverName string, roots *x509.Cert
 	if err := cmd.Start(); err != nil {
 		return "", err
 	}
-	defer func() { cancel(); _ = cmd.Wait() }()
+	go func() { <-ctx.Done(); _ = cmd.Wait() }()
 
-	port := make(chan string, 1)
+	local := make(chan string, 1)
 	go func() {
 		scanner := bufio.NewScanner(stdout)
 		for scanner.Scan() {
 			if m := forwardingLine.FindStringSubmatch(scanner.Text()); m != nil {
 				select {
-				case port <- m[1]:
+				case local <- m[1]:
 				default:
 				}
 			}
 		}
 	}()
-	var local string
 	select {
-	case local = <-port:
+	case p := <-local:
+		return "127.0.0.1:" + p, nil
 	case <-ctx.Done():
-		return "", fmt.Errorf("kubectl port-forward to %s/%s did not start", ns, pod)
+		return "", fmt.Errorf("kubectl port-forward to %s/%s:%d did not start", ns, pod, port)
 	}
+}
 
+// servedSerial opens a port-forward to the broker pod's MQTTS port, completes
+// one verified TLS handshake through it and returns the serial of the served
+// certificate.
+func (tc *testClients) servedSerial(ns, pod, serverName string, roots *x509.CertPool) (string, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
+	defer cancel()
+	address, err := portForward(ctx, ns, pod, 8883)
+	if err != nil {
+		return "", err
+	}
 	dialer := &tls.Dialer{Config: &tls.Config{RootCAs: roots, ServerName: serverName, MinVersion: tls.VersionTLS12}}
-	conn, err := dialer.DialContext(ctx, "tcp", "127.0.0.1:"+local)
+	conn, err := dialer.DialContext(ctx, "tcp", address)
 	if err != nil {
 		return "", err
 	}

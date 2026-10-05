@@ -13,6 +13,14 @@ import (
 	"github.com/guided-traffic/mosquitto-operator/internal/common"
 )
 
+// SysInterval and MaxPacketSize are the 2.1 defaults the generated file states
+// explicitly (ADR 0002 D7): seconds between $SYS updates, and the largest MQTT
+// packet in bytes (M29).
+const (
+	SysInterval   = 10
+	MaxPacketSize = 2000000
+)
+
 const (
 	// MQTTPort is the plain MQTT listener port.
 	MQTTPort int32 = 1883
@@ -105,6 +113,12 @@ func GenerateMosquittoConf(m *mkov1.Mosquitto) string {
 		"# is set and an emptyDir otherwise.",
 		"persistence true",
 		fmt.Sprintf("persistence_location %s/", DataMountPath),
+		"",
+		"# Two broker defaults, stated rather than inherited (M28, M29): how often",
+		"# $SYS is published, which is the resolution of the metrics exporter, and",
+		"# the packet limit 2.1 lowered. A line in spec.config overrides either.",
+		fmt.Sprintf("sys_interval %d", SysInterval),
+		fmt.Sprintf("max_packet_size %d", MaxPacketSize),
 		"",
 		"# Users. The operator renders every MosquittoUser bound to this broker into",
 		"# these two files; the reloader sidecar copies a change in and reloads the",

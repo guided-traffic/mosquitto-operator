@@ -26,7 +26,7 @@ StatefulSet and could rewrite the pod template outright.
 
 | Change | Reaches running pods? | Mechanism |
 |---|---|---|
-| `spec.image`, `spec.resources`, `spec.antiAffinity` | Yes, by a roll | They are in the pod spec, so the pod-spec hash changes and the StatefulSet controller replaces the pods (`TestPodTemplateHashesChangeWithTheThingTheyDigest`) |
+| `spec.image`, `spec.resources`, `spec.antiAffinity`, `spec.metrics` | Yes, by a roll | They are in the pod spec, so the pod-spec hash changes and the StatefulSet controller replaces the pods (`TestPodTemplateHashesChangeWithTheThingTheyDigest`) |
 | `spec.config`, and anything else in the generated file | Yes, by a roll | The config hash digests the rendered `mosquitto.conf` (`TestIntegration_Reconcile_ConfigChangeReachesThePodTemplate`) |
 | A `MosquittoUser` added, deleted or changed, or its credentials Secret changed — a rotated password | **Yes, without a restart** | `<broker>-auth` is re-rendered; the kubelet refreshes its mount, `reloader` copies it in and sends `SIGHUP`; a removed user and connections made with a changed password are dropped at that reload (observed on Kind: `TestE2E_Users_TheBrokerFollowsItsUsers`). [H-18](#h-18) is how long it takes |
 | A new operator version | Yes, by a roll of **every** broker | `auth-init` and `reloader` run the operator's own image, part of the pod spec ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D6) |

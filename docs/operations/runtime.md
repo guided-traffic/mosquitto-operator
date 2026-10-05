@@ -167,6 +167,7 @@ hashes onto the template. `mko.gtrfc.com/pod-spec-hash` digests the whole pod sp
 | `spec.podLabels` or `spec.podAnnotations` | the pod template's labels or annotations, and the applied-keys annotation on the StatefulSet | Rolled. A removed key is removed from the pods |
 | `spec.tls` added or removed | the ConfigMap (the listener), the pod template (the Secret volume, the mount, the port, the probes) and the port of both Services | Rolled. Clients have to change their port (`1883` ↔ `8883`) |
 | `spec.tls.secretName` pointing at another Secret | the pod template (the volume) | Rolled |
+| `spec.metrics.enabled` switched | the pod template (the `exporter` container and its volume), and `<name>-auth` (the user `mko-exporter` and its password) | Rolled ([metrics.md](metrics.md)) |
 | New content in the referenced TLS Secret | nothing | **Not restarted.** The reloader checks the new pair and signals the broker after the kubelet refreshed the mount ([a renewed certificate](#a-renewed-certificate)) |
 | A `MosquittoUser` added, changed or deleted, or its Secret changed | `<name>-auth` | **Not restarted.** The reloader copies the change in and signals the broker after the kubelet refreshed the mount ([users.md](users.md#how-long-a-change-takes)) |
 | `spec.storage.size` or `.storageClassName` on a broker that has storage | nothing | Not restarted. The change never converges ([below](#changing-specstorage-on-an-existing-broker)) |
@@ -316,9 +317,9 @@ no Event. The signals are this status, the operator's `Reconciler error` log lin
 **`:8080`, `/metrics`.** This is controller-runtime's own registry: reconcile counts and errors per
 controller (`controller_runtime_reconcile_total`, `controller_runtime_reconcile_errors_total`,
 both with `controller="mosquitto"`), plus the work queue, the API client and the Go runtime. The
-operator registers no metric of its own, and none of the series names a `Mosquitto`. There is no
-broker metrics exporter ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md), nothing
-of it implemented).
+operator registers no metric of its own, and none of the series names a `Mosquitto`. The brokers'
+own statistics come from the exporter in the broker pods, port `9234`, with `spec.metrics`
+([metrics.md](metrics.md)).
 
 **Security note:** the endpoint is plain HTTP with no authentication. Anything that can route to
 the operator pod can read it, whether or not the chart's metrics Service exists. On the Helm path,

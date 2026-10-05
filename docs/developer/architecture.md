@@ -285,6 +285,13 @@ Built by `buildPodSpec`, `buildConfigCheckContainer` and `buildBrokerContainer` 
   `reloader` the second container; `shareProcessNamespace: true` lets it signal the broker. The
   annotation `kubectl.kubernetes.io/default-container: mosquitto` keeps `kubectl logs` and `exec` on
   the broker.
+- **The `exporter`, with `spec.metrics.enabled` only.** The operator's image, `/app/exporter`
+  (`buildExporterContainer`), the third container, with the reloader's fixed resources and no
+  probe. It reads its password from the volume `exporter-secret` — the key `exporter-password` of
+  `<name>-auth` alone — logs in to `127.0.0.1:1883`, or `8883` pinning the mounted certificate
+  under TLS, as `mko-exporter`, subscribes to `$SYS/broker/#` and serves `/metrics` on `9234`
+  (`metrics`). Its MQTT client is `paho.mqtt.golang`; a lost session drops every value
+  (`Collector.Lost`) until the next one ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md)).
 - **The `config-check` init container.** The broker image runs
   `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf --test-config` before the broker starts,
   with the broker's resources and security context ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)
@@ -296,8 +303,9 @@ Built by `buildPodSpec`, `buildConfigCheckContainer` and `buildBrokerContainer` 
 - **Command.** `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf`, bypassing the image's
   entrypoint, which chowns `/mosquitto` when it runs as root — which this pod never does. That the
   binary is still at that path is what `test/imagetools` checks against the pinned image.
-- **Volumes.** `config` (the ConfigMap, mode `0644`, read-only mount), `auth-secret` (`<name>-auth`,
-  mode `0440`) and `auth` (an `emptyDir`, read-only in the broker), `tls` (the Secret, mode
+- **Volumes.** `config` (the ConfigMap, mode `0644`, read-only mount), `auth-secret` (the keys
+  `passwd` and `acl` of `<name>-auth`, mode `0440`), `exporter-secret` (its key `exporter-password`,
+  mode `0440`, only with metrics) and `auth` (an `emptyDir`, read-only in the broker), `tls` (the Secret, mode
   `0644`, read-only mount, only with TLS), `data` (`emptyDir` unless `spec.storage` is set, in
   which case the claim template of the same name), `config-check-scratch` (`emptyDir`, the init
   container's only). The `0644` is written out because it is what
@@ -401,7 +409,7 @@ series; nothing in this repository registers a metric (`prometheus/client_golang
 | Decision | Where it lives in code | ADR |
 |---|---|---|
 | The operator consumes TLS material and never issues it; a renewal is reloaded in the pod, checked first | `MosquittoTLS`, the secret volume and `buildReloaderSidecar` in `statefulset.go`, the TLS branch of `GenerateMosquittoConf`, `internal/reloader/tls.go` | [0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
-| The broker metrics exporter is to be written here — **nothing of it is implemented** | nothing; the reserved `mko-` prefix is the only part in the tree | [0002](../adr/0002-the-metrics-exporter-is-written-here.md) |
+| The broker metrics exporter is written here, a second binary of the operator image, logged in as the reserved `mko-exporter` | `cmd/exporter`, `internal/exporter`, `buildExporterContainer`, `auth.ExporterPrincipal`, `exporterPassword` | [0002](../adr/0002-the-metrics-exporter-is-written-here.md) |
 | The Go version is one fact in four files, moved by one grouped Renovate PR | `go.mod`, `Containerfile`, `GO_VERSION` in both workflows, `.github/release-template.hbs` | [0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md) |
 | Two E2E legs on a node-count axis, no version matrix, a gate job for the required check | the `e2e-tests` and `e2e-gate` jobs in `release.yml`, `KIND_WORKERS` in the Makefile | [0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) |
 | Fork pull requests execute on the self-hosted runners, gated outside the repository | the comment above `on:` in `release.yml`; no fork guard in any workflow | [0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) |
@@ -419,8 +427,6 @@ Two choices live only in code comments, with no ADR: `DefaultMaxConcurrentReconc
 
 ## What is not built
 
-Not in the tree, and not to be described as if it were: the broker metrics exporter
-([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) records the decision only),
-roles or groups of users, the dynamic-security mode, admission webhooks,
+Not in the tree, and not to be described as if it were: roles or groups of users, the dynamic-security mode, admission webhooks,
 PodDisruptionBudgets, NetworkPolicies, ServiceMonitor, PrometheusRule, and any cert-manager
 dependency at any layer. The chart has no template for any of them.

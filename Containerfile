@@ -31,6 +31,11 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
     -ldflags="-w -s -X main.version=${BUILD_NUMBER:-dev} -X main.commit=${GIT_COMMIT:-unknown} -X main.buildTime=${BUILD_TIME:-unknown}" \
     -o manager ./cmd/main.go
 
+# The broker metrics exporter, a second binary in the same image (ADR 0002 D2)
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} \
+    go build -a -installsuffix cgo -ldflags="-w -s" \
+    -o exporter ./cmd/exporter
+
 # Final stage - using distroless for minimal attack surface
 FROM gcr.io/distroless/static-debian12:nonroot
 
@@ -55,8 +60,9 @@ LABEL org.opencontainers.image.title="Mosquitto Operator" \
 
 WORKDIR /app
 
-# Copy the binary from builder stage
+# Copy the binaries from builder stage
 COPY --from=builder /app/manager .
+COPY --from=builder /app/exporter .
 
 # Expose metrics and health probe ports
 EXPOSE 8080 8081

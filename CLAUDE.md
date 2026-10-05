@@ -76,13 +76,16 @@ on an unanswered question.
 
 One `Mosquitto` produces exactly five objects: the Secret `<name>-auth` holding its rendered users,
 a ConfigMap holding the generated `mosquitto.conf`, a headless Service, a ClusterIP client Service
-and a StatefulSet of broker pods, each pod with the broker, a `reloader` sidecar and the init
-containers `auth-init` and `config-check` (`reconcileResources` in
+and a StatefulSet of broker pods, each pod with the broker, a `reloader` sidecar, the `exporter`
+when `spec.metrics.enabled` is set, and the init containers `auth-init` and `config-check`
+(`reconcileResources` in
 [`internal/controller/mosquitto_controller.go`](internal/controller/mosquitto_controller.go)). Every
 `MosquittoUser` naming the broker is rendered into `<name>-auth`
 ([`internal/controller/users.go`](internal/controller/users.go),
 [`internal/auth`](internal/auth)); the reloader, the binary's second entry point `manager reload`,
-copies a change in and signals the broker ([`internal/reloader`](internal/reloader)).
+copies a change in and signals the broker ([`internal/reloader`](internal/reloader)); the
+exporter, the image's second binary, serves the broker's `$SYS` tree for Prometheus
+([`internal/exporter`](internal/exporter), ADR 0002).
 The fields, the names it derives and the generated file are in the [README](README.md)
 reference.
 
@@ -93,8 +96,7 @@ published through another. High availability is parked
 ([docs/planning/ha-research.md](docs/planning/ha-research.md)); do not write a comment, doc line
 or commit message that implies otherwise, and build nothing on `replicas > 1`.
 
-**Not in the tree, and not to be documented as if it were:** the metrics exporter (ADR 0002,
-nothing built), roles or groups of users, the dynamic-security mode, PodDisruptionBudgets, NetworkPolicies (deliberately
+**Not in the tree, and not to be documented as if it were:** roles or groups of users, the dynamic-security mode, PodDisruptionBudgets, NetworkPolicies (deliberately
 never shipped, ADR 0008 D16), admission webhooks, ServiceMonitor, PrometheusRule, and any
 cert-manager dependency at any layer.
 

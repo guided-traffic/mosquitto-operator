@@ -79,8 +79,12 @@ Absent by decision rather than by oversight
   owner reference; a user's credentials Secret is the user's.
 - **Nothing on `rbac.authorization.k8s.io`, no `escalate`, no `bind`, no `serviceaccounts`.** The
   operator creates no per-instance identity, so it needs no authority to grant one.
-- `list` and `watch` are informer verbs, not call sites: controller-runtime's cache needs them for
-  every kind the manager watches, and no line of the non-test tree calls `List`.
+- `list` and `watch` are informer verbs: controller-runtime's cache needs them for every kind the
+  manager watches. The `List` calls of the non-test tree — `listUsers` and `brokersForSecret` —
+  read the users and brokers of a namespace from that cache.
+- **The metrics exporter adds nothing.** It runs in the broker pod without a ServiceAccount token
+  and talks only to its own broker over `127.0.0.1`
+  ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) D4).
 
 **In one paragraph.** This is a workload manager with cluster-wide create and update on four
 kinds — Secrets among them by default — and read on its own two CRDs. It cannot delete any object

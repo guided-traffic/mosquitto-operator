@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"io"
 	"reflect"
@@ -35,6 +36,20 @@ type userPass struct {
 }
 
 // random returns the source of password salts.
+// exporterPassword keeps the exporter's password from the broker's rendered
+// Secret, or generates one: 32 random bytes, base64url. It is the operator's
+// own credential, never derived from a user's Secret (ADR 0002 D4).
+func (r *MosquittoReconciler) exporterPassword(previous map[string][]byte) (string, error) {
+	if kept := string(previous[builder.ExporterPasswordKey]); kept != "" {
+		return kept, nil
+	}
+	raw := make([]byte, 32)
+	if _, err := io.ReadFull(r.random(), raw); err != nil {
+		return "", fmt.Errorf("generating the exporter password: %w", err)
+	}
+	return base64.RawURLEncoding.EncodeToString(raw), nil
+}
+
 func (r *MosquittoReconciler) random() io.Reader {
 	if r.Random != nil {
 		return r.Random
@@ -79,9 +94,20 @@ func (r *MosquittoReconciler) renderUsers(ctx context.Context, m *mkov1.Mosquitt
 	if err != nil {
 		return userPass{}, err
 	}
-	result, err := auth.Render(auth.FilePayload{}, inputs, previous, r.random())
+	var reserved []auth.Principal
+	exporterPassword := ""
+	if m.IsMetricsEnabled() {
+		if exporterPassword, err = r.exporterPassword(previous); err != nil {
+			return userPass{}, err
+		}
+		reserved = append(reserved, auth.ExporterPrincipal(exporterPassword))
+	}
+	result, err := auth.Render(auth.FilePayload{}, inputs, reserved, previous, r.random())
 	if err != nil {
 		return userPass{}, err
+	}
+	if exporterPassword != "" {
+		result.Data[builder.ExporterPasswordKey] = []byte(exporterPassword)
 	}
 	for name, verdict := range result.Verdicts {
 		pass.verdicts[name] = verdict

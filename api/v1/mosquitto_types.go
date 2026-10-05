@@ -133,12 +133,12 @@ type MosquittoSpec struct {
 	// Config is extra mosquitto.conf content appended to the generated base
 	// configuration. It is written into the ConfigMap verbatim.
 	//
-	// The broker reads it after everything the operator generates, so a global
-	// option repeated here wins over the generated one, and a listener line here
-	// adds a listener the operator neither models nor exposes as a container or
-	// Service port. Bridges and extra log destinations are equally possible.
-	// Nothing here is validated: the broker sees it first at startup, so a
-	// rejected file is a CrashLoopBackOff rather than a rejected resource.
+	// Every non-blank, non-comment line must start with a tuning directive of
+	// the operator's allowlist; a line that does not makes the resource Failed
+	// with reason ConfigDirectiveRefused and writes nothing. The broker reads it
+	// after everything the operator generates, so a directive repeated here wins
+	// over the generated one. Values are checked by the broker's own
+	// --test-config in an init container, before the broker starts.
 	// +optional
 	Config string `json:"config,omitempty"`
 
@@ -181,6 +181,23 @@ type MosquittoSpec struct {
 	// pods. A change rolls the pods.
 	// +optional
 	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
+
+	// Metrics adds an exporter container to every broker pod that serves the
+	// broker's $SYS statistics for Prometheus. Absent or disabled, the pod has
+	// no exporter. Turning it on or off rolls the pods.
+	// +optional
+	Metrics *MosquittoMetrics `json:"metrics,omitempty"`
+}
+
+// MosquittoMetrics configures the broker metrics exporter (ADR 0002).
+type MosquittoMetrics struct {
+	// Enabled adds the exporter: a container running the operator image's
+	// exporter binary, logged in to its own broker over localhost as the
+	// reserved user mko-exporter with read access to $SYS/# only, and serving
+	// plain HTTP /metrics on port 9234 of the pod. The endpoint has no
+	// authentication: whatever can reach the pod IP can read it.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // MosquittoTLS points at the TLS material the broker listener serves.
@@ -282,6 +299,11 @@ func (m *Mosquitto) AntiAffinityMode() string {
 // produce a listener with no certificate to serve.
 func (m *Mosquitto) IsTLSEnabled() bool {
 	return m.Spec.TLS != nil && m.Spec.TLS.SecretName != ""
+}
+
+// IsMetricsEnabled reports whether the broker pods carry the metrics exporter.
+func (m *Mosquitto) IsMetricsEnabled() bool {
+	return m.Spec.Metrics != nil && m.Spec.Metrics.Enabled
 }
 
 // IsStorageEnabled reports whether the persistence directory is backed by a

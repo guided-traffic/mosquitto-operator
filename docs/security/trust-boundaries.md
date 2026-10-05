@@ -16,7 +16,7 @@ namespace from another is [tenancy.md](tenancy.md); the pipeline and its credent
 | **Operator manager** | A ServiceAccount bound by a **ClusterRoleBinding**: the chart's `fullname` — `mosquitto-operator` for the README's install command, which names the release `mosquitto-operator`, otherwise `<release>-mosquitto-operator` — or `mosquitto-operator-mosquitto-operator` in `mosquitto-operator-system` on the kustomize path | **Cluster-wide, every namespace** — for Secrets every namespace with `secretAccess.mode: all`, the listed ones with `namespaces` | `create`, `get`, `list`, `update`, `watch` on `configmaps`, `services`, `statefulsets` and `secrets`; `get`, `list`, `watch` on `mosquittoes` and `mosquittousers`; `update` on their status and on `mosquittoes/finalizers`. No `delete`, no `patch` ([privilege-footprint.md](privilege-footprint.md)). Reads the credentials Secrets the users name, writes `<broker>-auth` |
 | **CR author** | Anyone with `create` or `update` on `mosquittoes.mko.gtrfc.com` in a namespace | That namespace | Chooses `spec.image` (any string), the tuning in `spec.config` (allowlisted directives only), the name of the Secret mounted as TLS material, `spec.replicas` (1–9), the storage size and class, the container resources, the pod labels and annotations. [H-2](#h-2) and [H-15](#h-15) are what that buys them |
 | **User author** | Anyone with `create` or `update` on `mosquittousers.mko.gtrfc.com` in a namespace | That namespace | Adds a login to a broker of the namespace: names the broker, a Secret of the namespace whose username and password the operator reads and renders, and the topics. [H-15](#h-15) is what naming a Secret buys them |
-| **Broker pods** | The namespace's `default` ServiceAccount — `buildPodSpec` sets no `ServiceAccountName` — with `AutomountServiceAccountToken: false` ([`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)) | None: no token is mounted | Nothing through the API. The broker runs the image of `spec.image`; `auth-init` and `reloader` run the operator's own image and read the mounted `<broker>-auth` — hashes, never a plaintext — and signal the broker, which they may because they share its uid |
+| **Broker pods** | The namespace's `default` ServiceAccount — `buildPodSpec` sets no `ServiceAccountName` — with `AutomountServiceAccountToken: false` ([`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)) | None: no token is mounted | Nothing through the API. The broker runs the image of `spec.image`; `auth-init` and `reloader` run the operator's own image and read the keys `passwd` and `acl` of the mounted `<broker>-auth` — hashes, never a plaintext — and signal the broker, which they may because they share its uid. With `spec.metrics` the `exporter` reads the one plaintext of `<broker>-auth`, its own password, logs in to its broker over `127.0.0.1` and serves `/metrics` on `9234` to anyone ([H-20](#h-20)) |
 | **MQTT clients** | **A username and password of a `MosquittoUser`.** Anonymous clients are refused; the client ID is the username | Anything that can route to the broker — the ClusterIP Service `<name>` on 1883, or on 8883 under TLS, or a broker pod's IP directly | Publish and subscribe on the topics of their ACL; nothing under `$`. Without `spec.tls` the password crosses the network in plaintext ([tenancy.md H-6](tenancy.md#h-6)) |
 | **CI** | GitHub Actions jobs, every one on `self-hosted` runners | The runner fleet; on non-fork runs also Docker Hub and this GitHub repository | `DOCKERHUB_PAT`, the GitHub App credentials `APP_CLIENT_ID`/`APP_PRIVATE_KEY` with the installation token minted from them, and the job `GITHUB_TOKEN` — which job holds which, and what bounds it, is [ci-and-supply-chain.md](ci-and-supply-chain.md) |
 
@@ -48,6 +48,8 @@ namespace from another is [tenancy.md](tenancy.md); the pipeline and its credent
 
   broker pod:  auth-init + reloader (operator image) --copy--> /mosquitto/auth --> broker
                <name>-auth mounted read-only              SIGHUP on change, same uid
+               exporter (operator image, spec.metrics) --MQTT 127.0.0.1 as mko-exporter--> broker
+               :9234 /metrics, plain HTTP, no authentication
 
   MQTT client --TCP 1883 (8883 under TLS)--> Service <name> --> broker pods
                username + password of a MosquittoUser, ACL per topic
@@ -75,9 +77,7 @@ namespace from another is [tenancy.md](tenancy.md); the pipeline and its credent
 Named so that nothing on these pages is read as describing it: admission webhooks,
 NetworkPolicies, PodDisruptionBudgets, ServiceMonitors, PrometheusRules, any per-instance
 ServiceAccount, client certificates (`require_certificate`), roles or groups of users, and any
-dynamic-security plugin. A broker metrics exporter is a recorded decision with no code behind it
-([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md)): `buildPodSpec` builds the broker
-and the reloader, nothing else.
+dynamic-security plugin.
 
 ## What this does not cover
 
@@ -171,3 +171,20 @@ it is the administrator's one diagnostic for the refusal
 What a cluster operator can do: nothing in the operator closes it; where it matters, grant
 `mosquittoes` only to subjects who may list those kinds in the namespace, which in most clusters
 they already may.
+
+<a id="h-20"></a>
+### H-20 — The broker metrics endpoint answers anyone who can reach the pod
+
+Live for every `Mosquitto` with `spec.metrics.enabled`, dormant otherwise (the default). The
+`exporter` serves `/metrics` as plain HTTP on port `9234` of the pod IP with no authentication
+(`exporter.Handler` in [`internal/exporter/run.go`](../../internal/exporter/run.go)); no Service
+publishes it, but every pod of the cluster can route to a pod IP. What a reader learns is the
+broker's own statistics: connected and disconnected client counts, message and byte rates, heap
+use, the number of retained messages and subscriptions, the uptime and the broker version. The
+series carry no payload, no application topic, no client ID and no credential — the exporter
+holds a password, but serves nothing derived from it. The broker version tells an attacker which
+advisories apply. Authentication was not added for the same reason as on the operator's own
+endpoint ([privilege-footprint.md H-4](privilege-footprint.md#h-4)): it needs `TokenReview` and
+`SubjectAccessReview`, and the broker pods hold no API access at all. What a cluster operator can
+do: leave metrics off where the statistics matter, or admit only the scraper to `9234` with a
+NetworkPolicy ([metrics.md](../operations/metrics.md#finding-the-pods)).

@@ -227,6 +227,8 @@ func TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard(t *testing.T) {
 		{"TLS secret mounted", []func(*mkov1.Mosquitto){withTLS("broker-tls")}},
 		{"PVC-backed persistence", []func(*mkov1.Mosquitto){withStorage("1Gi")}},
 		{"TLS and storage together", []func(*mkov1.Mosquitto){withTLS("broker-tls"), withStorage("1Gi")}},
+		{"metrics exporter", []func(*mkov1.Mosquitto){withMetrics()}},
+		{"metrics exporter with TLS", []func(*mkov1.Mosquitto){withMetrics(), withTLS("broker-tls")}},
 		{"hard anti-affinity", []func(*mkov1.Mosquitto){func(m *mkov1.Mosquitto) {
 			m.Spec.AntiAffinity = mkov1.AntiAffinityModeHard
 		}}},
@@ -698,4 +700,52 @@ func TestBuildAuthSecret(t *testing.T) {
 	assert.Equal(t, common.BaseLabels(m, DefaultImage), secret.Labels)
 	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
 	assert.Equal(t, data, secret.Data)
+}
+
+// TestBuildStatefulSet_TheExporter is ADR 0002 D2-D6 in the pod spec.
+func TestBuildStatefulSet_TheExporter(t *testing.T) {
+	without := mustBuild(t, newMosquitto()).Spec.Template.Spec
+	for _, c := range without.Containers {
+		assert.NotEqual(t, ExporterContainerName, c.Name, "no broker pod grows a container it did not ask for (D6)")
+	}
+	assert.Nil(t, podVolume(without, ExporterSecretVolumeName))
+
+	spec := mustBuild(t, newMosquitto(withMetrics())).Spec.Template.Spec
+	exporter := containerNamed(t, spec, ExporterContainerName)
+	assert.Equal(t, testOptions.ReloaderImage, exporter.Image, "the operator image, a second binary (D2)")
+	assert.Equal(t, []string{"/app/exporter"}, exporter.Command)
+	assert.Equal(t, []string{"--broker", "tcp://127.0.0.1:1883", "--password-file", "/mosquitto/exporter/password", "--listen", ":9234"}, exporter.Args,
+		"over localhost, never across the pod network (D3)")
+	assert.Equal(t, []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9234, Protocol: corev1.ProtocolTCP}}, exporter.Ports)
+	assert.Nil(t, exporter.ReadinessProbe, "a monitoring failure must not take the broker out of its Services (D5)")
+	assert.Nil(t, exporter.LivenessProbe)
+	assert.Equal(t, containerSecurityContext(), exporter.SecurityContext)
+	assert.NotEmpty(t, exporter.Resources.Requests)
+
+	volume := podVolume(spec, ExporterSecretVolumeName)
+	require.NotNil(t, volume)
+	require.NotNil(t, volume.Secret)
+	assert.Equal(t, "broker-auth", volume.Secret.SecretName)
+	assert.Equal(t, []corev1.KeyToPath{{Key: "exporter-password", Path: "password"}}, volume.Secret.Items,
+		"the exporter sees its password and none of the hashes")
+	mount := containerVolumeMount(exporter, ExporterSecretVolumeName)
+	require.NotNil(t, mount)
+	assert.True(t, mount.ReadOnly)
+	assert.Nil(t, containerVolumeMount(exporter, AuthSecretVolumeName))
+
+	authVolume := podVolume(spec, AuthSecretVolumeName)
+	require.NotNil(t, authVolume)
+	assert.Equal(t, []corev1.KeyToPath{{Key: "acl", Path: "acl"}, {Key: "passwd", Path: "passwd"}}, authVolume.Secret.Items,
+		"auth-init and the reloader see the two files, not the exporter's password")
+
+	tlsSpec := mustBuild(t, newMosquitto(withMetrics(), withTLS("broker-tls"))).Spec.Template.Spec
+	tlsExporter := containerNamed(t, tlsSpec, ExporterContainerName)
+	assert.Equal(t, []string{"--broker", "ssl://127.0.0.1:8883", "--password-file", "/mosquitto/exporter/password", "--listen", ":9234",
+		"--tls-cert", "/mosquitto/tls/tls.crt"}, tlsExporter.Args, "under TLS the one listener is 8883, and the mounted certificate is pinned")
+	require.NotNil(t, containerVolumeMount(tlsExporter, TLSVolumeName))
+	assert.True(t, containerVolumeMount(tlsExporter, TLSVolumeName).ReadOnly)
+
+	assert.NotEqual(t, mustBuild(t, newMosquitto()).Spec.Template.Annotations[AnnotationPodSpecHash],
+		mustBuild(t, newMosquitto(withMetrics())).Spec.Template.Annotations[AnnotationPodSpecHash],
+		"turning metrics on rolls the pods")
 }

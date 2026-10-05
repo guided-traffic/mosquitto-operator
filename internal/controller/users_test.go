@@ -286,3 +286,34 @@ func TestUserBrokers_AMoveWakesBothBrokers(t *testing.T) {
 	}
 	assert.ElementsMatch(t, []string{testName, "other"}, names)
 }
+
+// TestReconcile_TheExporterPrincipal is ADR 0002 D4: with spec.metrics the
+// operator renders mko-exporter with its own generated password into
+// <name>-auth, keeps that password across passes so nothing is rewritten, never
+// counts it as a user, and drops it with spec.metrics.
+func TestReconcile_TheExporterPrincipal(t *testing.T) {
+	cr := newCR()
+	cr.Spec.Metrics = &mkov1.MosquittoMetrics{Enabled: true}
+	r, c := newReconcilerFor(t, cr,
+		credentials("ha-mqtt", "homeassistant", "ha-pw", nil), newUser("homeassistant", "ha-mqtt", time.Hour))
+	stored := reconciled(t, r, c)
+
+	secret := authSecret(t, c)
+	password := string(secret.Data["exporter-password"])
+	assert.Len(t, password, 43, "32 random bytes, base64url")
+	hashes := auth.FilePayload{}.Hashes(secret.Data)
+	assert.True(t, auth.VerifyPassword(hashes["mko-exporter"], password))
+	assert.Contains(t, string(secret.Data[auth.ACLKey]), "user mko-exporter\ntopic read $SYS/#\n")
+	assert.Equal(t, int32(1), stored.Status.Users, "the exporter is not a user")
+
+	reconciled(t, r, c)
+	again := authSecret(t, c)
+	assert.Equal(t, secret.ResourceVersion, again.ResourceVersion, "the password and its hash are kept, nothing is rewritten")
+
+	stored.Spec.Metrics = nil
+	require.NoError(t, c.Update(context.Background(), stored))
+	reconciled(t, r, c)
+	off := authSecret(t, c)
+	assert.NotContains(t, off.Data, "exporter-password")
+	assert.NotContains(t, string(off.Data[auth.PasswdKey]), "mko-exporter")
+}

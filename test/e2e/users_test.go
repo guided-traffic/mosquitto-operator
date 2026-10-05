@@ -90,6 +90,19 @@ func (tc *testClients) createUser(t *testing.T, namespace, name, broker, secret 
 // waitForUserReady waits until a MosquittoUser reports Ready=True.
 func (tc *testClients) waitForUserReady(t *testing.T, namespace, name string) {
 	t.Helper()
+	tc.waitForUserCondition(t, namespace, name, "True", "")
+}
+
+// waitForUserReason waits until a MosquittoUser reports Ready=False with reason.
+func (tc *testClients) waitForUserReason(t *testing.T, namespace, name, reason string) {
+	t.Helper()
+	tc.waitForUserCondition(t, namespace, name, "False", reason)
+}
+
+// waitForUserCondition waits for the Ready condition of a MosquittoUser to have
+// status, and reason unless reason is empty.
+func (tc *testClients) waitForUserCondition(t *testing.T, namespace, name, status, reason string) {
+	t.Helper()
 	err := wait.PollUntilContextTimeout(context.Background(), pollInterval, testTimeout, true,
 		func(ctx context.Context) (bool, error) {
 			u, err := tc.dynamic.Resource(mosquittoUserGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
@@ -99,13 +112,13 @@ func (tc *testClients) waitForUserReady(t *testing.T, namespace, name string) {
 			conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 			for _, raw := range conditions {
 				cond, ok := raw.(map[string]interface{})
-				if ok && cond["type"] == "Ready" && cond["status"] == "True" {
+				if ok && cond["type"] == "Ready" && cond["status"] == status && (reason == "" || cond["reason"] == reason) {
 					return true, nil
 				}
 			}
 			return false, nil
 		})
-	require.NoError(t, err, "MosquittoUser %s/%s never became Ready", namespace, name)
+	require.NoError(t, err, "MosquittoUser %s/%s never reported Ready=%s %s", namespace, name, status, reason)
 }
 
 // mqtt runs one MQTT client tool in the broker container of a pod, once, and

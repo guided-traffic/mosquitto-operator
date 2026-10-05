@@ -85,7 +85,7 @@ make generate-all     # then check that `git status` is clean
 | `verify-ci-references` | node, no `npm install` | Every Renovate customManager still matches a real file and line. |
 | `test-release-tooling` | node + npm | `npm ci --no-audit --no-fund`, then `node hack/verify-release-tooling.mjs`. |
 | `generate-all` | nothing (installs `controller-gen`) | `manifests` + `generate` + `sync-helm-crd` ([below](#generated-code)). Follow it with `git status`. |
-| `build` | nothing | `bin/manager`, after `fmt` and `vet` — and `fmt` rewrites files in place. |
+| `build` | nothing | `bin/manager` and `bin/exporter`, after `fmt` and `vet` — and `fmt` rewrites files in place. |
 | `run` | a kubeconfig | `go run ./cmd/main.go --zap-log-level=debug` against your current cluster, after `fmt` and `vet`. |
 | `docker-build` | Docker | The operator image `IMG`. Depends on `generate-all`, so it regenerates first. |
 | `kind-create` / `kind-delete` | kind, Docker | A cluster named `KIND_CLUSTER` with one control-plane node and `KIND_WORKERS` workers; the config goes to `tmp/kind-config.yaml`. |
@@ -195,7 +195,7 @@ clone pays for the tool downloads, the envtest assets and the image pull on top.
 | `make verify-ci-references` | `OK: all 6 Renovate customManagers reference real files and lines` | 0.4 s |
 | `make test-release-tooling` | `OK: release tooling renders release notes` — `analyzeCommits -> major`, `generateNotes -> 1450 chars, all sections present` | 2.9 s |
 | `make generate-all` | no change to the working tree | 4.1 s |
-| `make build` | `bin/manager` written | 2.4 s |
+| `make build` | `bin/manager` written (measured before `bin/exporter` was added) | 2.4 s |
 | `make docker-build IMG=mosquitto-operator:doccheck` | image built (and removed again afterwards) | 5.5 s, layers cached |
 
 Not run, and therefore not claimed to work: `test`, `test-coverage`, `coverage`, `coverage-ci`,

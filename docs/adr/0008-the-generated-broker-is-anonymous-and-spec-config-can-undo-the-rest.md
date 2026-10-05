@@ -313,12 +313,15 @@ security documentation records the exposure. The ClusterRole gains no `networkpo
 * **The TLS guarantee in D8 is true of what the operator writes and false of what the file can
   contain,** so any future documentation, alerting or compliance statement derived from "TLS means
   no plaintext port" is wrong for a resource that uses `spec.config`. Nothing detects that case.
-* **A certificate rotation is a manual roll** (D4). The operator does not watch the Secret, so
-  running pods keep serving the material they started with for as long as they live.
+* ~~**A certificate rotation is a manual roll** (D4). The operator does not watch the Secret, so
+  running pods keep serving the material they started with for as long as they live.~~
+  *(Superseded 2026-10-05 by [ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md)
+  D10, built: the reloader loads a renewed, valid pair without a restart.)*
 * **Adding authentication later is not a drop-in change.** Whatever principal the brokers get, the
   metrics sidecar decided in
   [ADR 0002](0002-the-metrics-exporter-is-written-here.md) needs one too — `$SYS/#` is precisely
-  the subscription an ACL denies first.
+  the subscription an ACL denies first. *(Built 2026-10-05: the principal is `mko-exporter`, with
+  `topic read $SYS/#`, ADR 0002 D4.)*
 * **Turning `allow_anonymous` off is a `spec.config` edit that rolls the pods,** because
   `AnnotationConfigHash` (`mko.gtrfc.com/config-hash`) digests the generated file and is part of
   the pod template. That is the desired behaviour — Mosquitto reads its configuration once at

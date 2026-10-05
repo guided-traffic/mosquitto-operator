@@ -93,7 +93,9 @@ D14. The operator is the only writer of the files' content; reconciliation is re
 holds the `passwd` content (hashes only) and the `acl` content for every `MosquittoUser` bound to
 the broker ([ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)),
 plus, later, keys the operator needs for itself
-([ADR 0002](0002-the-metrics-exporter-is-written-here.md) D4). There is no Secret per user
+([ADR 0002](0002-the-metrics-exporter-is-written-here.md) D4) — *built 2026-10-05:*
+`exporter-password`, projected into the exporter alone; the `auth-secret` mount of `auth-init`
+and `reloader` became an `items` projection of `passwd` and `acl`. There is no Secret per user
 password. It is written only after `ensureOwned`, owned through a controller reference, and
 collected with its `Mosquitto` ([ADR 0009](0009-delete-only-through-owner-references.md)). Because
 it lies in the same namespace as the plaintext Secrets it is rendered from — no reference crosses a

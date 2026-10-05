@@ -161,17 +161,64 @@ this operator running anywhere but CI.
 
 ## Phase 7 — The exporter
 
-**Goal:** broker metrics for Prometheus.
+**Built 2026-10-05**: `cmd/exporter` and `internal/exporter`, the `exporter` container, the
+reserved user `mko-exporter` with its generated password in `<name>-auth`, the stated
+`sys_interval` and `max_packet_size`, and the tests of every tier — the E2E scenario passed on Kind
+(`TestE2E_Metrics_TheExporterServesTheBrokersSysTree`). ADR 0002 left four points open; each is
+built on its recommended answer, and each answer becomes an amendment of ADR 0002:
 
-**Builds:** [ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) as amended — the
-reserved `mko-exporter` user with `read $SYS/#`, its password a key of `<name>-auth`.
+### 7a — What does the gate look like?
 
-**Effort:** M.
+ADR 0002 D6 fixes the gate (absent means no container) and deliberately not the field.
 
-- The steps ADR 0002 names; the renderer of 4.2 renders the reserved user; the exporter container
-  gets the same security context as every other container.
-- Tests: as ADR 0002 names them, plus an E2E test that the exporter logs in as `mko-exporter` and
-  that no `MosquittoUser` can claim the name.
+- **A — `spec.metrics.enabled: bool`, default `false`.** *(Recommended, and built.)* Reads as what
+  it does in a Git diff, and leaves room for more fields under `metrics` without a breaking
+  change.
+- **B — the presence of `spec.metrics: {}` turns it on.** One line shorter; an empty object as a
+  switch is easy to misread and impossible to turn off without deleting the key.
+- **C — A with the port and the container resources as fields now.** More API than any known need.
+
+**Answer:** _open_
+
+### 7b — How does a scraper reach the exporter, and does it authenticate?
+
+- **A — a container port `9234` named `metrics`, on no Service, plain HTTP without
+  authentication.** *(Recommended, and built.)* Per-pod is what `$SYS` is (D3); a `PodMonitor` or
+  pod discovery finds it; no Service puts the endpoint behind a name. The endpoint is open to the
+  cluster network ([H-20](../security/trust-boundaries.md#h-20)).
+- **B — A, plus a `metrics` port on the headless Service** for `ServiceMonitor` users. A second
+  way to reach the same endpoint, and an object change for every broker.
+- **C — authentication with `TokenReview`/`SubjectAccessReview`.** Needs API access and a
+  ServiceAccount token in the broker pod, which the pod deliberately has not (ADR 0002 D4) — the
+  same reason the operator's own endpoint is open (D8).
+
+**Answer:** _open_
+
+### 7c — Under TLS, what does the exporter verify?
+
+The only listener is `8883`, and its certificate names the broker's DNS names, not `127.0.0.1`.
+
+- **A — accept exactly the certificate mounted at `/mosquitto/tls/tls.crt`, re-read on every
+  handshake.** *(Recommended, and built.)* Works for every Secret shape, a hand-made one without
+  `ca.crt` included, and still proves the peer holds the broker's key; the connection never
+  leaves the pod.
+- **B — verify the chain against `ca.crt` and a DNS name from the certificate.** Needs a `ca.crt`
+  the `kubectl create secret tls` path does not write.
+- **C — a second, plain listener on `127.0.0.1` for the exporter.** Changes the generated
+  configuration and breaks "one listener" for a monitoring convenience.
+
+**Answer:** _open_
+
+### 7d — What are the series called?
+
+- **A — a fixed table of the measured topics, `mosquitto_` names, counters with `_total` for what
+  counts since the broker started, the load averages as one series per kind with a `window`
+  label, the version as `mosquitto_version_info{version}`.** *(Recommended, and built.)* Unknown
+  topics are skipped, missing ones absent (D1's consequence).
+- **B — every numeric topic as a gauge named after its path.** No table to maintain; no counter
+  semantics, and the names change whenever the broker adds a topic.
+
+**Answer:** _open_
 
 ## Phase 8 — High availability
 

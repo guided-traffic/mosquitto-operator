@@ -28,6 +28,10 @@ func withTLS(secret string) func(*mkov1.Mosquitto) {
 	return func(m *mkov1.Mosquitto) { m.Spec.TLS = &mkov1.MosquittoTLS{SecretName: secret} }
 }
 
+func withMetrics() func(*mkov1.Mosquitto) {
+	return func(m *mkov1.Mosquitto) { m.Spec.Metrics = &mkov1.MosquittoMetrics{Enabled: true} }
+}
+
 func withStorage(size string) func(*mkov1.Mosquitto) {
 	return func(m *mkov1.Mosquitto) { m.Spec.Storage = &mkov1.MosquittoStorage{Size: size} }
 }
@@ -212,4 +216,15 @@ func TestBuildConfigMapLabelsFollowTheResolvedImage(t *testing.T) {
 	m := newMosquitto(func(m *mkov1.Mosquitto) { m.Spec.Image = "eclipse-mosquitto:2.1.0" })
 
 	assert.Equal(t, "2.1.0", BuildConfigMap(m).Labels[common.LabelVersion])
+}
+
+// TestGenerateMosquittoConf_StatesTwoDefaults is ADR 0002 D7 with M29: the
+// $SYS interval and the packet limit are written out, before spec.config, so a
+// line there still overrides them.
+func TestGenerateMosquittoConf_StatesTwoDefaults(t *testing.T) {
+	conf := GenerateMosquittoConf(newMosquitto(func(m *mkov1.Mosquitto) { m.Spec.Config = "sys_interval 30" }))
+	assert.Contains(t, conf, "\nsys_interval 10\n")
+	assert.Contains(t, conf, "\nmax_packet_size 2000000\n")
+	assert.Less(t, strings.Index(conf, "sys_interval 10"), strings.Index(conf, "sys_interval 30"),
+		"the generated value comes first, so spec.config wins")
 }

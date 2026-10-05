@@ -97,7 +97,7 @@ the detail.
 
 | ADR | Decision | State |
 |---|---|---|
-| [0002](0002-the-metrics-exporter-is-written-here.md) | The broker metrics exporter is written in this repository, and logs in as a reserved user | Not built — only D8, the operator's own endpoint, describes existing code |
+| [0002](0002-the-metrics-exporter-is-written-here.md) | The broker metrics exporter is written in this repository, and logs in as a reserved user | Implemented — D1–D9, built 2026-10-05; D4, D6 and D7 on the recommended answers of open decisions 7a–7d in the plan |
 
 ### Build, CI and verification
 

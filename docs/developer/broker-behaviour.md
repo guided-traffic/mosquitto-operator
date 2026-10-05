@@ -12,7 +12,7 @@ reasonable person would assume the other way, and the decisions in
 follow from them.
 
 **Rig.** Single-container docker 28.4.0 on arm64, the pinned image, configuration and credential
-files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M27 on 2026-10-05. **None of it
+files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M29 on 2026-10-05. **None of it
 ran on a cluster**, except M22 and M23, which were measured on Kind, and where a section says it
 was observed on Kind as well. The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
 to the parked high-availability research in [docs/planning/](../planning/), not to anything the
@@ -538,6 +538,38 @@ The `acl-file` parser takes everything after the access word as the topic, space
 does not stop at the first space. So the renderer refuses only what changes the meaning of a line —
 a line break, any other control character, leading or trailing whitespace — and lets a topic with an
 inner space through (`auth.topicProblem` in [`internal/auth/render.go`](../../internal/auth/render.go)).
+
+## M28 — The `$SYS` topics the exporter maps, and what they carry
+
+*Measured 2026-10-05*, `eclipse-mosquitto:2.1.2-alpine`, docker 28.4.0, arm64, the three-line
+configuration of [ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) (`log_dest
+stdout`, `listener 1883`, `allow_anonymous true`), `mosquitto_sub -v -t '$SYS/#' -W 22` from the
+same container. 55 distinct topics, the same count ADR 0002 recorded; one name carries a space,
+`$SYS/broker/retained messages/count`. Payloads are decimal integers, except:
+
+```
+$SYS/broker/load/bytes/received/1min 19.35          # every load/… topic: a decimal fraction
+$SYS/broker/uptime 21 seconds                       # a number and a unit
+$SYS/broker/version mosquitto version 2.1.2         # a string
+```
+
+The 24 `load/…` topics are `{bytes,messages,publish}/{received,sent}`, `publish/dropped`,
+`connections` and `sockets`, each over `1min`, `5min` and `15min`. Every one of the 55 is
+retained: a subscriber started 12 seconds after the broker received all 55 within one second, and
+`mosquitto_sub --retained-only` the same 55. A new subscription therefore sees every value at once,
+without waiting for `sys_interval`. The exporter's mapping table
+is this set ([`internal/exporter/mapping.go`](../../internal/exporter/mapping.go)), plus
+`clients/maximum`, which ADR 0002 measured on 2.0.22 only.
+
+## M29 — `max_packet_size` defaults to 2,000,000 bytes, and a later line wins
+
+*Measured 2026-10-05*, same rig. With no `max_packet_size` line, a QoS 0 publish of a 1,999,000-byte
+payload is accepted and one of 2,000,100 bytes is refused — the broker logs `disconnected: oversize
+packet`, while `mosquitto_pub` still exits `0`. A file with `sys_interval 10` and
+`max_packet_size 2000000` early and `sys_interval 2` and `max_packet_size 3100000` after the
+listener: `$SYS/broker/uptime` arrives every 2 seconds and a 3,000,000-byte payload is accepted.
+So the generated file can state both defaults (ADR 0002 D7), and a `spec.config` line, appended
+after it, still overrides them.
 
 ## Not measured
 

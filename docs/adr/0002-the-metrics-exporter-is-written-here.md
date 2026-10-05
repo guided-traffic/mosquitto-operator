@@ -2,8 +2,44 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. **Nothing in this ADR is implemented.** It is recorded ahead of the
-code so that nothing else is built against a contradicting assumption.
+Accepted. Date: 2026-09-01. ~~**Nothing in this ADR is implemented.** It is recorded ahead of the
+code so that nothing else is built against a contradicting assumption.~~
+
+**Built 2026-10-05: D1–D7 as amended.** Four points the text leaves open were built on the
+recommended answers of open decisions in [the project plan](../planning/project-plan.md), phase 7,
+and each answer becomes an amendment here:
+
+- D1: `cmd/exporter` and [`internal/exporter`](../../internal/exporter); the module is
+  `github.com/eclipse/paho.mqtt.golang v1.5.1` (the path D1 recorded unverified), and
+  `prometheus/client_golang` became a direct dependency.
+- D2: the [`Containerfile`](../../Containerfile) builds `/app/exporter` next to `/app/manager`;
+  the container runs the image `--reloader-image` names, the operator's own.
+- D3, D5: `buildExporterContainer` in
+  [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) — `127.0.0.1`, no
+  readiness and no liveness probe.
+- D4: `auth.ExporterPrincipal` renders `mko-exporter` with `topic read $SYS/#`; the controller
+  generates its password once and keeps it in `<name>-auth` under `exporter-password`, projected
+  into the exporter alone. The `auth-secret` mount of `auth-init` and `reloader` became an `items`
+  projection of `passwd` and `acl`, so they no longer see that key. **Built on open decision
+  7c:** under TLS the exporter connects to `ssl://127.0.0.1:8883` and accepts exactly the mounted
+  certificate (`--tls-cert`), not a chain or a host name.
+- D6: **built on open decision 7a:** the gate is `spec.metrics.enabled`, default `false`; absent
+  or `false`, the pod spec is what it was. **Open decision 7b:** port `9234`, named `metrics`, on
+  the container only — no Service port.
+- D7: the generated file states `sys_interval 10` and `max_packet_size 2000000`, for every broker
+  (M28, M29 in [broker-behaviour.md](../developer/broker-behaviour.md)); a `spec.config` line still
+  overrides them (M29). **Open decision 7d:** the series names and types of
+  [`internal/exporter/mapping.go`](../../internal/exporter/mapping.go).
+
+Observed failing on purpose: the renderer with its prefix check removed (`the bypass is for the
+reserved prefix only`), the exporter's ACL widened to `#` on the pinned image (`exporter-sys=`
+empty, `mko-exporter must read $SYS`), the metrics gate removed (`no broker pod grows a container
+it did not ask for (D6)`), the collector keeping values after a lost session (`a lost session
+leaves no stale value`), the generated password not kept (`the password and its hash are kept,
+nothing is rewritten`), and on Kind an image without the certificate pin, whose TLS exporter never
+connected (`"…mosquitto_exporter_connected 0\n" does not contain "mosquitto_uptime_seconds"`) —
+the run that also showed the E2E wait matching the HELP line, fixed to match whole lines. Observed
+passing on Kind: `TestE2E_Metrics_TheExporterServesTheBrokersSysTree`.
 
 **Amended 2026-10-05 (decided, not built; its preconditions built 2026-10-05 — the login, the
 `$` refusal and the reserved `mko-` prefix, which no `MosquittoUser` can claim):** D4's "whatever
@@ -14,7 +50,8 @@ reserved user the operator renders for itself — D4 as amended. The sentence th
 "grants nothing on `secrets` today and must not start" is superseded by [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7; the
 exporter itself still adds no rule.
 
-What was verified by reading the tree, on 2026-09-01:
+What was verified by reading the tree, on 2026-09-01 *(superseded by the build above; kept as the
+record of the decision's starting point)*:
 
 * **No exporter exists.** `cmd/` contains exactly `main.go` and `main_test.go`. There is no
   `cmd/exporter`.
@@ -46,8 +83,10 @@ figure in the Context comes from running `eclipse-mosquitto:2.1.2-alpine` — th
 `allow_anonymous true`), and `mosquitto_sub -v -t '$SYS/#' -W 26` from the same image, reduced to
 distinct topic names. Method and results are in the Context.
 
-What was **not** verified: nothing in this repository has ever run against a real cluster, so no
-scrape, no sidecar and no Service of the shape decided here has been observed working. The survey
+What was **not** verified: ~~nothing in this repository has ever run against a real cluster, so no
+scrape, no sidecar and no Service of the shape decided here has been observed working.~~
+*(Amended 2026-10-05: the sidecar and a scrape through a port-forward were observed on Kind; no
+Prometheus scraped it, and no production cluster ran it.)* The survey
 of third-party exporters in the Context is a point-in-time measurement taken outside this
 repository on 2026-09-01 and cannot be re-derived from this tree. What controller-runtime
 registers on the operator's own endpoint by default was not enumerated; only the absence of any
@@ -259,10 +298,13 @@ and dies with a broker pod, the other with the operator Deployment.
   [ADR 0007](0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)'s pin, the exporter must
   treat an unknown topic as skippable and a missing one as absent — **never as zero**, which would
   turn a version difference into a fabricated measurement.
-* **The exporter's access depends on the broker's authentication posture,** which
+* ~~**The exporter's access depends on the broker's authentication posture,** which
   [ADR 0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) records
   as anonymous today. It works out of the box now and needs a principal and an ACL entry the day
-  authentication lands — and `$SYS/#` is exactly the subscription an ACL would deny first.
+  authentication lands — and `$SYS/#` is exactly the subscription an ACL would deny first.~~
+  *(Amended 2026-10-05: authentication landed first, and the principal and the ACL entry are D4.)*
+* **The broker exporter's own endpoint is unauthenticated** as well, on the pod IP, port `9234`
+  ([trust-boundaries.md H-20](../security/trust-boundaries.md#h-20)).
 * **Anything that can reach the operator pod reads the operator's own metrics** (D8), and no chart
   value except `metrics.enabled: false` changes that. The chart ships no NetworkPolicy, on purpose;
   restricting ingress to the operator namespace is left to the cluster administrator.
@@ -329,8 +371,9 @@ nobody can operate.
 
 ## Residual risks
 
-* **The entire ADR is unimplemented,** and an unimplemented plan can be wrong in ways only code
-  finds. Nothing here has been prototyped.
+* ~~**The entire ADR is unimplemented,** and an unimplemented plan can be wrong in ways only code
+  finds. Nothing here has been prototyped.~~ *(Built 2026-10-05; what building found is in the
+  Status.)*
 * **The upstream survey is a snapshot.** A maintained `$SYS` exporter appearing before this is
   written would flip D1, and that is the intended trigger to revisit rather than a reason to
   hedge now.
