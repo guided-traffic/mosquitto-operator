@@ -42,6 +42,11 @@ metadata-only `get` (`refuseTLSSecret` in
 refusing a Secret without `mko.gtrfc.com/consumable=true`; it still watches no Secret and never
 reads the TLS data. At the default `false` D6 holds in full.
 
+**Measured for D10 (2026-10-05, not built):** the kubelet swaps `tls.crt` and `tls.key` together
+through one `..data` rename, about a minute after the Secret changes (M23), and a mismatched pair
+at start stops the broker, exit 1, where on a reload it breaks only the listener (M24, M12)
+([broker-behaviour.md](../developer/broker-behaviour.md)).
+
 **Open:** D7's rotation trigger is deliberately not built. Nothing rolls a broker pod when the
 referenced Secret changes.
 

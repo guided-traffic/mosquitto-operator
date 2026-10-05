@@ -19,11 +19,13 @@ apply yet: there is no Secret cache. `TestReconcile_SecretSecurity` was observed
 check removed; `test/rbacparity` renders both settings and was observed failing on a component
 without the rule (`ClusterRole core/secrets: granted by the chart (get) but not by kustomize`) and on
 a chart without the flag (`expected: "false"`, `actual  : ""`). Otherwise the operator holds no
-`secrets` rule and renders one broker container and one init container per broker pod. Before the code that depends on them is written, these are measured: a `$7$` line rendered in
-Go is accepted by the broker, byte format identical to `mosquitto_passwd`; a sidecar as uid `1883`
-without capabilities can signal the broker across `shareProcessNamespace` under PodSecurity
-`restricted`; how long the kubelet takes to refresh a changed Secret volume, and whether it swaps
-`tls.crt` and `tls.key` together; what the broker does with a mismatched TLS pair at start.
+`secrets` rule and renders one broker container and one init container per broker pod. The four measurements the code depends on were taken on 2026-10-05 and hold the record as
+written ([broker-behaviour.md](../developer/broker-behaviour.md)): a `$7$` line rendered in Go is
+accepted by the broker, in `mosquitto_passwd`'s exact format (M20); a sidecar as uid `1883`
+without capabilities signals the broker across `shareProcessNamespace` under PodSecurity
+`restricted`, and another uid cannot (M22, on Kind); the kubelet swaps a changed Secret volume in
+one step, `tls.crt` and `tls.key` together, 69 to 84 seconds after the change on an idle Kind node
+(M23); and a mismatched TLS pair at start stops the broker with `key values mismatch`, exit 1 (M24).
 
 ## Context
 
@@ -112,7 +114,8 @@ The operator still never reads the TLS Secret.
 
 **D8 — Revocation is the reload.** A removed user and a changed password are disconnected on the
 reload that carries the change; a narrowed ACL applies at once (M14). The latency is the kubelet's
-Secret propagation plus the sidecar — not measured, documented once it is.
+Secret propagation plus the sidecar — *(measured 2026-10-05, M23:)* the kubelet's part was 69 to 84
+seconds on an idle Kind node with default settings; the sidecar's part is not measured yet.
 
 **D9 — Dynamic security is a later, opt-in broker mode, and the first release is built so that it
 stays cheap.** `spec.auth.mode: files | dynsec`, default `files`, is added only when needed;
@@ -196,8 +199,8 @@ Secret in a namespace the grant does not cover cannot be checked, and the broker
 - The default `all` grant, accepted above.
 - D10's default `false`, accepted above: with it, writing a `Mosquitto` or a `MosquittoUser` is
   reading the namespace's Secrets.
-- The entry measurements in Status. Until they run, D3's format, D4's signal and D8's latency are
-  claims from documentation and from the rig, not from a cluster.
+- The entry measurements are taken (M20, M22–M24) on a workstation and on one idle Kind node; D8's
+latency on a loaded or differently configured kubelet is not measured.
 - No kick for a client whose credential is still valid; D9's trigger.
 - A pod compromise exposes the hashes in the `emptyDir`; at 1000 iterations they are cheap to
   attack offline. Accepted with D3.

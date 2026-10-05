@@ -4,8 +4,9 @@
 
 Accepted. Date: 2026-10-05. Decided by the owner, one question at a time, for requirements R1
 and R2 of [ADR 0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md).
-**Not built:** `api/v1/` declares the `Mosquitto` kind only. The measurements D4 and D6 rest on
-are in [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md) (M13, M14, M17).
+**Not built:** `api/v1/` declares the `Mosquitto` kind only. The measurements D4, D5 and D6 rest
+on are in [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md) (M13, M14, M17,
+and M21 for D5's characters, measured 2026-10-05).
 
 ## Context
 
@@ -146,8 +147,9 @@ kind is built. A user's failure never changes the broker's readiness.
 
 ## Residual risks
 
-- Not measured: that the `passwd` and `acl` parsers accept usernames containing `@` and `.`; the
-  allowlist assumes it.
+- ~~Not measured: that the `passwd` and `acl` parsers accept usernames containing `@` and `.`.~~
+  *(Measured 2026-10-05, M21: both parsers accept `@`, `.`, `_` and `-`, and enforce the ACL per
+  user under those names.)*
 - Not measured: how shared subscriptions (`$share/<group>/<topic>`) are checked against ACLs. If
   the check uses the `$share` form, D4 blocks them; no current client is known to need them.
 - The older-user edge of D6, accepted above.

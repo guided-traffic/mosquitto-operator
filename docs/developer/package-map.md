@@ -10,6 +10,7 @@ runtime is [architecture.md](architecture.md).
 | [`internal/common`](../../internal/common) | The shared vocabulary: label keys and sets, the StatefulSet and Service names, the label diff and merge | `BaseLabels`, `SelectorLabels`, `ExtractVersionFromImage`, `MapEntriesMissing`, `MergeLabels` |
 | [`internal/builder`](../../internal/builder) | CR in, objects out, and how an update merges them. Pure functions — no client, no context, no I/O | `BuildConfigMap`, `BuildHeadlessService`, `BuildClientService`, `BuildStatefulSet`, `StatefulSetHasChanged`, `MergeStatefulSet`, `DefaultImage` |
 | [`internal/controller`](../../internal/controller) | The reconcile loop, the only code that talks to the API server, and the RBAC markers | `MosquittoReconciler`, `Reconcile`, `ensureOwned`, `SetupWithManager` |
+| [`internal/auth`](../../internal/auth) | The users of a broker turned into what the file plugins read. Today: the `$7$` password hash. Pure functions | `HashPassword`, `VerifyPassword`, `HashIterations` |
 | [`cmd`](../../cmd) | The one binary: flags, manager, wiring, health checks | `bindOperatorFlags`, `bindZapFlags`, `managerOptions`, `newReconciler`, `main` |
 | [`test/*`](../../test) | One tier per question, separated by build tag ([testing.md](testing.md)) | `testimages.MosquittoImage`, `testimages.Default` |
 | [`hack/`](../../hack) | The guards that are not Go tests, and the release-notes config | — |
@@ -73,6 +74,13 @@ wrong quantity is worth a visible reconcile failure rather than a silently subst
 | `ensureOwned` | `metav1.IsControlledBy` or an error naming the object. See [ADR 0009](../adr/0009-delete-only-through-owner-references.md). |
 | `SetupWithManager`, `maxConcurrentReconciles` | `For(&Mosquitto{})` with `GenerationChangedPredicate`, `Owns` on StatefulSet, ConfigMap and Service, and the worker count. |
 | The `+kubebuilder:rbac` markers | The only source of [`config/rbac/role.yaml`](../../config/rbac/role.yaml). The comment above them justifies every verb, because the role is cluster-wide and an unused cluster-wide verb is blast radius nobody chose. |
+
+## internal/auth
+
+| Symbol | Responsibility |
+|---|---|
+| `HashPassword(password, random)` | The `$7$<iterations>$<base64 salt>$<base64 key>` line the `password-file` plugin verifies: PBKDF2-HMAC-SHA512 at `HashIterations` (1000), a 64-byte salt read from `random`, a 64-byte key, padded standard base64 — `mosquitto_passwd`'s exact shape ([broker-behaviour.md](broker-behaviour.md) M20, [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D3). The reader is a parameter so a test can pin the salt. |
+| `VerifyPassword(encoded, password)` | Whether a plaintext still verifies against a `$7$` hash, with the hash's own iteration count and salt, compared in constant time; anything that does not parse never verifies. It is what lets a renderer keep an existing hash instead of writing a new salt on every pass. |
 
 ## cmd
 

@@ -191,6 +191,14 @@ job does preload it, reading the tag out of `test/testimages/images.go`.
 - `TestPinnedImageIsTheOperatorDefault` asserts `builder.DefaultImage == testimages.MosquittoImage`,
   because otherwise this tier would check an image no broker runs
   ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)).
+- `TestImageAcceptsTheHashTheOperatorRenders` and `TestOperatorVerifiesTheImagesHash`
+  ([`password_hash_test.go`](../../test/imagetools/password_hash_test.go)) repeat
+  [broker-behaviour.md](broker-behaviour.md) M20 on every pull request: inside one container run
+  as `1883:1883`, a `$7$` line from `auth.HashPassword` loads into the `password-file` plugin and
+  logs a client in with its password (`right=0`) and not with another (`wrong=5`); and a line the
+  image's `mosquitto_passwd` writes verifies with `auth.VerifyPassword`. Observed failing with the
+  key derived at 999 iterations under a `1000` label: `"right=5\nwrong=5" does not contain
+  "right=0"`. `runInImageAs` is `runInImage` with `--user`.
 
 A cold pull plus the probe is bounded by 5 minutes.
 

@@ -180,7 +180,9 @@ so it is in front of whoever adds the field.
 follows a change to that command instead of probing a path that is no longer used. The image also
 contains `mosquitto_passwd` and `mosquitto_ctrl` (Context), and the check deliberately does not
 assert them: nothing here runs them, and an assertion on an unused binary is a false constraint on
-the upstream image.
+the upstream image. *(Amended 2026-10-05: `test/imagetools` itself now runs `mosquitto_passwd`, to
+check that the operator verifies the image's own hash — a missing binary fails that test by name;
+the operator still runs no client tool.)*
 
 **D9 — `spec.image` stays free, and what it supports is stated, not enforced.** *(Added
 2026-10-05; built 2026-10-05 — the field description and the README state 2.1.x.)* The supported broker line is 2.1.x, written in the README and
@@ -200,7 +202,9 @@ image exists; D6's `<3` cap is the guard until then.
 2026-10-05; built 2026-10-05.)* An init container from the broker image itself runs the
 broker binary in test mode against the mounted configuration, with the broker container's
 security context. A typo in `spec.config` or an image that does not know a generated directive —
-a 2.0 image refusing `plugin_load` is the expected case, not measured against a 2.0 image — then
+a 2.0 image refusing `plugin_load` is the expected case, *(measured 2026-10-05, M25:
+`eclipse-mosquitto:2.0.22` answers `Error: Unknown configuration variable "plugin_load".` with the
+line, `rc=3`)* — then
 fails with the broker's own message, file and line, instead of a crash loop. It is a syntax gate,
 not a correctness gate: `--test-config` validates directive names and nothing a plugin decides
 ([broker-behaviour.md](../developer/broker-behaviour.md#m8----test-config-is-a-syntax-gate-not-a-correctness-gate)).

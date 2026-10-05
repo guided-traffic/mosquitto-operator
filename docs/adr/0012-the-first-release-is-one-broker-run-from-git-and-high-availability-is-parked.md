@@ -128,9 +128,10 @@ what it references. A failure of one user never makes the broker or another user
 
 - Not verified: that Flux's health checks evaluate a custom resource's `Ready` condition the way
   D6 assumes. This rests on Flux's documentation, not on a run in this repository.
-- Not verified: that a sidecar running as uid `1883` with every capability dropped can signal the
-  broker across `shareProcessNamespace` under PodSecurity `restricted`. It is the kernel's
-  documented rule, not measured in a pod.
+- ~~Not verified: that a sidecar running as uid `1883` with every capability dropped can signal
+  the broker across `shareProcessNamespace` under PodSecurity `restricted`.~~ *(Measured 2026-10-05
+  on Kind, [broker-behaviour.md](../developer/broker-behaviour.md) M22: it can; a container under
+  another uid gets `Operation not permitted`.)*
 - Kind is the only cluster this operator has been observed on (the E2E tier, first observed
   2026-10-05); D1's migration is the first production observation.
 

@@ -101,28 +101,6 @@ becomes an amendment of ADR 0009 D9.
 
 **Answer:** _open_
 
-## Phase 3 — The measurements the user phase stands on
-
-**Goal:** every claim phase 4 builds on is measured against the pinned image, so phase 4 starts on
-facts.
-
-**Effort:** S.
-
-| # | Measurement | Rig | Settles |
-|---|---|---|---|
-| E1 | A `$7$1000$…` line rendered by Go is accepted by the broker, byte format identical to `mosquitto_passwd` | docker | ADR 0014 D3 |
-| E2 | The `passwd` and `acl` parsers accept usernames containing `@` and `.` | docker | ADR 0013 D5 |
-| E3 | A sidecar as uid `1883`, all capabilities dropped, signals the broker across `shareProcessNamespace` under `enforce=restricted` | Kind | ADR 0014 D4, ADR 0012 D4 |
-| E4 | How long the kubelet takes to refresh a changed Secret volume, and whether `tls.crt` and `tls.key` change together | Kind | ADR 0014 D8, ADR 0001 D10 |
-| E5 | What the broker does with a mismatched TLS pair at start | docker | ADR 0001 D10 |
-| E6 | A 2.0 image fails `--test-config` on the generated file, with file and line | docker | ADR 0007 D10 |
-| E7 | The `spec.config` allowlist, taken from `mosquitto.conf(5)` of 2.1.2 | the man page of the pinned version | ADR 0008 D15 |
-
-E1 needs the hashing code of step 4.2 in a minimal form; it is written here and kept. Each row
-becomes a section of [broker-behaviour.md](../developer/broker-behaviour.md); each record it
-settles says "measured" with the date in its `Status`, or is amended because the measurement said
-otherwise. **Done when** all seven sections exist.
-
 ## Phase 4 — Users, permissions, and a broker that requires a login
 
 **Goal:** R1, R2, R3 and R5 of ADR 0012 — the core of the release.
@@ -161,7 +139,7 @@ green.
   implementation (ADR 0014 D9).
 - Tests: unit — a hundred renders of shuffled input give one output (observed failing without the
   sort); a kept hash for an unchanged password and a new one for a changed password; every refusal;
-  the collision rule; a `$` topic refused at render time although CEL was bypassed. E1 moves into
+  the collision rule; a `$` topic refused at render time although CEL was bypassed. M20 is in
   `test/imagetools` so CI repeats the check of the hash format against the pinned image.
 
 ### 4.3 The rendered Secret `<name>-auth` (ADR 0014 D2)
@@ -187,7 +165,7 @@ green.
   `args`; if it cannot, the kustomize path sets an environment variable instead.
 - Tests: unit — the pod spec carries both containers and the volumes, and every container passes
   the restricted check of 2.4; the reloader's copy, rename and change detection against a
-  temporary directory. E3 proved the signal.
+  temporary directory. M22 proved the signal.
 
 ### 4.5 The generated listener (ADR 0008 D13–D15)
 
@@ -195,7 +173,7 @@ green.
   `plugin_opt_acl_file` pointing at `/mosquitto/auth/passwd` and `/mosquitto/auth/acl`; the
   listener with `listener_allow_anonymous false`, `use_username_as_clientid true` and `plugin_use`
   for both; `allow_anonymous true` and its comment block removed.
-- The `spec.config` allowlist from E7, checked line by line at render time; a refused line gives
+- The `spec.config` allowlist of M26, checked line by line at render time; a refused line gives
   `Ready=False` (proposed reason `ConfigDirectiveRefused`) naming the line, and the reconcile
   writes nothing, so the running configuration stays.
 - Tests: unit — the generated file for each shape; `listener`, `connection`, `allow_anonymous` and
@@ -251,7 +229,7 @@ E2E tests in `test/e2e/` (proposed file `users_test.go`), the first of them bein
 - README: the `MosquittoUser` reference, the new `Mosquitto` behaviour, the chart values, the
   flags, the generated `mosquitto.conf` example, `<name>-auth` in the naming tables.
 - [docs/operations/](../operations/README.md): users and credentials, the grant modes, what
-  revocation looks like and how long it takes (E4).
+  revocation looks like and how long it takes (M23).
 - [docs/security/](../security/README.md): H-1 (anonymous) closed; H-2 and H-14 narrowed by the
   allowlist; the privilege footprint and the credentials page rewritten for the `secrets` grant;
   H-15 for `credentialsSecret`.

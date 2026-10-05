@@ -13,7 +13,10 @@ true when the first release of [ADR 0012](0012-the-first-release-is-one-broker-r
 * **D14** — every generated listener sets `use_username_as_clientid true`, closing a measured
   cross-user session takeover.
 * **D15** — `spec.config` is limited to an **allowlist of directives**, enforced at render time,
-  shipped in the same release as authentication. Replaces D6, D7, D9 and narrows D8 and D10.
+  shipped in the same release as authentication. Replaces D6, D7, D9 and narrows D8 and D10. The
+  list was fixed from `mosquitto.conf(5)` of `v2.1.2` on 2026-10-05: 26 tuning directives, each
+  checked with `--test-config` of the pinned image
+  ([broker-behaviour.md](../developer/broker-behaviour.md) M26).
 * **D16** — the operator ships **no NetworkPolicy**; the owner accepted the exposure after it was
   stated.
 

@@ -22,6 +22,7 @@ mosquitto-operator/                      # Go module github.com/guided-traffic/m
 │   │   ├── statefulset.go               #   pod spec, the config-check init container, the broker container, PVC template,
 │   │   │                                #   hash annotations, StatefulSetHasChanged, MergeStatefulSet, DefaultImage
 │   │   └── affinity.go                  #   the off/soft/hard anti-affinity term
+│   ├── auth/hash.go                     # The $7$ PBKDF2-SHA512 hash the password-file plugin verifies
 │   ├── common/labels.go                 # Label keys and sets, the StatefulSet and Service names, MapEntriesMissing, MergeLabels
 │   └── controller/mosquitto_controller.go  # The reconcile loop, the RBAC markers, the status writer
 ├── config/                              # The kustomize install path (`make install`, `make deploy`)

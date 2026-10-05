@@ -63,11 +63,23 @@ var clientTools = []string{"mosquitto_pub", "mosquitto_sub"}
 // docker error has to stay readable.
 func runInImage(t *testing.T, image, script string) string {
 	t.Helper()
+	return runInImageAs(t, image, "", script)
+}
+
+// runInImageAs is runInImage with the container's user set, so a probe that
+// starts the broker runs it as the uid the operator gives it.
+func runInImageAs(t *testing.T, image, user, script string) string {
+	t.Helper()
 
 	ctx, cancel := context.WithTimeout(context.Background(), imageProbeTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "run", "--rm", "--entrypoint", "sh", image, "-c", script)
+	args := []string{"run", "--rm"}
+	if user != "" {
+		args = append(args, "--user", user)
+	}
+	args = append(args, "--entrypoint", "sh", image, "-c", script)
+	cmd := exec.CommandContext(ctx, "docker", args...)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
