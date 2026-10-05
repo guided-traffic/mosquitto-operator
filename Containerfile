@@ -41,7 +41,7 @@ ARG BUILD_TIME
 
 # Add OCI labels for better metadata
 LABEL org.opencontainers.image.title="Mosquitto Operator" \
-      org.opencontainers.image.description="A Kubernetes operator for provisioning highly available Mosquitto MQTT brokers" \
+      org.opencontainers.image.description="A Kubernetes operator that turns one Mosquitto custom resource into an Eclipse Mosquitto deployment" \
       org.opencontainers.image.vendor="Guided Traffic" \
       org.opencontainers.image.licenses="Apache-2.0" \
       org.opencontainers.image.documentation="https://github.com/guided-traffic/mosquitto-operator" \

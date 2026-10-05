@@ -45,8 +45,8 @@ const shortDigestLength = 12
 //
 // The result is always a VALID label value, which is the whole point of this
 // function rather than a strings.Split at the call site. spec.image is free-form
-// (the CRD validates nothing beyond MinLength), and two shapes of reference produce
-// something the API server refuses:
+// (the CRD validates nothing about it, not even a minimum length), and two shapes
+// of reference produce something the API server refuses:
 //
 //   - A digest reference. "eclipse-mosquitto@sha256:<64 hex>" yields
 //     "sha256:<64 hex>", which is 71 bytes and contains a colon. Both break the
@@ -96,7 +96,7 @@ func ExtractVersionFromImage(image string) string {
 // It is deliberately lossy and deliberately never fails: the alternative at the call
 // site would be a reconcile that cannot write anything, which is a worse outcome than
 // an abbreviated version label. What it must never do is return something the API
-// server rejects, and TestSanitizeLabelValue_AlwaysProducesAValidLabel asserts that
+// server rejects, and TestExtractVersionFromImage_AlwaysProducesAValidLabel asserts that
 // against apimachinery's own validator rather than against expected strings, so a
 // future edit cannot pin an invalid value as intended behaviour.
 func sanitizeLabelValue(value string) string {

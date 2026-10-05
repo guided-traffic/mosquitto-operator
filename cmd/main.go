@@ -58,8 +58,10 @@ func bindOperatorFlags(fs *flag.FlagSet) *operatorFlags {
 }
 
 // bindZapFlags declares controller-runtime's logging flags on fs and returns the
-// options they write into. The deployment passes --zap-log-level, so the flags
-// have to exist even though nothing in this package reads their values.
+// options they write into. Neither install path passes one today; `make run`
+// passes --zap-log-level=debug, and an operator who adds a --zap-* argument to
+// the deployment needs the flag to exist, even though nothing in this package
+// reads the values.
 func bindZapFlags(fs *flag.FlagSet) *zap.Options {
 	opts := &zap.Options{Development: true}
 	opts.BindFlags(fs)

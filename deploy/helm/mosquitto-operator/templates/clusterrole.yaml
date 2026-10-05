@@ -7,13 +7,14 @@ metadata:
 {{/*
 The rules below mirror the kubebuilder RBAC markers on the reconciler in
 internal/controller/mosquitto_controller.go, which is what config/rbac/role.yaml
-is generated from. Nothing regenerates this template and nothing compares it
-against config/rbac/role.yaml, so a new marker has to be added here by hand -
-anything the reconciler writes without a rule here fails 403 on every pass.
+is generated from. Nothing regenerates this template, so a new marker has to be
+added here by hand - anything the reconciler writes without a rule here fails
+403 on every pass. test/rbacparity (make verify-rbac-parity) renders this chart
+and config/default and fails when the two grant different authority.
 
-The leases rule below is the one intended difference from config/rbac/role.yaml:
-leader election belongs to the manager, not to the reconciler, so no kubebuilder
-marker produces it.
+This ClusterRole holds no leases rule: leader election belongs to the manager,
+not to the reconciler, and its rule lives in the namespaced Role of
+leader-election.yaml, mirroring config/rbac/leader_election_role.yaml.
 */}}
 rules:
   # The Mosquitto resources themselves, their status subresource and their

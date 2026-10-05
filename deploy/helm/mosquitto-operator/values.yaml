@@ -45,8 +45,9 @@ affinity: {}
 maxConcurrentReconciles: 4
 
 # Leader election ensures only one operator instance is active at a time. It is
-# also what the coordination.k8s.io/leases rule in the ClusterRole is for - that
-# rule is rendered only while this is true.
+# also what the coordination.k8s.io/leases rule is for, which lives in the
+# namespaced Role of templates/leader-election.yaml, not in the ClusterRole -
+# that Role and its binding are rendered only while this is true.
 leaderElection:
   enabled: true
 

@@ -207,8 +207,14 @@ mounted files — so D1 to D5 and D9 are unchanged.
   automated issuance was supposed to protect — a long-lived pod outlives its own certificate.
 * **The operator cannot validate the Secret at all.** A `secretName` pointing at a missing Secret,
   a Secret with no `tls.crt`, or a `tls.key` that does not match the certificate produces a
-  StatefulSet that reconciles cleanly and pods that fail to start. The reconcile is green; the
-  broker is in `CrashLoopBackOff`. `test/integration/tls_test.go` creates a Secret whose values are
+  StatefulSet that reconciles cleanly and pods that fail to start. The reconcile is green. *(Amended
+  2026-10-05, observed:)* a missing Secret holds the pod in `ContainerCreating` — the kubelet
+  never starts the broker and reports `FailedMount`, `MountVolume.SetUp failed for volume "tls" :
+  secret "does-not-exist" not found`, while the `Mosquitto` stays `Pending` with `NoReplicasReady`
+  (kind `v0.32.0`, `kindest/node:v1.36.1`, a `Mosquitto` naming a Secret that does not exist,
+  75 seconds after creation). ~~The broker is in `CrashLoopBackOff`.~~ A Secret the broker cannot
+  parse is expected to end in `CrashLoopBackOff`, because the broker starts and refuses the files;
+  that case was not observed. `test/integration/tls_test.go` creates a Secret whose values are
   the literal strings `not-a-certificate` and `not-a-key`, and the operator is perfectly happy —
   envtest runs no kubelet, so nothing ever tries to parse them.
 * **The privilege footprint stays small, and that is the payment for the two points above.** The

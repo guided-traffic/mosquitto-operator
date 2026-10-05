@@ -9,18 +9,26 @@ org GitHub App `guided-traffic-automation`, minted from `APP_CLIENT_ID`/`APP_PRI
 ([ADR 0005](0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) Status). The
 reasoning that rests on it is unchanged.
 
-**Verified by reading, in this tree:** [`go.mod`](../../go.mod) line 3 (`go 1.27.0`),
-[`Containerfile`](../../Containerfile) line 2 (`FROM golang:1.27.0-alpine AS builder`),
-[`.github/workflows/build.yml`](../../.github/workflows/build.yml) line 8 and
-[`.github/workflows/release.yml`](../../.github/workflows/release.yml) line 32 (both
-`GO_VERSION: '1.27.0'`), [`.github/release-template.hbs`](../../.github/release-template.hbs)
-line 25 (`![Go Version](https://img.shields.io/badge/go-1.27-blue)`),
+**Amended 2026-10-05 — the record names the fact, not its value.** The values this record quoted
+(`1.27.0`) were already stale: Renovate moved `go.mod`, the `Containerfile` and both `GO_VERSION`
+lines to `1.27.1` in one grouped pull request, #18 (commit `dc582ad`, 2026-09-03), and the badge
+kept `1.27` because the minor did not change. A value Renovate moves cannot stay true in a record
+nobody edits with it, so the sites below are named by their form, `<version>` standing for
+whatever the tree carries. That pull request is also the first observation of D2 working: one
+pull request, four files, written by the app identity.
+
+**Verified by reading, in this tree:** [`go.mod`](../../go.mod) line 3 (`go <version>`),
+[`Containerfile`](../../Containerfile) line 2 (`FROM golang:<version>-alpine AS builder`),
+[`.github/workflows/build.yml`](../../.github/workflows/build.yml) and
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml) (both
+`GO_VERSION: '<version>'` in the top-level `env:`), [`.github/release-template.hbs`](../../.github/release-template.hbs)
+(`![Go Version](https://img.shields.io/badge/go-<major>.<minor>-blue)`),
 [`renovate.json`](../../renovate.json) (six `customManagers`, the two `packageRules` carrying
 `"groupName": "Go version"`), [`hack/verify-ci-references.mjs`](../../hack/verify-ci-references.mjs),
 [`Makefile`](../../Makefile) lines 137-140 (`verify-ci-references`) and lines 371-376 (the
 `ENVTEST_VERSION` pin and its comment), and the `release-tooling` job in
-[`.github/workflows/release.yml`](../../.github/workflows/release.yml) line 1192, whose step at
-line 1213 runs `make verify-ci-references`.
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml), whose step
+"Verify every Renovate customManager still matches" runs `make verify-ci-references`.
 
 **Verified by running, on 2026-09-01:** `node hack/verify-ci-references.mjs` exits 0 and prints
 `OK: all 6 Renovate customManagers reference real files and lines`, with the per-file hit counts
@@ -32,24 +40,21 @@ group; `make verify-ci-references` proves each manager still matches a real file
 runs in CI on every pull request.
 
 **Open, and stated as such:** nothing asserts that the four captured values *agree with each
-other* — see Residual risks. Renovate itself has never been observed opening a grouped Go
-version pull request against this repository; the grouping is read out of the configuration, not
-measured. No workflow run of this repository has been observed at all: the whole pipeline landed
-in a single commit (`feat: initial pipeline and project structure`) and I could not check
-GitHub Actions history from here.
+other* — see Residual risks. *(Amended 2026-10-05:)* Renovate has been observed opening one
+grouped Go version pull request, #18, which moved all four files that carried the patch version.
 
 ## Context
 
-The Go toolchain version `1.27.0` is not a dependency of this repository, it is a *fact about*
+The Go toolchain version is not a dependency of this repository, it is a *fact about*
 it, and the fact is written down in four independent places that no compiler, linker or test
 relates to one another:
 
 | Location | Form | Files today |
 |---|---|---|
-| Module language version | `go 1.27.0` | [`go.mod`](../../go.mod) |
-| Build stage base image | `golang:1.27.0-alpine` | [`Containerfile`](../../Containerfile) |
-| CI toolchain | `GO_VERSION: '1.27.0'`, consumed as `go-version: ${{ env.GO_VERSION }}` | [`build.yml`](../../.github/workflows/build.yml), [`release.yml`](../../.github/workflows/release.yml) |
-| Release-note badge | `go-1.27-blue` | [`.github/release-template.hbs`](../../.github/release-template.hbs) |
+| Module language version | `go <version>` | [`go.mod`](../../go.mod) |
+| Build stage base image | `golang:<version>-alpine` | [`Containerfile`](../../Containerfile) |
+| CI toolchain | `GO_VERSION: '<version>'`, consumed as `go-version: ${{ env.GO_VERSION }}` | [`build.yml`](../../.github/workflows/build.yml), [`release.yml`](../../.github/workflows/release.yml) |
+| Release-note badge | `go-<major>.<minor>-blue` | [`.github/release-template.hbs`](../../.github/release-template.hbs) |
 
 Four locations, five files today, because `GO_VERSION` is declared once per workflow that needs
 it. `.github/workflows/renovate.yml` declares none — verified by grepping `GO_VERSION` across
@@ -204,7 +209,7 @@ maintaining it is the wrong direction when the maintenance is one grouped pull r
 ### A test that asserts all four values are equal
 
 Attractive and not implemented. The obstacle is that the four are not written in the same form:
-`go.mod`, the `Containerfile` and `GO_VERSION` carry `1.27.0` while the badge carries `1.27`, so
+`go.mod`, the `Containerfile` and `GO_VERSION` carry `major.minor.patch` while the badge carries `major.minor`, so
 the test needs a normalisation rule, and a normalisation rule that is wrong in the other
 direction would fail every legitimate patch bump. Recorded as an open item under Residual risks
 rather than as a rejected idea — the comparison this repository actually needs and does not have
@@ -224,8 +229,9 @@ cheap substitute, and its gaps are named above.
   somewhere unrelated. This is the single biggest gap in the arrangement and it is accepted for
   now.
 * **A location with no manager is invisible to the check (open).** D3 is enforced by review only.
-* **The grouping has never been observed producing a single pull request.** It is read out of
-  `renovate.json`; no Renovate run against this repository has been inspected. Unverified.
+* **The grouping has been observed once, on a patch.** Pull request #18 (2026-09-03) moved
+  `go.mod`, the `Containerfile` and both `GO_VERSION` lines together. A minor bump, the only kind
+  that also moves the badge, has not been observed.
 * **The `loose` fix for the badge has not been observed updating the badge.** What was measured
   is the failing direction (`semver` skipping with `invalid-value`, recorded during the port and
   not re-measured for this ADR); that `loose` plus `extractVersionTemplate` produces the intended
@@ -233,9 +239,8 @@ cheap substitute, and its gaps are named above.
 * **RE2 compilation of every pattern is not proven** — the script says so in its own header.
 * `make verify-ci-references` is reachable from no aggregate target: `all` is `build`, and
   `test` is `fmt vet envtest`. A developer who runs neither the target nor CI never runs it.
-* Nothing in this repository has ever been executed against a real Kubernetes cluster, and no
-  run of these workflows on GitHub has been observed. Every claim above about CI describes what
-  the workflow files say, not what a run did.
+* Every claim above about CI describes what the workflow files say; the runs that confirm one
+  are named where they are cited.
 
 ## References
 

@@ -1,7 +1,7 @@
 {
   "name": "mosquitto-operator",
   "version": "0.0.0-development",
-  "description": "A Kubernetes operator for provisioning highly available Mosquitto MQTT brokers",
+  "description": "A Kubernetes operator that turns one Mosquitto custom resource into an Eclipse Mosquitto deployment",
   "repository": {
     "type": "git",
     "url": "https://github.com/guided-traffic/mosquitto-operator.git"
