@@ -167,7 +167,7 @@ hashes onto the template. `mko.gtrfc.com/pod-spec-hash` digests the whole pod sp
 | `spec.podLabels` or `spec.podAnnotations` | the pod template's labels or annotations, and the applied-keys annotation on the StatefulSet | Rolled. A removed key is removed from the pods |
 | `spec.tls` added or removed | the ConfigMap (the listener), the pod template (the Secret volume, the mount, the port, the probes) and the port of both Services | Rolled. Clients have to change their port (`1883` ↔ `8883`) |
 | `spec.tls.secretName` pointing at another Secret | the pod template (the volume) | Rolled |
-| New content in the referenced Secret | nothing | Not restarted ([a renewed certificate](#a-renewed-certificate)) |
+| New content in the referenced TLS Secret | nothing | **Not restarted.** The reloader checks the new pair and signals the broker after the kubelet refreshed the mount ([a renewed certificate](#a-renewed-certificate)) |
 | A `MosquittoUser` added, changed or deleted, or its Secret changed | `<name>-auth` | **Not restarted.** The reloader copies the change in and signals the broker after the kubelet refreshed the mount ([users.md](users.md#how-long-a-change-takes)) |
 | `spec.storage.size` or `.storageClassName` on a broker that has storage | nothing | Not restarted. The change never converges ([below](#changing-specstorage-on-an-existing-broker)) |
 | `spec.storage` added or removed | the pod template only (the `emptyDir` appears or disappears), never the claim template | Rolled onto a template that no longer matches the claim template ([below](#changing-specstorage-on-an-existing-broker)) |
@@ -398,29 +398,30 @@ here before the pod goes into `CrashLoopBackOff`.
 
 ## A renewed certificate
 
-The operator does not watch the TLS Secret and cannot read it
-([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)). When
-cert-manager renews the certificate, or somebody replaces it by hand, nothing reaches the running
-brokers. The kubelet updates the mounted files, because the mount uses no `subPath` (Kubernetes
-behaviour, not verified here). The broker, though, reads them only at startup. Until the pods
-restart, they keep serving the certificate they started with, and nothing in the operator marks the
-moment: no Event, no condition, no log line.
+The operator does not watch the TLS Secret and never reads its data
+([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)). The broker pod
+does: the kubelet refreshes the mounted files when the Secret changes, and the `reloader` sidecar
+reads them, checks that `tls.crt` and `tls.key` form a valid pair and sends the broker `SIGHUP`.
+The broker loads the new certificate for every new handshake; open connections stay, and nothing
+restarts. Observed on Kind with a cert-manager renewal
+(`TestE2E_TLS_ACertManagerRenewalIsReloaded`).
 
-**Restart the pods:**
+**How long it takes:** as long as a credential change — the kubelet's refresh, about a minute on an
+idle node, and the reloader's two-second poll ([users.md](users.md#how-long-a-change-takes)).
+
+**An invalid pair is never loaded.** When the mounted certificate and key do not belong together,
+the reloader logs `the TLS pair is not valid` once and sends no signal; the broker keeps serving
+the certificate it has. While the pair stays invalid **no signal goes out at all**, so user
+changes wait as well, and a broker pod that restarts in that window does not start. Fix the
+Secret; the next valid pair is loaded without a restart:
 
 ```bash
-kubectl -n messaging rollout restart statefulset/broker    # example names
+kubectl -n messaging logs broker-0 -c reloader    # example names
 ```
 
-This rolls one pod at a time ([how a roll proceeds](#which-changes-restart-the-broker-pods)), and
-each pod picks up the new material when it restarts. The operator leaves the restart annotation in
-place.
+The check is the pair only: an expired certificate, or one for other host names, that matches its
+key is loaded.
 
-**Or point `spec.tls.secretName` at a new Secret.** The Secret's name is part of the pod spec, so
-the change rolls the pods like any other template change. This is derived from the code; no test
-renames a Secret.
-
-**Nothing in the operator tracks the expiry.** Whatever renews the Secret also has to trigger the
-restart. Otherwise a long-lived pod keeps serving its certificate after it has expired, and the
-broker turns into an outage on a timer. The rotation path and its gaps are in
-[rotation.md](../security/rotation.md).
+**Nothing in the operator tracks the expiry.** Whatever issues the certificate has to renew it;
+a certificate nothing renews still expires in a running broker. The rotation path and its gaps
+are in [rotation.md](../security/rotation.md).

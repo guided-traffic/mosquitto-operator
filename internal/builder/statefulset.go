@@ -275,7 +275,7 @@ func buildPodSpec(m *mkov1.Mosquitto, opts PodOptions) corev1.PodSpec {
 		},
 		Containers: []corev1.Container{
 			buildBrokerContainer(m),
-			buildReloadContainer(ReloaderContainerName, opts),
+			buildReloaderSidecar(m, opts),
 		},
 		Volumes:  volumes,
 		Affinity: BuildPodAntiAffinity(m),
@@ -340,6 +340,21 @@ func buildReloadContainer(name string, opts PodOptions, extraArgs ...string) cor
 		Resources:       reloaderResources,
 		SecurityContext: containerSecurityContext(),
 	}
+}
+
+// buildReloaderSidecar constructs the reloader sidecar. With TLS it also reads
+// the broker's TLS mount: a SIGHUP reloads the certificate as well, so the
+// sidecar signals a renewed pair and holds every signal while the mounted pair
+// is invalid (ADR 0001 D10, ADR 0014 D5, M12).
+func buildReloaderSidecar(m *mkov1.Mosquitto, opts PodOptions) corev1.Container {
+	if !m.IsTLSEnabled() {
+		return buildReloadContainer(ReloaderContainerName, opts)
+	}
+	c := buildReloadContainer(ReloaderContainerName, opts, "--tls-dir", TLSMountPath)
+	c.VolumeMounts = append(c.VolumeMounts, corev1.VolumeMount{
+		Name: TLSVolumeName, MountPath: TLSMountPath, ReadOnly: true,
+	})
+	return c
 }
 
 // buildBrokerContainer constructs the broker container of a broker pod.

@@ -472,8 +472,8 @@ keyfile from B  -> Error: Unable to load server key file "/tls/keyB.pem". Check 
 So at start a mismatched pair is fatal — a pod would crash-loop — while on a reload the process
 lives and the listener breaks (M12). `--test-config` does not open the files (M19), so the
 `config-check` init container does not catch it either. Only a check of the pair before the
-broker reads it — the reloader's, ADR 0001 D10 — protects a running broker; a pod that starts with
-a bad pair fails visibly.
+broker reads it — the reloader's, ADR 0001 D10, built as `checkTLS` in `internal/reloader` —
+protects a running broker; a pod that starts with a bad pair fails visibly.
 
 ## M25 — A 2.0 image refuses the generated configuration at `--test-config`, with the line
 

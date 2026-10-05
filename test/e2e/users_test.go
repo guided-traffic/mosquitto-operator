@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -187,22 +188,46 @@ func (tc *testClients) brokerPodIdentity(t *testing.T, namespace, pod string) st
 
 // startSubscriber starts a long-running mosquitto_sub in the broker container
 // and returns a channel that is closed when the client process ends.
-func (tc *testClients) startSubscriber(t *testing.T, namespace, pod, user, password, topic string, extra ...string) (<-chan struct{}, *bytes.Buffer, func()) {
+func (tc *testClients) startSubscriber(t *testing.T, namespace, pod, user, password, topic string, extra ...string) (<-chan struct{}, *syncBuffer, func()) {
+	t.Helper()
+	return tc.startClient(t, namespace, pod, append([]string{
+		"mosquitto_sub", "-h", "127.0.0.1", "-p", "1883", "-q", "1", "-u", user, "-P", password, "-t", topic}, extra...)...)
+}
+
+// startClient starts a long-running client command in the broker container.
+func (tc *testClients) startClient(t *testing.T, namespace, pod string, command ...string) (<-chan struct{}, *syncBuffer, func()) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	args := append([]string{"exec", pod, "-n", namespace, "-c", "mosquitto", "--",
-		"mosquitto_sub", "-h", "127.0.0.1", "-p", "1883", "-q", "1", "-u", user, "-P", password, "-t", topic}, extra...)
+	args := append([]string{"exec", pod, "-n", namespace, "-c", "mosquitto", "--"}, command...)
 	cmd := exec.CommandContext(ctx, "kubectl", args...)
-	var out bytes.Buffer
-	cmd.Stdout = &out
-	cmd.Stderr = &out
+	out := &syncBuffer{}
+	cmd.Stdout = out
+	cmd.Stderr = out
 	require.NoError(t, cmd.Start())
 	done := make(chan struct{})
 	go func() {
 		_ = cmd.Wait()
 		close(done)
 	}()
-	return done, &out, cancel
+	return done, out, cancel
+}
+
+// syncBuffer is the output of a running client, read while it still writes.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *syncBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
 }
 
 // TestE2E_Users_TheBrokerFollowsItsUsers is the phase: one broker, users added,

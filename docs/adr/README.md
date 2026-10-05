@@ -75,7 +75,7 @@ the detail.
 
 | ADR | Decision | State |
 |---|---|---|
-| [0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) | The operator consumes TLS material, it never issues it — and a renewed certificate is reloaded in place | Partly built — D1–D9 implemented, D1 and D6 as amended; D10 (in-pod reload) not built |
+| [0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) | The operator consumes TLS material, it never issues it — and a renewed certificate is reloaded in place | Implemented — D1–D6, D9 and D10 (in-pod reload, built 2026-10-05), D1 and D6 as amended; D7 and D8 superseded by D10 |
 | [0007](0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) | One broker image pin, on `2.1.2-alpine`, and not on the `-openssl` tag | Implemented — D9, D10 built 2026-10-05 |
 | [0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) | The generated broker is anonymous, and `spec.config` can undo the rest — amended: never anonymous, takeover-safe, `spec.config` allowlisted, no NetworkPolicy | Implemented — Group C (D13–D16) built 2026-10-05; D1, D2, D6, D7, D9 superseded |
 
@@ -84,7 +84,7 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) | A client is a `MosquittoUser` with its credentials in its own Secret | Implemented — 2026-10-05 |
-| [0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) | Credentials reach the broker as one rendered Secret and a signal, never as a restart | Partly built — D1–D4, D6–D8, D10; D5 (TLS reload) not built, D9 later by decision |
+| [0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) | Credentials reach the broker as one rendered Secret and a signal, never as a restart | Partly built — D1–D8, D10; D9 later by decision |
 
 ### Reconciliation and privilege
 

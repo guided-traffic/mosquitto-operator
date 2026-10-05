@@ -194,10 +194,11 @@ type MosquittoTLS struct {
 	//     The administrator owns the Certificate object; this operator has no
 	//     cert-manager dependency and installs nothing.
 	//
-	// The operator does not watch this Secret. Renewing or replacing the
-	// certificate changes the Secret, but running broker pods keep serving the
-	// material they started with, so a rotation only takes effect once the pods
-	// restart (for example kubectl rollout restart statefulset/<name>).
+	// The operator does not watch this Secret or read its data. A renewed or
+	// replaced certificate reaches the running broker pods without a restart:
+	// the reloader sidecar checks that tls.crt and tls.key form a valid pair
+	// and signals the broker to reload them. An invalid pair is never loaded,
+	// and while it is mounted no reload happens at all.
 	// +kubebuilder:validation:MinLength=1
 	SecretName string `json:"secretName"`
 }

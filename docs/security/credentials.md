@@ -48,11 +48,16 @@ password in transit anyway. The plaintext reaches the broker only in the client'
 | The Secret is created | By hand (`kubectl create secret tls`) or by a cert-manager `Certificate` the administrator owns. **Never by this operator** — no cert-manager dependency in [`Chart.yaml`](../../deploy/helm/mosquitto-operator/Chart.yaml), no cert-manager module in [`go.mod`](../../go.mod), and `TestIntegration_TLS_DoesNotWaitForTheSecret` asserts the operator creates none | [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D1–D3 |
 | The pod references it | `buildPodSpec` adds a `corev1.SecretVolumeSource` with `SecretName: m.Spec.TLS.SecretName`, `DefaultMode` `0o644` and **no `Items` projection**; the Secret resolves in the resource's own namespace | [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) |
 | The kubelet mounts it | At `TLSMountPath = "/mosquitto/tls"`, `ReadOnly: true`. Because there is no projection, **every key the Secret carries appears in that directory**, not only the two the configuration names — a cert-manager Secret's `ca.crt` among them | [`internal/builder/configmap.go`](../../internal/builder/configmap.go), [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) |
-| The broker reads it | The generated block names `certfile /mosquitto/tls/tls.crt` and `keyfile /mosquitto/tls/tls.key` — `TLSCertKey` and `TLSKeyKey` — read when the process starts | [`internal/builder/configmap.go`](../../internal/builder/configmap.go) |
+| The broker reads it | The generated block names `certfile /mosquitto/tls/tls.crt` and `keyfile /mosquitto/tls/tls.key` — `TLSCertKey` and `TLSKeyKey` — read when the process starts and again on every `SIGHUP` | [`internal/builder/configmap.go`](../../internal/builder/configmap.go) |
+| The `reloader` reads it | The same volume, read-only at the same path, in the `reloader` sidecar only (`buildReloaderSidecar`; not in `auth-init`, not in `config-check`). It reads `tls.crt` and `tls.key` to check that they form a pair before it signals the broker, keeps only their SHA-256 digests between rounds, and writes, logs and sends nothing of them | [`internal/reloader/tls.go`](../../internal/reloader/tls.go) |
 
-The private key therefore travels kubelet → volume → broker process and never passes through the
-operator. The mount itself is kubelet behaviour and was not observed on a cluster here; the
-integration tier shows only that the API server accepts the StatefulSet that asks for it.
+The private key therefore travels kubelet → volume → broker process, and the `reloader` of the
+same pod reads it too; it never passes through the operator. The `reloader` runs the operator's
+image as the broker's uid `1883` with no capability, so a second process with the key in its
+memory is the cost of checking the pair before every reload
+([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10). The mount
+was observed on Kind: a renewed Secret reaches both containers
+(`TestE2E_TLS_ACertManagerRenewalIsReloaded`).
 
 ## Broker data at rest
 

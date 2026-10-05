@@ -92,9 +92,10 @@ wrong quantity is worth a visible reconcile failure rather than a silently subst
 
 | Symbol | Responsibility |
 |---|---|
-| `Main(args, stderr)` | Parses `--source`, `--target`, `--files`, `--process`, `--once`, `--interval`. With `--once` it copies and exits — `auth-init`; without, it runs `Run` until SIGTERM — `reloader` |
+| `Main(args, stderr)` | Parses `--source`, `--target`, `--files`, `--process`, `--once`, `--interval`, `--tls-dir`. With `--once` it copies and exits — `auth-init`; without, it runs `Run` until SIGTERM — `reloader` |
 | `Sync(cfg)` | Reads every file of the Secret mount through one resolved `..data` link, and replaces each copy whose bytes differ through a temporary file and a rename, mode `0600`. Reports whether anything changed |
-| `Run(ctx, cfg, interval, logger)` | Polls `Sync`, and after a change signals the broker; a signal that failed — no broker process yet — stays pending for the next round |
+| `Run(ctx, cfg, interval, logger)` | Polls `Sync` and, with `Config.TLSDir`, `checkTLS`; after a change signals the broker; a signal that failed — no broker process yet — stays pending for the next round; while the mounted TLS pair is invalid nothing is signalled |
+| `checkTLS(dir, state)` ([`tls.go`](../../internal/reloader/tls.go)) | Reads `tls.crt` and `tls.key` through one resolved `..data`, reports a change against the last pair seen and checks a changed pair with `crypto/tls.X509KeyPair`; an invalid pair is reported once. The first pair is the one the broker started with |
 | `FindProcess(procRoot, name)` | The pid whose `/proc/<pid>/comm` is `name` (`mosquitto`) |
 | `Config.Signal` | How the signal is sent; nil means `syscall.Kill(pid, SIGHUP)`. Tests inject a recorder |
 

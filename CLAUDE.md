@@ -93,9 +93,8 @@ published through another. High availability is parked
 ([docs/planning/ha-research.md](docs/planning/ha-research.md)); do not write a comment, doc line
 or commit message that implies otherwise, and build nothing on `replicas > 1`.
 
-**Not in the tree, and not to be documented as if it were:** the reload of a renewed TLS
-certificate (ADR 0001 D10, ADR 0014 D5), the metrics exporter (ADR 0002, nothing built), roles or
-groups of users, the dynamic-security mode, PodDisruptionBudgets, NetworkPolicies (deliberately
+**Not in the tree, and not to be documented as if it were:** the metrics exporter (ADR 0002,
+nothing built), roles or groups of users, the dynamic-security mode, PodDisruptionBudgets, NetworkPolicies (deliberately
 never shipped, ADR 0008 D16), admission webhooks, ServiceMonitor, PrometheusRule, and any
 cert-manager dependency at any layer.
 

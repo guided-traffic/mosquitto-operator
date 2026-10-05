@@ -1,8 +1,7 @@
 # How a change reaches a running broker, and what does not
 
 Which changes to a `Mosquitto`, to its users or to the material they reference reach the broker
-pods that are already running, by which mechanism, how fast, and which never do — a renewed TLS
-certificate above all.
+pods that are already running, by which mechanism, how fast, and which never do.
 Where that material lives is [credentials.md](credentials.md); what is checked before a change is
 stored is [validation.md](validation.md).
 
@@ -34,7 +33,7 @@ StatefulSet and could rewrite the pod template outright.
 | `spec.tls` switched on or off | Yes, by a roll | Both hashes change: the mounts and the listener move together |
 | `spec.tls.secretName` pointing at a **different** Secret | Yes, by a roll | The name is part of the pod spec, so the pod-spec hash changes. Derived by reading `buildPodSpec` and `hashOf`; no test renames a Secret |
 | `spec.replicas` | Pods are added or removed; the running ones are not rolled | Only the replica count moves; the template and both hashes stay (`TestReplicaChangeDoesNotRollThePods`) |
-| **New bytes inside the referenced Secret** — a renewal | **No** | [H-3](#h-3) |
+| **New bytes inside the referenced TLS Secret** — a renewal | **Yes, without a restart** | The kubelet refreshes the mount, `reloader` checks that `tls.crt` and `tls.key` form a pair (`crypto/tls.X509KeyPair`) and sends `SIGHUP`; new handshakes get the new certificate, open connections stay (observed on Kind: `TestE2E_TLS_ACertManagerRenewalIsReloaded`). An invalid pair is never signalled and the previous certificate stays served (`TestE2E_TLS_AMismatchedPairIsNeverLoaded`) — [H-19](#h-19). As slow as a credential change, [H-18](#h-18) |
 | `spec.storage` after creation | **No** | `volumeClaimTemplates` are immutable, and `reconcileStatefulSet` writes only `Spec.Replicas`, `Spec.Template` and the labels |
 
 A roll is the StatefulSet controller's, one pod at a time; the brokers are independent processes
@@ -43,35 +42,30 @@ on Kind for pod labels (`TestE2E_PodMetadata_ReachesAndLeavesThePods`).
 
 ## What this does not cover
 
-<a id="h-3"></a>
-### H-3 — A renewed certificate never reaches a running broker
+<a id="h-19"></a>
+### H-19 — An invalid TLS pair holds back every reload, and a pod that restarts with it does not start
 
-Live, and dormant until the first renewal — at which point it is an availability failure, not an
-attack; no principal is needed. The operator does not read the TLS Secret's data, so neither hash
-has ever seen its bytes
-([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D6, D7). When
-cert-manager renews, or somebody replaces the material by hand:
+Live whenever the TLS Secret holds a certificate and a key that do not belong together — a hand
+edit that replaced one of the two, or a tool that writes them in two updates. One `SIGHUP` reloads
+the credentials and the certificate together, and an invalid pair loaded on a reload fails every
+new handshake (M12 in [broker-behaviour.md](../developer/broker-behaviour.md)). So the reloader
+checks the mounted pair before every signal and sends **none** while it is invalid
+([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10,
+`TestRound_AnInvalidPairBlocksEverySignal`). The broker keeps serving its previous certificate
+and its open connections (`TestE2E_TLS_AMismatchedPairIsNeverLoaded`). Two costs remain:
 
-1. The Secret changes. The files under `/mosquitto/tls` are expected to follow it, because the mount
-   uses no `subPath`; that half is kubelet behaviour and was not observed on a cluster here — only
-   the absence of `subPath` was read.
-2. The running broker keeps presenting the certificate it read at start. No event, no condition and
-   no log line anywhere in this operator marks the moment.
-3. Nothing converges until the pods restart.
+1. **A credential change waits too.** A deleted user, a rotated password or a removed ACL is
+   copied but not signalled until a valid pair is mounted — a revocation is held back for as long
+   as the pair stays broken, on top of [H-18](#h-18).
+2. **A pod that starts while the pair is invalid does not start.** The broker exits at startup on
+   a mismatched pair (M24), so a pod rescheduled, evicted or rolled in that window crash-loops
+   until the Secret is fixed.
 
-The consequence is an outage on a timer, on exactly the clusters that automated issuance was meant
-to protect: a long-lived pod outlives its own certificate. The same warning is written on
-`MosquittoTLS.SecretName`, in the chart's
-[`values.yaml`](../../deploy/helm/mosquitto-operator/values.yaml) and in the
-[README](../../README.md), so a user meets it wherever they arrive.
-
-What a cluster operator can do meanwhile: restart the pods after every renewal —
-`kubectl rollout restart statefulset/<name>` — and watch certificate expiry from outside this
-operator, because nothing in it will tell. Measured outside a cluster, the pinned broker image
-re-reads `certfile` and `keyfile` on SIGHUP and keeps its existing connections, but a mismatched
-certificate and key then fail every new handshake until a valid pair and a second SIGHUP arrive
-([broker-behaviour.md](../developer/broker-behaviour.md), M12); sending that signal into a broker
-pod by hand was not tried here, and this operator sends none.
+The reloader logs `the TLS pair is not valid` once, in the `reloader` container of each broker
+pod; nothing reaches the `Mosquitto`'s status, because the operator never reads the TLS Secret's
+data. The check is the pair only: a certificate that matches its key but has expired, or names
+other hosts, is loaded. What a cluster operator can do: write certificate and key in one update
+(cert-manager does), and alert on that log line.
 
 ### A changed `spec.storage` does not converge
 

@@ -9,8 +9,7 @@ Secret per user password, once when the owner allowed the operator to read Secre
 step rests on measurements against the pinned image, recorded in
 [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md).
 
-**Built 2026-10-05:** D1–D4, D6–D8 and D10 — everything but D5, the TLS half of the reloader, and
-D9, the later dynamic-security mode. Where the build differs from the text, it says so below.
+**Built 2026-10-05:** D1–D8 and D10 — everything but D9, the later dynamic-security mode. Where the build differs from the text, it says so below.
 
 - D1, D2: the generated configuration loads the file plugins; `<name>-auth` (keys `passwd`, `acl`)
   is written after `ensureOwned`, only on a difference, from `auth.Render` and `auth.FilePayload`.
@@ -34,6 +33,13 @@ D9, the later dynamic-security mode. Where the build differs from the text, it s
 - D8: observed on Kind — a new user publishes 67 s after it was created, a changed password locks
   the old one out within 45 s, a deleted user's connection drops within 72 s, nothing restarted
   (`TestE2E_Users_TheBrokerFollowsItsUsers`, run 2026-10-05 against `kind-mko-dev`).
+- D5: the `reloader` gets the TLS volume and `--tls-dir` whenever `spec.tls` is set, checks the
+  mounted pair with `crypto/tls.X509KeyPair` and signals a changed, valid pair
+  (`internal/reloader/tls.go`). **Built more strictly than the text in one point:** while the
+  mounted pair is invalid the sidecar sends no signal at all, not for a credential change either,
+  because the one SIGHUP reloads both and an invalid pair takes the listener down (M12). Observed
+  on Kind: `TestE2E_TLS_ACertManagerRenewalIsReloaded`, `TestE2E_TLS_AMismatchedPairIsNeverLoaded`
+  ([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10).
 - D10 for `credentialsSecret`: the label is checked on the cached metadata before the data is
   read (`TestReconcile_EveryUserReason`, observed failing with the check removed).
 

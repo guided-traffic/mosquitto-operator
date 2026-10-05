@@ -36,6 +36,24 @@ type Config struct {
 	ProcRoot string
 	// Signal delivers SIGHUP to a pid; nil means syscall.Kill.
 	Signal func(pid int) error
+	// TLSDir is the broker's TLS mount, or "" without TLS. A SIGHUP reloads
+	// the certificate too, so the reloader signals for a renewal and never
+	// while the mounted pair is invalid (ADR 0001 D10, ADR 0014 D5).
+	TLSDir string
+}
+
+// resolveData returns the directory a Secret mount's files are read from: the
+// target of its ..data link, which the kubelet swaps in one rename, or the
+// directory itself when it has none.
+func resolveData(dir string) string {
+	target, err := os.Readlink(filepath.Join(dir, dataLink))
+	if err != nil {
+		return dir
+	}
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(dir, target)
+	}
+	return target
 }
 
 // readSource reads every file of the Secret mount through one resolved
@@ -43,13 +61,7 @@ type Config struct {
 // the kubelet swaps the volume in between two reads. A directory without
 // ..data - a plain directory in a test - is read as it is.
 func readSource(cfg Config) (map[string][]byte, error) {
-	dir := cfg.Source
-	if target, err := os.Readlink(filepath.Join(cfg.Source, dataLink)); err == nil {
-		if !filepath.IsAbs(target) {
-			target = filepath.Join(cfg.Source, target)
-		}
-		dir = target
-	}
+	dir := resolveData(cfg.Source)
 	files := make(map[string][]byte, len(cfg.Files))
 	for _, name := range cfg.Files {
 		data, err := os.ReadFile(filepath.Join(dir, name)) // #nosec G304 -- a fixed key under the pod's own Secret mount

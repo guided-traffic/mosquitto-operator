@@ -94,7 +94,7 @@ change.
 | A config change | The ConfigMap is updated and the config hash on the pod template changes, which is what rolls the pods | [architecture.md](architecture.md#how-a-change-reaches-a-running-broker) |
 | A replica change | Only `spec.replicas` of the StatefulSet moves; nothing rolls | [architecture.md](architecture.md#how-a-change-reaches-a-running-broker) |
 | A `MosquittoUser` added, changed or deleted, or its Secret changed | The broker's pass re-renders `<name>-auth`; the kubelet refreshes the mount, the reloader copies it in and sends `SIGHUP`; nothing rolls | [architecture.md](architecture.md#the-credentials-path) |
-| A rotated TLS Secret | Nothing: the operator never reads its content, and running pods serve the old material until they restart | [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
+| A rotated TLS Secret | Nothing in the operator, which never reads its content; in the pod the reloader checks the new pair and sends `SIGHUP`, an invalid pair holds every signal; nothing rolls | [architecture.md](architecture.md#the-credentials-path) |
 | Deleting a `Mosquitto` | The reconciler writes nothing; the garbage collector removes the five objects through their controller references; its users report `BrokerNotFound` | [ADR 0009](../adr/0009-delete-only-through-owner-references.md) |
 | An RBAC change | Marker in the controller, `make generate-all` for `config/rbac/role.yaml`, the chart's ClusterRole by hand, `make verify-rbac-parity` | [adding-things.md](adding-things.md#a-managed-object) |
 | A pull request | Fourteen jobs on self-hosted runners — two E2E legs and their gate among them — each check entered through a Make target | [ci-and-release.md](ci-and-release.md#test-and-release) |

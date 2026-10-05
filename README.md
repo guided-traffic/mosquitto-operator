@@ -55,7 +55,7 @@ executed while writing this file.
 - 🩺 **Status Flux can read** — every `Mosquitto` and every `MosquittoUser` reports `observedGeneration` and a `Ready` condition with a reason; a user applied before its Secret or its broker becomes `Ready` when they arrive, and one user's failure never fails the broker or another user.
 - 🧾 **Generated `mosquitto.conf`** — logging to stdout, persistence into `/mosquitto/data/`, one listener, and your own tuning from `spec.config`, checked line by line against an allowlist of tuning directives.
 - 🔎 **Typos stop before the broker starts** — an init container runs the broker's own `--test-config` on the generated file and fails with the broker's message, file and line.
-- 🔐 **Optional MQTTS** — `spec.tls.secretName` mounts an existing `tls.crt`/`tls.key` Secret and moves the listener to 8883. The operator consumes TLS material; it never issues or renews it.
+- 🔐 **Optional MQTTS** — `spec.tls.secretName` mounts an existing `tls.crt`/`tls.key` Secret and moves the listener to 8883. The operator consumes TLS material; it never issues or renews it. A renewed Secret is reloaded without a restart.
 - 💾 **Optional persistence** — `spec.storage` renders a `data` PVC template; without it the persistence directory is an `emptyDir` at the same path.
 - 🧭 **Opt-in anti-affinity** — `off` (default), `soft` (scheduler preference) or `hard` (one broker pod per node, surplus pods stay `Pending`), over `kubernetes.io/hostname`.
 - 🏷 **Pod labels and annotations from the resource** — `spec.podLabels` and `spec.podAnnotations` reach the broker pods, under the operator's own keys; a key removed from the resource leaves the pods.
@@ -113,7 +113,7 @@ StatefulSet; the cluster domain is whatever the cluster uses, `cluster.local` by
 | Expected Secret keys | `tls.crt`, `tls.key` | [`builder.TLSCertKey`, `TLSKeyKey`](internal/builder/configmap.go) |
 | Broker command | `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf` | [`buildBrokerContainer`](internal/builder/statefulset.go) |
 | Config-check command | `/usr/sbin/mosquitto -c /mosquitto/config/mosquitto.conf --test-config` | [`buildConfigCheckContainer`](internal/builder/statefulset.go) |
-| `auth-init` / `reloader` command | `/app/manager reload --source /mosquitto/auth-secret --target /mosquitto/auth` (`--once` for `auth-init`), in the operator's own image | [`buildReloadContainer`](internal/builder/statefulset.go) |
+| `auth-init` / `reloader` command | `/app/manager reload --source /mosquitto/auth-secret --target /mosquitto/auth` (`--once` for `auth-init`; `--tls-dir /mosquitto/tls` for `reloader` with `spec.tls`), in the operator's own image | [`buildReloadContainer`, `buildReloaderSidecar`](internal/builder/statefulset.go) |
 
 Exactly one container port is declared: `mqtt` or `mqtts`, never both. Enabling TLS **moves**
 the generated listener rather than adding one.
@@ -395,7 +395,8 @@ through a metadata-only `get`; it never reads `tls.crt` or `tls.key`.
 The operator neither creates nor renews that Secret. Filling it — by hand or through a
 cert-manager `Certificate` the administrator owns:
 [installation.md](docs/operations/installation.md#tls-for-the-brokers). **A renewed certificate
-reaches running pods only when they restart**:
+is loaded by the running pods without a restart**, after the `reloader` checked that certificate
+and key form a pair; an invalid pair is never loaded:
 [runtime.md](docs/operations/runtime.md#a-renewed-certificate).
 
 ### `spec.storage`
@@ -607,7 +608,7 @@ and `spec.config`, when non-empty, is appended last under a
 | Broker identity | Not proven to anyone | Proven to clients that validate the certificate |
 | Client identity | A username and password of a `MosquittoUser` | The same; no client certificate is required |
 | Who may publish and subscribe | Each user on the topics of its ACL; nobody anonymous | The same |
-| Certificate rotation | n/a | Only on pod restart; the operator does not watch the Secret's content |
+| Certificate rotation | n/a | Reloaded without a restart once the kubelet refreshed the mount; an invalid pair is never loaded |
 
 **Every broker requires a login, and there is no switch to turn that off**
 ([ADR 0008](docs/adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) D13).
@@ -682,6 +683,7 @@ pod ([`internal/reloader`](internal/reloader/run.go)); nothing passes it to the 
 | `--once` | `false` | Copy and exit without signalling: `auth-init`, on every start of the pod |
 | `--interval` | `2s` | How often the sidecar compares the mount with the copies |
 | `--process` | `mosquitto` | The `/proc/<pid>/comm` name of the process that gets `SIGHUP` after a change |
+| `--tls-dir` | *(empty)* | The broker's TLS mount. A changed `tls.crt`/`tls.key` that forms a valid pair is signalled; while the mounted pair is invalid **no signal is sent at all**, because the same `SIGHUP` would load it and fail every new handshake. Empty: no TLS. Set to `/mosquitto/tls` whenever `spec.tls` is set |
 
 ## 🛠 Development
 

@@ -280,7 +280,7 @@ A broker serves MQTTS from a Secret that `spec.tls.secretName` names. The Secret
 `Mosquitto`'s own namespace and must carry `tls.crt` and `tls.key`. **The operator never creates,
 renews, reads or watches that Secret's data**; with `secretSecurity: true` it reads the Secret's
 labels and nothing else ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md),
-[above](#which-secret-a-mosquitto-may-name)). The kubelet
+[above](#which-secret-a-mosquitto-or-a-mosquittouser-may-name)). The kubelet
 mounts the Secret. Two ways of filling it are first class, and neither involves this project.
 
 **By hand:**
@@ -325,20 +325,23 @@ name missing from the SAN list fails the handshake with an error that looks like
 - The single listener moves from `1883` to `8883`, on the container and on both Services. Clients
   have to change their port and scheme with it.
 
-**What it checks:** nothing. If the Secret is missing, the StatefulSet is written anyway
-(`TestIntegration_TLS_DoesNotWaitForTheSecret`). The pod then waits on the kubelet's volume mount,
-and the resource stays `Pending` instead of turning `Failed`. A certificate and key that do not
-match are read only by the broker at startup. Neither case has been observed on a cluster. In both,
-look at the pod's events: `kubectl -n <ns> describe pod <name>-0`.
+**What it checks:** with `secretSecurity: false`, nothing. If the Secret is missing, the
+StatefulSet is written anyway (`TestIntegration_TLS_DoesNotWaitForTheSecret`). The pod then waits
+on the kubelet's volume mount, and the resource stays `Pending` instead of turning `Failed`; look
+at the pod's events: `kubectl -n <ns> describe pod <name>-0`. With `secretSecurity: true` a missing
+or unlabelled Secret makes the resource `Failed` ([above](#which-secret-a-mosquitto-or-a-mosquittouser-may-name)).
+A certificate and key that do not match stop the broker at startup (M24 in
+[broker-behaviour.md](../developer/broker-behaviour.md)); in a running pod the `reloader`
+refuses to load them ([runtime.md, a renewed certificate](runtime.md#a-renewed-certificate)).
 
 **What TLS gives you:** an encrypted connection and a broker that proves its identity to clients.
-It authenticates no client. The generated broker accepts anonymous clients with or without TLS
-([README.md, Two modes](../../README.md#two-modes-and-what-each-one-protects),
-[ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md),
+It authenticates no client: a client logs in with the username and password of a `MosquittoUser`,
+with or without TLS ([users.md](users.md),
+[README.md, Two modes](../../README.md#two-modes-and-what-each-one-protects),
 [trust-boundaries.md](../security/trust-boundaries.md)).
 
-**A renewed certificate does not reach a running broker.** [runtime.md, a renewed
-certificate](runtime.md#a-renewed-certificate) explains what to do.
+**A renewed certificate is loaded without a restart**, after the `reloader` checked the pair:
+[runtime.md, a renewed certificate](runtime.md#a-renewed-certificate).
 
 ## Storage
 

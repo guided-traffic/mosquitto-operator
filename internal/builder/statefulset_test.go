@@ -256,6 +256,7 @@ func TestBuildStatefulSet_TLSOff(t *testing.T) {
 	assert.Nil(t, podVolume(spec, TLSVolumeName))
 	assert.Nil(t, containerVolumeMount(spec.Containers[0], TLSVolumeName))
 	assert.Equal(t, MQTTPort, spec.Containers[0].Ports[0].ContainerPort)
+	assert.NotContains(t, containerNamed(t, spec, ReloaderContainerName).Args, "--tls-dir")
 }
 
 func TestBuildStatefulSet_TLSOn(t *testing.T) {
@@ -277,6 +278,17 @@ func TestBuildStatefulSet_TLSOn(t *testing.T) {
 	assert.Equal(t, MQTTSPort, spec.Containers[0].Ports[0].ContainerPort)
 	assert.Equal(t, MQTTSPortName, spec.Containers[0].Ports[0].Name)
 	assert.Equal(t, MQTTSPort, spec.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal)
+
+	// A SIGHUP reloads the certificate too, so the reloader reads the same
+	// mount and checks the pair before it signals (ADR 0001 D10, M12).
+	reloader := containerNamed(t, spec, ReloaderContainerName)
+	assert.Equal(t, []string{"reload", "--source", "/mosquitto/auth-secret", "--target", "/mosquitto/auth", "--tls-dir", TLSMountPath}, reloader.Args)
+	reloaderMount := containerVolumeMount(reloader, TLSVolumeName)
+	require.NotNil(t, reloaderMount, "the reloader sees the pair the broker would load")
+	assert.Equal(t, TLSMountPath, reloaderMount.MountPath)
+	assert.True(t, reloaderMount.ReadOnly)
+	assert.Nil(t, containerVolumeMount(initContainer(t, spec, AuthInitContainerName), TLSVolumeName),
+		"auth-init copies credentials only")
 }
 
 func TestBuildStatefulSet_ConfigMountIsAlwaysReadOnly(t *testing.T) {

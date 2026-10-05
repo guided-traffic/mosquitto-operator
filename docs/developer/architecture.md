@@ -260,7 +260,7 @@ identity.
 | another `spec.tls.secretName` | the template (the secret volume) | rolled |
 | `spec.replicas` | `spec.replicas` of the StatefulSet only | scaled; nothing rolls (`TestReplicaChangeDoesNotRollThePods`) |
 | `spec.podLabels`, `spec.podAnnotations` | the template's labels or annotations, the applied-keys annotation of the object | rolled; a removed key leaves the template |
-| the content of the TLS Secret | nothing — the operator never reads it | keep serving the old material until they restart, e.g. `kubectl rollout restart statefulset/<name>` ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)) |
+| the content of the TLS Secret | nothing — the operator never reads it | not restarted: `reloader` checks the pair and signals ([the credentials path](#the-credentials-path), [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10) |
 | a `MosquittoUser` or its Secret | `<name>-auth` | not restarted: the reloader copies the change in and signals ([the credentials path](#the-credentials-path)) |
 | a new operator version, i.e. `--reloader-image` | the template (the image of `auth-init` and `reloader`) | rolled, every broker |
 | `spec.storage.size` or `storageClassName` | nothing that converges — `volumeClaimTemplates` are never updated | unchanged; the StatefulSet has to be recreated by hand |
@@ -373,6 +373,15 @@ From `<name>-auth` to the broker, without a restart
    round. Same uid, no capability: the kernel allows exactly that (M22).
 4. The broker reloads both plugins' files: removed users and changed passwords are disconnected,
    ACLs apply per message (M14).
+5. **With `spec.tls`**, `reloader` also mounts the TLS Secret read-only at `/mosquitto/tls` and
+   gets `--tls-dir` (`buildReloaderSidecar`). Every round `checkTLS` reads `tls.crt` and `tls.key`
+   through one resolved `..data`, and on a change checks them with `crypto/tls.X509KeyPair`: a
+   valid pair is signalled like a credential change and the broker loads it for new handshakes
+   (M12); an invalid pair is logged once and **holds every signal**, credential changes included,
+   because the same `SIGHUP` would load it and fail every new handshake. The pair recorded at the
+   sidecar's start is the one the broker started with, and is not signalled
+   ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10,
+   [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D5).
 
 `auth-init` and `reloader` run the operator's own image (`--reloader-image`), so every operator
 release rolls every broker — accepted in D6 for one build pipeline instead of two.
@@ -391,7 +400,7 @@ series; nothing in this repository registers a metric (`prometheus/client_golang
 
 | Decision | Where it lives in code | ADR |
 |---|---|---|
-| The operator consumes TLS material and never issues it; a rotation needs a pod restart until the reload of D10 | `MosquittoTLS`, the secret volume in `statefulset.go`, the TLS branch of `GenerateMosquittoConf` | [0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
+| The operator consumes TLS material and never issues it; a renewal is reloaded in the pod, checked first | `MosquittoTLS`, the secret volume and `buildReloaderSidecar` in `statefulset.go`, the TLS branch of `GenerateMosquittoConf`, `internal/reloader/tls.go` | [0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
 | The broker metrics exporter is to be written here — **nothing of it is implemented** | nothing; the reserved `mko-` prefix is the only part in the tree | [0002](../adr/0002-the-metrics-exporter-is-written-here.md) |
 | The Go version is one fact in four files, moved by one grouped Renovate PR | `go.mod`, `Containerfile`, `GO_VERSION` in both workflows, `.github/release-template.hbs` | [0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md) |
 | Two E2E legs on a node-count axis, no version matrix, a gate job for the required check | the `e2e-tests` and `e2e-gate` jobs in `release.yml`, `KIND_WORKERS` in the Makefile | [0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) |
@@ -411,8 +420,7 @@ Two choices live only in code comments, with no ADR: `DefaultMaxConcurrentReconc
 ## What is not built
 
 Not in the tree, and not to be described as if it were: the broker metrics exporter
-([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) records the decision only), the
-reload of a renewed TLS certificate ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
-D10), roles or groups of users, the dynamic-security mode, admission webhooks,
+([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) records the decision only),
+roles or groups of users, the dynamic-security mode, admission webhooks,
 PodDisruptionBudgets, NetworkPolicies, ServiceMonitor, PrometheusRule, and any cert-manager
 dependency at any layer. The chart has no template for any of them.

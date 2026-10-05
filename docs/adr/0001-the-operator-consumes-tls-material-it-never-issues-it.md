@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** a renewed certificate
+Accepted. Date: 2026-09-01. **Amended 2026-10-05, built 2026-10-05:** a renewed certificate
 reaches a running broker by an in-pod reload, not by a restart — new rule D10, which replaces D7
-and D8 once the reload sidecar of [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) is built. Measured first: Mosquitto 2.1
+and D8 with the reload sidecar of [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md). Measured first: Mosquitto 2.1
 re-reads `certfile`/`keyfile` on SIGHUP, keeps existing TLS connections, and does **not** fall
 back to the old certificate on a mismatched pair
 ([broker-behaviour.md](../developer/broker-behaviour.md#m12--tls-material-reloads-on-sighup-a-broken-pair-breaks-the-listener-not-the-process)).
@@ -42,19 +42,38 @@ metadata-only `get` (`refuseTLSSecret` in
 refusing a Secret without `mko.gtrfc.com/consumable=true`; it still watches no Secret and never
 reads the TLS data. At the default `false` D6 holds in full.
 
-**Measured for D10 (2026-10-05, not built):** the kubelet swaps `tls.crt` and `tls.key` together
+**Measured for D10 (2026-10-05):** the kubelet swaps `tls.crt` and `tls.key` together
 through one `..data` rename, about a minute after the Secret changes (M23), and a mismatched pair
 at start stops the broker, exit 1, where on a reload it breaks only the listener (M24, M12)
 ([broker-behaviour.md](../developer/broker-behaviour.md)).
 
-**Open:** D7's rotation trigger is deliberately not built. Nothing rolls a broker pod when the
-referenced Secret changes.
+**Built 2026-10-05 (D10):** the `reloader` sidecar gets `--tls-dir /mosquitto/tls` and the TLS
+volume whenever `spec.tls` is set (`buildReloaderSidecar` in
+[`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)); it reads `tls.crt`
+and `tls.key` through one resolved `..data`, checks them with `crypto/tls.X509KeyPair` and signals
+a changed, valid pair (`checkTLS` in [`internal/reloader/tls.go`](../../internal/reloader/tls.go)).
+While the mounted pair is invalid it sends **no signal at all** — one SIGHUP reloads the
+credentials and the certificate together, so a credential change waits for a valid pair
+([rotation.md H-19](../security/rotation.md#h-19)). Unit tests observed failing with the pair
+check, the block and the pending signal each removed. Observed on Kind (`kind-mko-dev`,
+2026-10-05): a cert-manager renewal triggered as `cmctl renew` does reaches a fresh handshake as the
+new serial with no pod restart, and a TLS subscriber connected before it keeps receiving
+(`TestE2E_TLS_ACertManagerRenewalIsReloaded`); a Secret edited to a certificate with the key of
+another pair leaves the previous certificate served, and the next valid pair is loaded
+(`TestE2E_TLS_AMismatchedPairIsNeverLoaded`). Both observed failing against an operator image whose
+`reloader` had no TLS mount: `the broker in e2e-tls-renewal/renewed-0 still serves serial
+58780457502702137095807035717251803298` and `the reloader in e2e-tls-mismatch/mismatch-0 never
+logged "the TLS pair is not valid"`.
 
-**Not verified:** nothing in this repository has ever been observed running against a real
-cluster. The E2E suite
-([`test/e2e/tls_test.go`](../../test/e2e/tls_test.go)) encodes the intended behaviour, but no run
-of it is evidence available here. Separately, **whether the `mosquitto` process itself would pick
-up a replaced `certfile`/`keyfile` on some signal is not verified** — see Residual risks.
+~~**Open:** D7's rotation trigger is deliberately not built. Nothing rolls a broker pod when the
+referenced Secret changes.~~ *(Closed by D10, built 2026-10-05: nothing rolls; the sidecar reloads.)*
+
+~~**Not verified:** nothing in this repository has ever been observed running against a real
+cluster.~~ *(Amended 2026-10-05:)* the E2E suite
+([`test/e2e/tls_test.go`](../../test/e2e/tls_test.go),
+[`test/e2e/tls_renewal_test.go`](../../test/e2e/tls_renewal_test.go)) ran green on Kind locally
+and in CI. That the `mosquitto` process picks up a replaced `certfile`/`keyfile` on SIGHUP is
+measured (M12) and observed on a cluster (D10 above).
 
 ## Context
 
@@ -148,8 +167,8 @@ call at all. The `+kubebuilder:rbac` markers grant `configmaps`, `services`, `st
 an oversight; it is the privilege boundary.**
 
 **D7 — A rotated certificate reaches a running broker only when its pod restarts, and this is
-stated in the API rather than worked around.** *(Superseded by D10, amended 2026-10-05; it
-describes the tree until D10 is built.)*
+stated in the API rather than worked around.** *(Superseded by D10, amended 2026-10-05; D10 is
+built, so D7 no longer describes the tree.)*
 The pod template carries two annotations, `mko.gtrfc.com/pod-spec-hash` (a digest of the pod spec)
 and `mko.gtrfc.com/config-hash` (a digest of the generated `mosquitto.conf`), and
 `StatefulSetHasChanged` compares exactly those two plus the replica count and the labels. The pod
@@ -189,16 +208,24 @@ therefore an *encrypted anonymous* broker: any client that can route to the Clus
 complete a TLS handshake can publish and subscribe. This is stated in the type documentation of
 `MosquittoSpec`, on `MosquittoTLS`, in the generator's own comment and in the README. **It is a
 confidentiality feature, not an access-control feature, and it must not be sold as one.**
+*(Amended 2026-10-05, built:)* ~~`allow_anonymous true` in both configurations~~ — the generator
+now emits `listener_allow_anonymous false` and the file plugins
+([ADR 0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) D13), so
+a client authenticates with a username and a password. The rule stands: TLS authenticates no
+client.
 
 **D10 — A renewed certificate reaches a running broker through an in-pod reload, checked
-before it is signalled.** *(Added 2026-10-05; decided, not built.)* The reload sidecar of
+before it is signalled.** *(Added 2026-10-05; built 2026-10-05.)* The reload sidecar of
 [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D5 watches the mounted TLS directory as well as the rendered credentials; after the
 kubelet swaps the mount it checks that `tls.crt` and `tls.key` form a valid pair and only then
 sends the broker SIGHUP. A mismatched pair is never signalled, so a half-edited Secret leaves the
 broker serving its previous certificate instead of failing every new handshake. Existing TLS
 connections survive the reload; nothing restarts and nobody is disconnected. The operator still
 does not watch, read or hash the TLS Secret — the kubelet mounts it and the sidecar reads the
-mounted files — so D1 to D5 and D9 are unchanged.
+mounted files — so D1 to D5 and D9 are unchanged. *(Built form, 2026-10-05:)* because one SIGHUP
+reloads the credentials and the certificate together, the sidecar sends no signal at all while
+the mounted pair is invalid; a credential change waits for a valid pair. The check is the pair
+only — an expired certificate, or one for other names, that matches its key is loaded.
 
 ## Consequences
 
@@ -206,15 +233,19 @@ mounted files — so D1 to D5 and D9 are unchanged.
   the traffic, not who can publish to it. Anyone reaching for `spec.tls` to lock a broker down has
   reached for the wrong field, and today the API offers no right one — authentication has to go
   through `spec.config`, which nothing validates.
-* **A certificate renewal silently does nothing until somebody restarts the pods.** cert-manager
+* ~~**A certificate renewal silently does nothing until somebody restarts the pods.**~~
+  *(Superseded by D10, built 2026-10-05: a renewal is reloaded without a restart. What remains is
+  [rotation.md H-19](../security/rotation.md#h-19).)* cert-manager
   renews on its own schedule; the Secret changes; the file in `/mosquitto/tls` is expected to
   follow it, because the mount uses no `subPath` — that half is standard Kubernetes Secret-volume
   behaviour and was **not** verified against a cluster here, only the absence of `subPath` was;
   and the running broker keeps serving what it parsed at start. There is no event, no condition
   and no log line anywhere in this operator that marks the moment. **This is the sharpest edge in
   the whole TLS story.**
-* **An expiring certificate therefore becomes an outage on a timer**, on exactly the clusters that
-  automated issuance was supposed to protect — a long-lived pod outlives its own certificate.
+* ~~**An expiring certificate therefore becomes an outage on a timer**, on exactly the clusters that
+  automated issuance was supposed to protect — a long-lived pod outlives its own certificate.~~
+  *(Amended 2026-10-05:)* a renewed certificate is reloaded; a certificate nothing renews still
+  expires, and nothing in the operator tracks the expiry.
 * **The operator cannot validate the Secret at all.** A `secretName` pointing at a missing Secret,
   a Secret with no `tls.crt`, or a `tls.key` that does not match the certificate produces a
   StatefulSet that reconciles cleanly and pods that fail to start. The reconcile is green. *(Amended
@@ -292,9 +323,9 @@ TLS buys is read as a stated limit and not as an oversight.
 
 ## Residual risks
 
-* **The rotation gap is open and accepted (D7)** — until D10 is built. Nothing in this repository notices a changed
+* ~~**The rotation gap is open and accepted (D7)** — until D10 is built. Nothing in this repository notices a changed
   Secret. The mitigation is documentation in three places and a manual
-  `kubectl rollout restart`.
+  `kubectl rollout restart`.~~ *(Closed by D10, built 2026-10-05.)*
 * **Whether the `mosquitto` process could re-read rotated material on a signal is not verified.**
   It does not matter for the current behaviour — the operator sends nothing and can send nothing
   (no `pods` RBAC, no lifecycle hook) — but it decides whether a future fix is "roll the pods" or
@@ -302,13 +333,15 @@ TLS buys is read as a stated limit and not as an oversight.
   it does — measured on the pinned image, see D10's Status note; a mismatched pair breaks new
   handshakes until a valid pair and a second signal arrive. Still not measured: whether the
   kubelet swaps `tls.crt` and `tls.key` together, and what the broker does with a mismatched pair
-  at start.)*
-* **No behaviour in this ADR has been observed on a real cluster.** The unit and integration tiers
-  never start a container: envtest runs an API server and etcd and no kubelet. Everything about
-  what the *broker* does with the mounted files is asserted only by `test/e2e/tls_test.go`, and no
-  run of that suite is evidence available in this repository.
-* **Anonymous access under TLS is accepted, not mitigated (D9).** The only barrier is the network,
-  and this project ships no NetworkPolicy.
+  at start.)* *(Both measured the same day, M23 and M24; the reload observed on Kind, D10.)*
+* ~~**No behaviour in this ADR has been observed on a real cluster.**~~ *(Amended 2026-10-05:)*
+  the E2E tier ran on Kind, locally and in CI. The unit and integration tiers still never start a
+  container: envtest runs an API server and etcd and no kubelet, so what the *broker* does with
+  the mounted files is asserted only by the E2E tests.
+* ~~**Anonymous access under TLS is accepted, not mitigated (D9).** The only barrier is the network,
+  and this project ships no NetworkPolicy.~~ *(Amended 2026-10-05:)* the generated broker requires
+  a login ([ADR 0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+  D13); D9 still holds — TLS authenticates no client, the users do.
 * **A wrong `spec.tls.secretName` is not reported anywhere.** There is no validation, no condition
   and no event; the symptom is a broker pod that will not start.
 * **The cert-manager version `v1.17.2` is duplicated** between the `cert-manager-install` target
@@ -322,7 +355,9 @@ TLS buys is read as a stated limit and not as an oversight.
   the Secret volume, the read-only mount, `AnnotationPodSpecHash`, `AnnotationConfigHash`,
   `StatefulSetHasChanged`
 * [`internal/builder/configmap.go`](../../internal/builder/configmap.go) —
-  `GenerateMosquittoConf`, `TLSMountPath`, `TLSCertKey`, `TLSKeyKey`, `allow_anonymous true`
+  `GenerateMosquittoConf`, `TLSMountPath`, `TLSCertKey`, `TLSKeyKey`, `listener_allow_anonymous false`
+* [`internal/reloader/tls.go`](../../internal/reloader/tls.go) — `checkTLS`, the pair check before
+  every signal (D10)
 * [`internal/builder/service.go`](../../internal/builder/service.go) — `brokerServicePort`, the
   single port both Services expose
 * [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)

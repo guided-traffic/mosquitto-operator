@@ -30,9 +30,10 @@ R5 for both kinds (each reports `observedGeneration` and a `Ready` condition wit
 applied before its broker or its Secret converges through the watches —
 `TestIntegration_Users_ConvergeWhenTheirReferencesArrive` — and one user's failure leaves the broker
 and the other users alone — `TestReconcile_EveryUserReason`), and R6 for every container now in a
-broker pod (D4). **Not built:** R3 for a renewed certificate
-([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10), and D1's migration,
-which is the owner's to run. The work is ordered in [the project plan](../planning/project-plan.md).
+broker pod (D4). R3 for a renewed certificate is built as well
+([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10: a cert-manager
+renewal reaches a fresh handshake with no restart, observed on Kind). **Not built:** D1's
+migration, which is the owner's to run. The work is ordered in [the project plan](../planning/project-plan.md).
 
 ## Context
 

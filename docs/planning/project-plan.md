@@ -36,8 +36,9 @@ releasable on its own.
   the generated files committed.
 - **The project stays on 0.x.** No commit carries `BREAKING CHANGE` or `!`, and no commit message
   carries an apostrophe.
-- **Verification is named.** "Done" means what was run, against what, with what result. Nothing in
-  this repository has yet been observed running against a real cluster; phase 6 changes that.
+- **Verification is named.** "Done" means what was run, against what, with what result. The E2E
+  tier runs on Kind, locally and in CI; what it cannot show is a production cluster, which phase 6
+  is the first to reach.
 
 Proposed names below — chart values, flags, labels, reason strings, new packages — are proposals;
 a name that becomes API surface is fixed in the step that builds it and written into the README
@@ -49,6 +50,11 @@ reference.
 StatefulSet; TLS from an existing Secret; anonymous brokers; two install paths with equal
 authority; five test tiers. What it built is in the records 0001 to 0010 and in
 [docs/developer/](../developer/README.md).
+
+Built for the next release on 2026-10-05, and deleted here: phase 3 (the measurements,
+[broker-behaviour.md](../developer/broker-behaviour.md) M19–M27) and phase 5 (a renewed
+certificate reloaded in place, [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
+D10). Phases 1, 2 and 4 keep only what is left of them.
 
 ## Phase 1 — The tree tells the truth, and the release gate is back
 
@@ -137,25 +143,6 @@ setting — and costs one request per user per pass. The answer becomes an amend
 D10.
 
 **Answer:** _open_
-
-## Phase 5 — Certificates renewed in place
-
-**Goal:** the TLS half of R3 — a renewal reaches a running broker without a restart.
-
-**Builds:** [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10,
-[ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
-D5.
-
-**Effort:** S.
-
-- The reloader watches the TLS mount too; before every signal it checks that `tls.crt` and
-  `tls.key` form a valid pair with `crypto/tls.X509KeyPair`, and does not signal otherwise.
-- `buildPodSpec`: the reloader is present whenever `spec.tls` or a user is configured.
-- Tests: unit — a mismatched pair is never signalled. E2E — a cert-manager renewal shows the new
-  serial to a fresh `openssl s_client` with no pod restart while a subscriber connected before
-  keeps receiving; a Secret edited to a mismatched pair leaves the previous certificate served.
-- [rotation.md](../security/rotation.md) and [runtime.md](../operations/runtime.md#a-renewed-certificate):
-  "restart" becomes "reload"; H-3 closed.
 
 ## Phase 6 — The Home Assistant migration
 
