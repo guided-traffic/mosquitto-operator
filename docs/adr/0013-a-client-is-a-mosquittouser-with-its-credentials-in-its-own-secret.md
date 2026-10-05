@@ -4,9 +4,23 @@
 
 Accepted. Date: 2026-10-05. Decided by the owner, one question at a time, for requirements R1
 and R2 of [ADR 0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md).
-**Not built:** `api/v1/` declares the `Mosquitto` kind only. The measurements D4, D5 and D6 rest
-on are in [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md) (M13, M14, M17,
-and M21 for D5's characters, measured 2026-10-05).
+**Built 2026-10-05**, entire. The kind is
+[`api/v1/mosquittouser_types.go`](../../api/v1/mosquittouser_types.go) — resource
+`mosquittousers`, short name `mqu`, printer columns Broker, Username, Ready, Age; `brokerRef.name`,
+`credentialsSecret.{name, usernameKey, passwordKey}` with the basic-auth defaults, `acls[]` of at
+most 256 entries with a CEL rule refusing a topic that starts with `$` and one refusing a control
+character. The render-time checks, the collision rule and the deterministic rendering are
+[`internal/auth/render.go`](../../internal/auth/render.go); the reconciler reads the users and their
+Secrets and writes their statuses ([`internal/controller/users.go`](../../internal/controller/users.go)).
+D10's reason strings, fixed: `Accepted` (True), `BrokerNotFound`, `SecretNotFound`, `KeyNotFound`,
+`PasswordEmpty` (added: an empty password, refused rather than rendered), `UsernameInvalid`,
+`UsernameReserved`, `UsernameConflict`, `TopicRefused`, `SecretNotConsumable` (ADR 0014 D10) and
+`NamespaceNotGranted` (ADR 0014 D7). Guards observed failing on purpose: the CEL `$` rule removed
+(`An error is expected but got nil` for `$SYS` and `$CONTROL`), the final sort removed
+(`TestRender_IsDeterministic`, `render 0`), the age order reversed
+(`TestRender_TheOldestUserKeepsTheUsername`, `expected: "UsernameConflict"`). Observed on Kind:
+`TestE2E_Users_TheBrokerFollowsItsUsers`. The measurements D4, D5 and D6 rest on are in
+[docs/developer/broker-behaviour.md](../developer/broker-behaviour.md) (M13, M14, M17, M21, M27).
 
 ## Context
 

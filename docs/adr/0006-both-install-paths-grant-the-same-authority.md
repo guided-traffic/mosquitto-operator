@@ -2,9 +2,21 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** the grant table of D6
-gains the `MosquittoUser` kind of [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and a `secrets` rule whose scope is an install-time
-mode ([ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7) — D9. Until that is built, D6 describes the tree.
+Accepted. Date: 2026-09-01. **Amended 2026-10-05:** the grant table of D6 gains the
+`MosquittoUser` kind of [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and a `secrets` rule whose scope is an install-time
+mode ([ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7) — D9. **D9 built 2026-10-05**: the markers carry `mosquittousers`
+`get;list;watch`, `mosquittousers/status` `update` and `secrets` `get;list;watch;create;update`
+(controller-gen merges `secrets` into the rule of `configmaps` and `services`); the chart switches
+on `secretAccess.mode` (`all` | `namespaces`) and `secretAccess.namespaces`, rendering the rule in
+the ClusterRole or one Role and RoleBinding `<fullname>-secrets` per namespace, and passes
+`--secret-namespaces`; the kustomize component `config/components/secret-namespaces` removes the
+rule from the generated ClusterRole — a JSON patch guarded by a `test` operation — and adds a Role
+and RoleBinding for the placeholder namespace `mosquitto` with the flag. `test/rbacparity` renders
+three settings — the defaults, `secretSecurity`, `secretAccess.mode: namespaces` — and logs
+`compared 11 grants across both install paths` for each; it also compares `--secret-security`,
+`--secret-namespaces` and `--reloader-image` on both paths. Observed failing with the component's
+removal patch deleted: `ClusterRole core/secrets: granted by kustomize (create,get,list,update,watch)
+but not by the chart.`
 
 **Verified by reading:** the `+kubebuilder:rbac` markers and the comment above them in
 [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go);
@@ -193,7 +205,7 @@ a metrics `Service`, `kustomize build config/default` renders neither (`config/d
 stream is skipped after a probe decode that reads no further than `kind`.
 
 **D9 — The table grows by the user kind and by a `secrets` rule in one of two modes, and both
-paths render both modes.** *(Added 2026-10-05; decided, not built.)*
+paths render both modes.** *(Added 2026-10-05; built 2026-10-05.)*
 
 | Kind | apiGroup | Resource | Verbs | Mode |
 |---|---|---|---|---|

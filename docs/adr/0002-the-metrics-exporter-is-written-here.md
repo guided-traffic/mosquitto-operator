@@ -5,8 +5,9 @@
 Accepted. Date: 2026-09-01. **Nothing in this ADR is implemented.** It is recorded ahead of the
 code so that nothing else is built against a contradicting assumption.
 
-**Amended 2026-10-05 (decided, not built):** D4's "whatever principal that brings" is now
-concrete. Brokers require a login
+**Amended 2026-10-05 (decided, not built; its preconditions built 2026-10-05 — the login, the
+`$` refusal and the reserved `mko-` prefix, which no `MosquittoUser` can claim):** D4's "whatever
+principal that brings" is now concrete. Brokers require a login
 ([ADR 0008](0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md) D13), and
 no `MosquittoUser` may hold a `$` topic ([ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D4), so the exporter connects as a
 reserved user the operator renders for itself — D4 as amended. The sentence that the ClusterRole

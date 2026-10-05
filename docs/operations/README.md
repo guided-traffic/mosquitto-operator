@@ -9,6 +9,7 @@ restates the reference tables, which live in the README and nowhere else.
 | Page | Read it when |
 |---|---|
 | [installation.md](installation.md) | You are installing the operator, through the Helm chart or through kustomize. It covers what each path renders and what it leaves to you, the CRD and the namespace, which image a checked-out chart runs, leader election on both paths, the TLS Secret a broker serves from, storage classes and the claims that outlive a broker, upgrading, rolling back and uninstalling |
+| [users.md](users.md) | You are giving clients access to a broker. It covers the `MosquittoUser` and its Secret, what the operator renders from them and how the broker picks a change up without a restart, how long a new user, a rotated password or a revocation takes, which Secrets the operator reads, and who can reach the broker at all |
 | [runtime.md](runtime.md) | You want to know what the operator does when it starts and what one reconcile pass writes or leaves alone. It also covers which `spec` changes restart the broker pods, changing `spec.storage` on a running broker, what `Pending`, `Progressing`, `Ready` and `Failed` mean, the operator's ports and probes, what happens while it is not running, what it logs, and how a renewed certificate reaches a broker |
 
 **What these pages rest on.** Every statement about the operator was read from this repository's

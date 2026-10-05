@@ -21,16 +21,26 @@ change.
 
 ## What has to be in your head first
 
-- **One kind, four objects.** A `Mosquitto` (`mko.gtrfc.com/v1`, resource `mosquittoes`, short
-  name `mq`) produces a ConfigMap, a headless Service, a client Service and a StatefulSet — the
-  whole managed set ([architecture.md](architecture.md#what-one-pass-writes)).
+- **Two kinds, five objects.** A `Mosquitto` (`mko.gtrfc.com/v1`, resource `mosquittoes`, short
+  name `mq`) produces the Secret `<name>-auth`, a ConfigMap, a headless Service, a client Service
+  and a StatefulSet — the whole managed set ([architecture.md](architecture.md#what-one-pass-writes)).
+  A `MosquittoUser` (`mosquittousers`, `mqu`) is never written by the operator except its status;
+  it is rendered into its broker's `<name>-auth`.
+- **Every broker requires a login.** No anonymous access, no switch for it; `spec.config` takes an
+  allowlist of tuning directives ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)).
+- **Secrets: stripped in the cache, read on demand.** The cache holds Secret metadata only; a
+  credentials Secret's data is read with one uncached `get` when its user is rendered, and a TLS
+  Secret's data never ([architecture.md](architecture.md#the-reconcile-pipeline)).
 - **Independent brokers, not a cluster.** The pods are separate Mosquitto processes behind one
   Service: no bridging, no shared sessions, no shared retained messages. `spec.replicas` buys
   process redundancy, not a highly available broker. Do not write a line that implies otherwise
   ([architecture.md](architecture.md#what-runs-where)).
-- **Pure builders, one loop.** [`internal/builder`](../../internal/builder) turns a CR into objects
-  without a client; [`internal/controller`](../../internal/controller) is the only code that talks
-  to the API server ([package-map.md](package-map.md)).
+- **Pure builders and renderer, one loop, one binary with two entry points.**
+  [`internal/builder`](../../internal/builder) turns a CR into objects and
+  [`internal/auth`](../../internal/auth) users into credentials, both without a client;
+  [`internal/controller`](../../internal/controller) is the only code that talks to the API
+  server; [`internal/reloader`](../../internal/reloader) is `manager reload`, which runs in every
+  broker pod ([package-map.md](package-map.md)).
 - **Ownership before every write, deletion only through owner references.** `ensureOwned` refuses
   any object this CR does not control; the ClusterRole has no `delete` and no `patch`; a CR being
   deleted gets no writes ([ADR 0009](../adr/0009-delete-only-through-owner-references.md)).
@@ -76,15 +86,16 @@ change.
 | Flow | The fact | Where |
 |---|---|---|
 | Operator start | Flags parsed, zap logger set, the manager built with Lease ID `mosquitto-operator.mko.gtrfc.com` in its own namespace, the controller registered, `healthz` and `readyz` as plain pings, `mgr.Start` | [architecture.md](architecture.md#operator-startup) |
-| What wakes the loop | A generation change of a `Mosquitto` (its own status writes do not), or any change of an owned StatefulSet, ConfigMap or Service; up to 4 resources at once, one pass per resource at a time | [architecture.md](architecture.md#watches-and-concurrency) |
-| A reconcile pass | Get the CR (gone: done; deleting: no writes), then ConfigMap, headless Service, client Service, StatefulSet in that order, then status from the live StatefulSet | [architecture.md](architecture.md#the-reconcile-pipeline) |
+| What wakes the loop | A generation change of a `Mosquitto` or of a `MosquittoUser` naming it (status writes do not), any change of an owned object, or of a Secret a user or its TLS listener names; up to 4 resources at once, one pass per resource at a time | [architecture.md](architecture.md#watches-and-concurrency) |
+| A reconcile pass | Get the CR (gone: its users get `BrokerNotFound`; deleting: no writes), the refusals, the users rendered into `<name>-auth` and their statuses, then ConfigMap, headless Service, client Service, StatefulSet in that order, then status | [architecture.md](architecture.md#the-reconcile-pipeline) |
 | A write | `SetControllerReference`, `Get`, `Create` on NotFound, otherwise `ensureOwned` and a semantic diff before `Update` — never `Patch`, never `Delete` | [architecture.md](architecture.md#what-each-write-compares) |
 | A foreign object on a generated name | Refused, never adopted: the pass stops, `phase: Failed`, `Ready=False`, reason `ReconcileFailed`, and the error goes back to the work queue | [ADR 0009](../adr/0009-delete-only-through-owner-references.md) |
 | Status | `phase`, `observedGeneration` and the one `Ready` condition written together by `setPhase`, and only when they changed; `Failed` describes the operator, not the brokers | [architecture.md](architecture.md#status) |
 | A config change | The ConfigMap is updated and the config hash on the pod template changes, which is what rolls the pods | [architecture.md](architecture.md#how-a-change-reaches-a-running-broker) |
 | A replica change | Only `spec.replicas` of the StatefulSet moves; nothing rolls | [architecture.md](architecture.md#how-a-change-reaches-a-running-broker) |
-| A rotated TLS Secret | Nothing: the Secret is not watched, and running pods serve the old material until they restart | [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
-| Deleting a `Mosquitto` | The reconciler writes nothing; the garbage collector removes the four objects through their controller references | [ADR 0009](../adr/0009-delete-only-through-owner-references.md) |
+| A `MosquittoUser` added, changed or deleted, or its Secret changed | The broker's pass re-renders `<name>-auth`; the kubelet refreshes the mount, the reloader copies it in and sends `SIGHUP`; nothing rolls | [architecture.md](architecture.md#the-credentials-path) |
+| A rotated TLS Secret | Nothing: the operator never reads its content, and running pods serve the old material until they restart | [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
+| Deleting a `Mosquitto` | The reconciler writes nothing; the garbage collector removes the five objects through their controller references; its users report `BrokerNotFound` | [ADR 0009](../adr/0009-delete-only-through-owner-references.md) |
 | An RBAC change | Marker in the controller, `make generate-all` for `config/rbac/role.yaml`, the chart's ClusterRole by hand, `make verify-rbac-parity` | [adding-things.md](adding-things.md#a-managed-object) |
 | A pull request | Fourteen jobs on self-hosted runners — two E2E legs and their gate among them — each check entered through a Make target | [ci-and-release.md](ci-and-release.md#test-and-release) |
 | A release | On a push to `main`, after thirteen of those jobs, `semantic-release` cuts the version from Conventional Commits with a GitHub App token; the published release builds and pushes the image and publishes the chart to `gh-pages` | [ci-and-release.md](ci-and-release.md#the-release) |

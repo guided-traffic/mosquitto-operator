@@ -10,7 +10,8 @@ runtime is [architecture.md](architecture.md).
 | [`internal/common`](../../internal/common) | The shared vocabulary: label keys and sets, the StatefulSet and Service names, the label diff and merge | `BaseLabels`, `SelectorLabels`, `ExtractVersionFromImage`, `MapEntriesMissing`, `MergeLabels` |
 | [`internal/builder`](../../internal/builder) | CR in, objects out, and how an update merges them. Pure functions — no client, no context, no I/O | `BuildConfigMap`, `BuildHeadlessService`, `BuildClientService`, `BuildStatefulSet`, `StatefulSetHasChanged`, `MergeStatefulSet`, `DefaultImage` |
 | [`internal/controller`](../../internal/controller) | The reconcile loop, the only code that talks to the API server, and the RBAC markers | `MosquittoReconciler`, `Reconcile`, `ensureOwned`, `SetupWithManager` |
-| [`internal/auth`](../../internal/auth) | The users of a broker turned into what the file plugins read. Today: the `$7$` password hash. Pure functions | `HashPassword`, `VerifyPassword`, `HashIterations` |
+| [`internal/auth`](../../internal/auth) | The users of a broker turned into what the file plugins read: the checks, the collisions, the `$7$` hashes, the files. Pure functions | `Render`, `Payload`, `FilePayload`, `HashPassword`, `VerifyPassword` |
+| [`internal/reloader`](../../internal/reloader) | The second entry point of the binary, `manager reload`: `auth-init` and the `reloader` sidecar in every broker pod | `Main`, `Run`, `Sync`, `FindProcess` |
 | [`cmd`](../../cmd) | The one binary: flags, manager, wiring, health checks | `bindOperatorFlags`, `bindZapFlags`, `managerOptions`, `newReconciler`, `main` |
 | [`test/*`](../../test) | One tier per question, separated by build tag ([testing.md](testing.md)) | `testimages.MosquittoImage`, `testimages.Default` |
 | [`hack/`](../../hack) | The guards that are not Go tests, and the release-notes config | — |
@@ -65,29 +66,44 @@ wrong quantity is worth a visible reconcile failure rather than a silently subst
 | Symbol | Responsibility |
 |---|---|
 | `DefaultMaxConcurrentReconciles` | `4`. Why not controller-runtime's `1` is in the constant's comment and in [architecture.md](architecture.md#watches-and-concurrency). |
-| `MosquittoReconciler` | Embeds the client; holds the scheme, `MaxConcurrentReconciles` (zero means the default), `SecretSecurity` and the uncached `APIReader` the Secret check reads through (nil falls back to the client). |
-| `Reconcile` | One pass: fetch, skip on deletion, the TLS Secret check, write the objects, then update status. On a failed write it records `Failed` on the resource *and* returns the error, so the failure is visible to `kubectl get` and the work queue still backs off. |
-| `refuseTLSSecret`, `secretRecheckInterval` | `--secret-security`: a metadata-only `get` of the TLS Secret before any write; a missing or unlabelled one sets `Failed` with `SecretNotFound` / `SecretNotConsumable`, and the pass requeues after one minute ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D10). |
+| `MosquittoReconciler` | Embeds the client; holds the scheme, `MaxConcurrentReconciles` (zero means the default), `SecretSecurity`, the uncached `APIReader` every read of Secret data goes through (nil falls back to the client), `ReloaderImage`, `SecretNamespaces` and `Random` (nil means `crypto/rand`). |
+| `Reconcile` | One pass: fetch (a missing broker's users get `BrokerNotFound`), skip on deletion, `refusePass`, render the users and write the objects, then update status. On a failed write it records `Failed` on the resource *and* returns the error, so the failure is visible to `kubectl get` and the work queue still backs off. |
+| `refusePass`, `namespaceGranted`, `refuseTLSSecret` ([`refusals.go`](../../internal/controller/refusals.go)) | The checks before any write: the namespace against `--secret-namespaces`, `spec.config` against the allowlist, and with `--secret-security` a metadata-only `get` of the TLS Secret ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7, D10). |
+| `renderUsers`, `readCredentials`, `currentAuthData`, `reconcileAuthSecret`, `writeUserStatuses`, `persistUserStatus`, `reportUsers`, `reportUsersOfMissingBroker` ([`users.go`](../../internal/controller/users.go)) | The users: list them by index, read each Secret (cached metadata, then one uncached `get` of the data), render, write `<name>-auth` only on a difference, write each user's status only on a difference. |
 | `reconcileResources` | The dependency order: ConfigMap, headless Service, client Service, StatefulSet. Stops at the first error. |
 | `reconcileConfigMap`, `reconcileService`, `reconcileStatefulSet` | Build, `SetControllerReference`, `Get`, `Create` on NotFound, else `ensureOwned`, a semantic diff and an `Update` that merges labels and annotations rather than assigning them ([architecture.md](architecture.md#what-each-write-compares)). |
 | `updateStatus`, `setPhase`, `persistStatus`, `statusUnchanged` | The whole status path. `setPhase` writes phase, `observedGeneration` and the `Ready` condition together; `persistStatus` re-reads the object and writes only on a difference. |
 | `ensureOwned` | `metav1.IsControlledBy` or an error naming the object. See [ADR 0009](../adr/0009-delete-only-through-owner-references.md). |
-| `SetupWithManager`, `maxConcurrentReconciles` | `For(&Mosquitto{})` with `GenerationChangedPredicate`, `Owns` on StatefulSet, ConfigMap and Service, and the worker count. |
+| `SetupWithManager`, `indexFields`, `userBrokers`, `brokersForSecret`, `StripSecret`, `maxConcurrentReconciles` ([`watches.go`](../../internal/controller/watches.go)) | The three field indexes; `For(&Mosquitto{})` and the user watch with `GenerationChangedPredicate`; `Owns` on StatefulSet, ConfigMap, Service and Secret; the Secret watch; the cache transform that strips Secret data; the worker count ([architecture.md](architecture.md#watches-and-concurrency)). |
 | The `+kubebuilder:rbac` markers | The only source of [`config/rbac/role.yaml`](../../config/rbac/role.yaml). The comment above them justifies every verb, because the role is cluster-wide and an unused cluster-wide verb is blast radius nobody chose. |
 
 ## internal/auth
 
 | Symbol | Responsibility |
 |---|---|
+| `Render(payload, inputs, previous, random)` | One broker's users in, its credentials and one `Verdict` per user out: the username allowlist and the reserved `mko-` prefix, the empty password, every ACL topic and access mode, collisions by age, kept or new hashes, and the accepted users sorted by username before `payload.Render` ([architecture.md](architecture.md#the-renderer)). Deterministic for equal logins |
+| `Input`, `Accepted`, `Verdict`, `Result` | What the reconciler hands over per user (object name, creation time, username, password, ACLs), what the payload gets, what a user's status gets, and the Secret data with the verdicts |
+| `Payload`, `FilePayload`, `PasswdKey`, `ACLKey` | The mode-specific half ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D9): `Hashes` reads the hashes out of a previous rendering, `Render` writes the new one. `FilePayload` writes `passwd` and `acl` |
+| `ReservedPrefix` | `mko-`, kept for principals the operator renders itself |
 | `HashPassword(password, random)` | The `$7$<iterations>$<base64 salt>$<base64 key>` line the `password-file` plugin verifies: PBKDF2-HMAC-SHA512 at `HashIterations` (1000), a 64-byte salt read from `random`, a 64-byte key, padded standard base64 — `mosquitto_passwd`'s exact shape ([broker-behaviour.md](broker-behaviour.md) M20, [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D3). The reader is a parameter so a test can pin the salt. |
 | `VerifyPassword(encoded, password)` | Whether a plaintext still verifies against a `$7$` hash, with the hash's own iteration count and salt, compared in constant time; anything that does not parse never verifies. It is what lets a renderer keep an existing hash instead of writing a new salt on every pass. |
+
+## internal/reloader
+
+| Symbol | Responsibility |
+|---|---|
+| `Main(args, stderr)` | Parses `--source`, `--target`, `--files`, `--process`, `--once`, `--interval`. With `--once` it copies and exits — `auth-init`; without, it runs `Run` until SIGTERM — `reloader` |
+| `Sync(cfg)` | Reads every file of the Secret mount through one resolved `..data` link, and replaces each copy whose bytes differ through a temporary file and a rename, mode `0600`. Reports whether anything changed |
+| `Run(ctx, cfg, interval, logger)` | Polls `Sync`, and after a change signals the broker; a signal that failed — no broker process yet — stays pending for the next round |
+| `FindProcess(procRoot, name)` | The pid whose `/proc/<pid>/comm` is `name` (`mosquitto`) |
+| `Config.Signal` | How the signal is sent; nil means `syscall.Kill(pid, SIGHUP)`. Tests inject a recorder |
 
 ## cmd
 
 | Symbol | Responsibility |
 |---|---|
 | `init` | Registers client-go's scheme and `mkov1` into the package-level `scheme`. |
-| `bindOperatorFlags` | `--metrics-bind-address` (`:8080`), `--health-probe-bind-address` (`:8081`), `--leader-elect` (`false`), `--max-concurrent-reconciles` (`controller.DefaultMaxConcurrentReconciles`), `--secret-security` (`false`). |
+| `bindOperatorFlags` | `--metrics-bind-address` (`:8080`), `--health-probe-bind-address` (`:8081`), `--leader-elect` (`false`), `--max-concurrent-reconciles` (`controller.DefaultMaxConcurrentReconciles`), `--secret-security` (`false`), `--reloader-image` (`guidedtraffic/mosquitto-operator:<version>`), `--secret-namespaces` (empty). |
 | `bindZapFlags` | Registers controller-runtime's zap flags through `zap.Options.BindFlags`, with `Development: true` as the base, so `--zap-log-level` and its siblings are accepted. |
 | `managerOptions` | Scheme, metrics bind address, probe bind address, leader election with `LeaderElectionID = "mosquitto-operator.mko.gtrfc.com"`. No `LeaderElectionNamespace`, so the Lease lands in the operator's own namespace — which is why the leader-election RBAC is a namespaced `Role`. |
 | `newReconciler`, `main` | Wiring — the reconciler gets `mgr.GetAPIReader()` for the uncached Secret check — the `healthz`/`readyz` checks (both `healthz.Ping`), `mgr.Start` ([architecture.md](architecture.md#operator-startup)). |
@@ -101,10 +117,11 @@ decidable was moved into the small helpers above, which
 **Which flags a deployed operator gets.** The chart passes `--metrics-bind-address` (`:8080`, or
 `0` with `metrics.enabled: false`), `--health-probe-bind-address=:8081`,
 `--max-concurrent-reconciles`, `--secret-security` and, under `leaderElection.enabled`,
-`--leader-elect` ([`deployment.yaml`](../../deploy/helm/mosquitto-operator/templates/deployment.yaml));
-[`config/manager/manager.yaml`](../../config/manager/manager.yaml) passes `--leader-elect` and
-`--secret-security=false`, and the component `config/components/secret-security` appends
-`--secret-security=true`. Neither passes a `--zap-*` flag, so a deployed operator logs at the zap
+`--leader-elect`, `--reloader-image` and, in mode `namespaces`, `--secret-namespaces`
+([`deployment.yaml`](../../deploy/helm/mosquitto-operator/templates/deployment.yaml));
+[`config/manager/manager.yaml`](../../config/manager/manager.yaml) passes `--leader-elect`,
+`--secret-security=false` and `--reloader-image`, whose value `config/default` replaces with the
+manager's image; the components append `--secret-security=true` and `--secret-namespaces=…`. Neither passes a `--zap-*` flag, so a deployed operator logs at the zap
 defaults with `Development: true`; the flags are exercised by `make run`, which passes
 `--zap-log-level=debug`.
 

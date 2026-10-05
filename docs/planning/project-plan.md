@@ -103,140 +103,40 @@ becomes an amendment of ADR 0009 D9.
 
 ## Phase 4 — Users, permissions, and a broker that requires a login
 
-**Goal:** R1, R2, R3 and R5 of ADR 0012 — the core of the release.
+**Built 2026-10-05**: the `MosquittoUser` kind, the renderer, `<name>-auth`, the pod with
+`auth-init` and `reloader`, the generated listener that requires a login, the `spec.config`
+allowlist, the watches and statuses, and the Secret grant in two modes on both install paths
+(ADR 0006 D9, ADR 0008 D13–D16, ADR 0013, ADR 0014 D1–D4, D6–D8, D10). The scenario of 4.8 passed on
+Kind (`TestE2E_Users_TheBrokerFollowsItsUsers`). One decision is open, and the tree is built on its
+recommended answer:
 
-**Builds:** [ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)
-entire; [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
-D1–D4, D6–D8, and D10 for `credentialsSecret`;
-[ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
-D13–D16; [ADR 0006](../adr/0006-both-install-paths-grant-the-same-authority.md) D9.
+### 4.6a — Is a Secret cache without data what ADR 0014 D10 asks for, instead of one restricted to labelled Secrets?
 
-**Effort:** L. Built in the order below; each step is a reviewable change that keeps the tree
-green.
+ADR 0014 D10 says that with `secretSecurity: true` "the operator's Secret cache is restricted to
+labelled Secrets". Building it showed that a label-restricted cache cannot hold the operator's own
+`<name>-auth`, which the `Owns` watch and the ownership check read, unless the operator labels its
+own Secret as consenting — which would let any `Mosquitto` or `MosquittoUser` of the namespace name
+it. What the label restriction is for is that the operator never holds or reads the data of a
+Secret whose owner did not consent.
 
-### 4.1 The `MosquittoUser` kind
+- **A — Cache every Secret in scope stripped of its data, check the label on the cached metadata,
+  read a Secret's data with one uncached `get` only after the check.** *(Recommended, and built:
+  `controller.StripSecret`, `readCredentials`.)* No Secret data is in the cache at all, with or
+  without `secretSecurity`, and annotations — where `kubectl apply` records a whole Secret — are
+  stripped too. Cost: the names and labels of every Secret in scope are in memory, and one API
+  request per user per pass reads the data.
+- **B — Restrict the cache to labelled Secrets, and label `<name>-auth` consenting.** Matches the
+  text; the cache holds the full data of every labelled Secret, and every `Mosquitto` of the
+  namespace may then name a broker's rendered hashes as its TLS Secret or a user's credentials.
+- **C — Two caches: labelled Secrets, and Secrets owned by a `Mosquitto`.** Matches the text
+  without labelling `<name>-auth`, at the cost of a second informer setup controller-runtime does
+  not offer for one type without a custom cache; and the labelled Secrets' data is still cached.
 
-- `api/v1/mosquittouser_types.go` (new): `MosquittoUserSpec` with `BrokerRef` (name only — no
-  namespace field, ADR 0013 D1), `CredentialsSecret` (`Name`; `UsernameKey` default `username`,
-  `PasswordKey` default `password` as `+kubebuilder:default`), `ACLs []MosquittoACL` with `Topic`
-  and `Access` (`+kubebuilder:validation:Enum=read;write;readwrite`), a CEL rule on `Topic`
-  refusing a leading `$`; `MosquittoUserStatus` with `ObservedGeneration`, `Username`,
-  `Conditions`. Printer columns: broker, username, ready.
-- `make generate-all`; the chart's CRD template gains the second CRD.
-- Tests: integration, in [`crd_validation_test.go`](../../test/integration/crd_validation_test.go)
-  — the defaults apply; a `$SYS/#` topic and an unknown access mode are refused at apply.
+A is recommended because it is stricter than the text — no Secret data in the cache in either
+setting — and costs one request per user per pass. The answer becomes an amendment of ADR 0014
+D10.
 
-### 4.2 The renderer (ADR 0013 D3–D6, D8; ADR 0014 D3)
-
-- A new package (proposed `internal/auth`): one function from the broker and its bound users to
-  the `passwd` and `acl` content — users sorted by username; the render-time checks (username
-  allowlist `^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$`, the reserved `mko-` prefix case-insensitive,
-  `$` topics, oldest-wins collisions by `creationTimestamp` then name); `$7$` hashing,
-  PBKDF2-SHA512 at 1000 iterations with a 64-byte salt, and **verify before rehash**: an existing
-  hash is kept while the plaintext still verifies against it. The result carries one verdict per
-  user for the status.
-- The payload is mode-specific behind one interface, so a later dynsec payload is a second
-  implementation (ADR 0014 D9).
-- Tests: unit — a hundred renders of shuffled input give one output (observed failing without the
-  sort); a kept hash for an unchanged password and a new one for a changed password; every refusal;
-  the collision rule; a `$` topic refused at render time although CEL was bypassed. M20 is in
-  `test/imagetools` so CI repeats the check of the hash format against the pinned image.
-
-### 4.3 The rendered Secret `<name>-auth` (ADR 0014 D2)
-
-- `internal/builder`: a builder for the Secret (keys `passwd`, `acl`), its name derived in
-  `internal/common` (proposed `AuthSecretName`), base labels, written after `ensureOwned` with a
-  controller reference like the other four objects. Its content is part of no pod hash.
-- The reconciler reads the bound users and their Secrets, renders, compares with the current
-  `<name>-auth`, and writes only on a difference.
-
-### 4.4 The broker pod: copy, sidecar, signal (ADR 0014 D4–D6)
-
-- `buildPodSpec`: a volume for `<name>-auth` (no `subPath`), an `emptyDir` for the copy at
-  `/mosquitto/auth`, `shareProcessNamespace: true`, an init container (proposed `auth-init`) that
-  copies on every start as `1883:1883` mode `0600`, and a sidecar (proposed `reloader`) — both from
-  the operator's own image, with the broker container's security context.
-- The operator binary gains its second entry point (proposed `manager reload`, in a new package
-  proposed `internal/reloader`): compare the mounted bytes, write to a temporary name and rename,
-  find the broker process through `/proc`, send SIGHUP. The TLS half follows in phase 5.
-- The operator learns its own image from a flag (proposed `--reloader-image`): the chart passes
-  its own image string; on the kustomize path a `replacements` entry in `config/default` copies the
-  manager's image into the flag — **not verified** that `replacements` can target an element of
-  `args`; if it cannot, the kustomize path sets an environment variable instead.
-- Tests: unit — the pod spec carries both containers and the volumes, and every container passes
-  the restricted check of 2.4; the reloader's copy, rename and change detection against a
-  temporary directory. M22 proved the signal.
-
-### 4.5 The generated listener (ADR 0008 D13–D15)
-
-- `GenerateMosquittoConf`: `plugin_load` and `plugin_opt_password_file` /
-  `plugin_opt_acl_file` pointing at `/mosquitto/auth/passwd` and `/mosquitto/auth/acl`; the
-  listener with `listener_allow_anonymous false`, `use_username_as_clientid true` and `plugin_use`
-  for both; `allow_anonymous true` and its comment block removed.
-- The `spec.config` allowlist of M26, checked line by line at render time; a refused line gives
-  `Ready=False` (proposed reason `ConfigDirectiveRefused`) naming the line, and the reconcile
-  writes nothing, so the running configuration stays.
-- Tests: unit — the generated file for each shape; `listener`, `connection`, `allow_anonymous` and
-  `plugin_load` in `spec.config` refused; an allowed tuning directive passes. The existing
-  `TestGenerateMosquittoConf_*` tests rewritten for the new posture.
-
-### 4.6 Watches, status, and the broker without users
-
-- `SetupWithManager`: a field index on `MosquittoUser` by `spec.brokerRef.name`, a `Watches` on
-  `MosquittoUser` mapping to its broker, a second index on `spec.credentialsSecret.name` and a
-  `Watches` on `Secret` mapping a referenced Secret to the brokers whose users name it, and
-  `Owns(&corev1.Secret{})` for `<name>-auth`.
-- Each user's status written by the same pass: `observedGeneration`, `username`, one `Ready`
-  condition with its reason (proposed: `SecretNotFound`, `KeyNotFound`, `BrokerNotFound`,
-  `UsernameInvalid`, `UsernameReserved`, `UsernameConflict`, `TopicRefused`,
-  `SecretNotConsumable`). A user's failure never changes the broker's phase. The broker reports how
-  many users it accepts; with none, a condition says it accepts nobody.
-- The `credentialsSecret` half of `secretSecurity` (2.5) lands here.
-- Tests: unit with the fake client for every reason; integration — a user created before its
-  Secret becomes `Ready` when the Secret appears, without a manual reconcile.
-
-### 4.7 The Secret grant on both install paths (ADR 0014 D7, ADR 0006 D9)
-
-- RBAC markers: `mosquittousers` `get;list;watch`, `mosquittousers/status` `update`, `secrets`
-  `get;list;watch;create;update`; `make generate-all`.
-- Chart: proposed values `secretAccess.mode: all` and `secretAccess.namespaces: []`. With `all`,
-  the `secrets` rule sits in [`clusterrole.yaml`](../../deploy/helm/mosquitto-operator/templates/clusterrole.yaml);
-  with `namespaces`, a Role and RoleBinding per listed namespace and no `secrets` rule in the
-  ClusterRole, and the operator gets the list as a flag (proposed `--secret-namespaces`) and
-  restricts its Secret cache to it with controller-runtime's per-object cache options — **not
-  verified** against `v0.24.1`. A new `NOTES.txt` prints the grant when `all` is active.
-- kustomize: `all` in `config/default`; a component for the other mode (proposed
-  `config/components/secret-namespaces`).
-- `test/rbacparity`: renders and compares both modes; the logged grant count updated.
-- README: the grant stated before the install command.
-
-### 4.8 End to end
-
-E2E tests in `test/e2e/` (proposed file `users_test.go`), the first of them being the phase:
-
-- a `MosquittoUser` created against a running broker can publish, and the broker pod did not
-  restart;
-- a client is refused on a topic outside its ACL;
-- a changed password in the user's Secret makes the old password fail and the new one work, with
-  no edit to any CR;
-- a deleted user's live connection is dropped;
-- an anonymous client is refused;
-- a second user connecting with another user's client ID does not take over its session;
-- a `spec.config` with a second `listener` is refused and the broker keeps serving.
-
-### 4.9 Documentation and records
-
-- README: the `MosquittoUser` reference, the new `Mosquitto` behaviour, the chart values, the
-  flags, the generated `mosquitto.conf` example, `<name>-auth` in the naming tables.
-- [docs/operations/](../operations/README.md): users and credentials, the grant modes, what
-  revocation looks like and how long it takes (M23).
-- [docs/security/](../security/README.md): H-1 (anonymous) closed; H-2 and H-14 narrowed by the
-  allowlist; the privilege footprint and the credentials page rewritten for the `secrets` grant;
-  H-15 for `credentialsSecret`.
-- [docs/developer/](../developer/README.md): the renderer, the reloader, the pod, the watches.
-- The `Status` and index rows of ADR 0006, 0008, 0013 and 0014.
-
-**Phase 4 is done when** 4.8 passed on CI and every document above describes the built tree.
+**Answer:** _open_
 
 ## Phase 5 — Certificates renewed in place
 

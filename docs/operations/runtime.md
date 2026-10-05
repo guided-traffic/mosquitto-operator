@@ -8,7 +8,9 @@ observed on a real cluster ([why](README.md)).
 
 ## At start
 
-The container runs `./manager` ([`cmd/main.go`](../../cmd/main.go)). In order:
+The container runs `./manager` ([`cmd/main.go`](../../cmd/main.go)). (`manager reload` is the
+same binary's other entry point, which `auth-init` and `reloader` run inside the broker pods —
+[users.md](users.md#what-the-operator-does-with-them).) In order:
 
 1. **Flags and logging.** The flags are parsed and the logger is set up in zap development mode
    ([logs](#logs)). The first line is `starting mosquitto-operator`, with the `version`, `commit`
@@ -18,18 +20,23 @@ The container runs `./manager` ([`cmd/main.go`](../../cmd/main.go)). In order:
    found, controller-runtime logs `unable to get kubeconfig` and the process exits with code 1. If
    the manager cannot be created, the log says `unable to start manager` and the process exits with
    code 1.
-3. **The controller is registered** under the name `mosquitto`. It watches `Mosquitto` resources,
-   reacting only to changes of their `spec` (`GenerationChangedPredicate`), and it watches the
-   StatefulSets, ConfigMaps and Services that a `Mosquitto` controls. If this fails, the log says
-   `unable to create controller` and the process exits with code 1.
+3. **The controller is registered** under the name `mosquitto`, with three field indexes. It
+   watches `Mosquitto` resources and `MosquittoUser` resources, reacting only to changes of their
+   `spec` (`GenerationChangedPredicate`; a user wakes the broker it names, and on a move the one
+   it named before); the StatefulSets, ConfigMaps, Services and Secrets that a `Mosquitto`
+   controls; and every Secret, which wakes the brokers whose users or whose TLS listener name it.
+   If this fails, the log says `unable to create controller` and the process exits with code 1.
 4. **Health checks.** `/healthz` and `/readyz` are registered ([ports and probes](#the-operators-ports-and-probes)).
 5. **`starting manager`.** Several things now start on every replica, leader or not:
    - the metrics server on `--metrics-bind-address`, unless that is `0` (controller-runtime logs
      `Serving metrics server` with the address and `secure: false`);
    - the probe server on `--health-probe-bind-address`;
-   - the cache. It lists and then watches every `Mosquitto`, ConfigMap, Service and StatefulSet in
-     the cluster, in every namespace and not only the objects it manages. Its memory grows with the
-     cluster's count of those objects, and nobody has measured it.
+   - the cache. It lists and then watches every `Mosquitto`, `MosquittoUser`, ConfigMap, Service,
+     StatefulSet and Secret in the cluster, in every namespace and not only the objects it
+     manages — Secrets only in the `--secret-namespaces` when that is set. **Secrets are cached
+     without their data**: names, labels, owners and the type, no `data`, no annotations
+     (`controller.StripSecret`). Its memory grows with the cluster's count of those objects, and
+     nobody has measured it.
 6. **Leader election**, with `--leader-elect`. The process waits until it holds the Lease
    `mosquitto-operator.mko.gtrfc.com` in its own namespace. Only the holder runs the controller
    ([installation.md, leader election](installation.md#leader-election-on-the-two-paths)).
@@ -49,22 +56,33 @@ A pass handles one `Mosquitto`
 ([`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)):
 
 - **The resource is gone:** nothing happens. The log says `Mosquitto resource not found, probably deleted`.
+- **The resource is gone, and users name it:** each of them gets `Ready=False` with reason
+  `BrokerNotFound`.
 - **The resource is being deleted:** nothing is written, not even the status. The log says
   `Mosquitto resource is being deleted, skipping reconciliation`. The garbage collector removes
   the owned objects through their owner references
   ([ADR 0009](../adr/0009-delete-only-through-owner-references.md)).
-- **With `--secret-security=true` and `spec.tls`, the TLS Secret is checked first:** its labels
-  are read through a metadata-only `get`. A Secret that is missing or lacks
-  `mko.gtrfc.com/consumable=true` sets the resource `Failed` with reason `SecretNotFound` or
-  `SecretNotConsumable` and ends the pass without writing anything, so a running StatefulSet stays
-  as it is. The pass comes back after one minute, because no Secret is watched.
-- **Otherwise the four objects are written in order:** the ConfigMap, the headless Service, the
-  client Service, then the StatefulSet. For each one, the pass does one of three things:
+- **Three checks can refuse the pass before anything is written**, each setting the resource
+  `Failed` with its reason, so a running StatefulSet stays as it is:
+  - with `--secret-namespaces`, a namespace not in the list: `NamespaceNotGranted`, and the same
+    reason on every user of the broker;
+  - a `spec.config` line whose directive is not on the allowlist: `ConfigDirectiveRefused`, the
+    message naming the line;
+  - with `--secret-security=true` and `spec.tls`, a TLS Secret that is missing or lacks
+    `mko.gtrfc.com/consumable=true` (its labels read through a metadata-only `get`):
+    `SecretNotFound` or `SecretNotConsumable`. The label arriving later wakes the broker through
+    the Secret watch.
+- **Otherwise the users are rendered**: every `MosquittoUser` naming the broker is read, with its
+  Secret, and rendered into `<name>-auth`, which is written only when its content changed
+  ([users.md](users.md#what-the-operator-does-with-them)); then each user's status is written.
+- **Then the four objects are written in order:** the ConfigMap, the headless Service, the
+  client Service, then the StatefulSet. For each of them and for `<name>-auth`, the pass does one of
+  three things:
   - creates it if it is missing (log: `Creating <Kind>` with its name);
   - refuses it if this `Mosquitto` does not control it ([below](#an-object-the-operator-refuses));
   - updates it if it has drifted (log: `Updating <Kind>`).
-- **Then the status** is recomputed from the live StatefulSet and written only if it changed
-  ([status](#status)).
+- **Then the status** is recomputed from the live StatefulSet and the rendered users and written
+  only if it changed ([status](#status)).
 
 **A failure stops the pass.** If any write fails, the objects after it in the order are not
 written. An integration test asserts this: no StatefulSet exists after a refused ConfigMap. The
@@ -81,6 +99,7 @@ many *different* resources can be in a pass at once. It defaults to 4, not to co
 | Object | Compared: a difference triggers a write | When the operator writes, it replaces | Merged: the operator's keys win, every other key stays | Never written after creation |
 |---|---|---|---|---|
 | ConfigMap `<name>-config` | the data, the operator's own labels | the data | the labels | annotations |
+| Secret `<name>-auth` | the data, the operator's own labels | the data | the labels | annotations, the type |
 | Both Services | the ports, the selector, the operator's own labels | the ports, the selector | the labels | the type, annotations, every other spec field |
 | StatefulSet | the replica count, the operator's own labels and annotations on the object, the operator's labels and annotations on the pod template — the two hashes, `spec.podLabels` and `spec.podAnnotations` among them | the replica count and the pod spec | the labels and annotations of the object and of the pod template | the claim template |
 
@@ -149,9 +168,10 @@ hashes onto the template. `mko.gtrfc.com/pod-spec-hash` digests the whole pod sp
 | `spec.tls` added or removed | the ConfigMap (the listener), the pod template (the Secret volume, the mount, the port, the probes) and the port of both Services | Rolled. Clients have to change their port (`1883` ↔ `8883`) |
 | `spec.tls.secretName` pointing at another Secret | the pod template (the volume) | Rolled |
 | New content in the referenced Secret | nothing | Not restarted ([a renewed certificate](#a-renewed-certificate)) |
+| A `MosquittoUser` added, changed or deleted, or its Secret changed | `<name>-auth` | **Not restarted.** The reloader copies the change in and signals the broker after the kubelet refreshed the mount ([users.md](users.md#how-long-a-change-takes)) |
 | `spec.storage.size` or `.storageClassName` on a broker that has storage | nothing | Not restarted. The change never converges ([below](#changing-specstorage-on-an-existing-broker)) |
 | `spec.storage` added or removed | the pod template only (the `emptyDir` appears or disappears), never the claim template | Rolled onto a template that no longer matches the claim template ([below](#changing-specstorage-on-an-existing-broker)) |
-| A new operator version | whatever it renders differently | Rolled where the rendering differs ([installation.md, upgrade](installation.md#upgrade)). The release that added the `config-check` init container changed every pod spec, so the first upgrade to it rolls every broker once |
+| A new operator version | the pod template: `auth-init` and `reloader` run the operator's own image | **Every broker rolls** ([installation.md, upgrade](installation.md#upgrade)) |
 
 The image, config, TLS, anti-affinity and storage rows are asserted by
 `TestPodTemplateHashesChangeWithTheThingTheyDigest`, the pod-metadata row by
@@ -234,19 +254,28 @@ connections and refuses every MQTT `CONNECT` is Ready
 Proving an MQTT session takes a publish and a subscribe, as in
 [README.md, TL;DR fast start](../../README.md#-tldr-fast-start).
 
+**Who can log in is the `Users` condition, not `Ready`.** A broker with no accepted user is
+`Ready` — its pods run — and accepts nobody; `Users=False` with reason `NoUsers` says so, and
+`status.users` counts the users rendered into `<name>-auth`. A user's own problems are on the
+user (`kubectl get mqu`), never on the broker: one broken `MosquittoUser` leaves its broker and the
+other users as they are.
+
 **`Pending` and `Progressing` say how many pods are ready, not why the rest are not.** Typical
 causes, none of which the operator sees:
 
 - an image that cannot be pulled;
 - a missing TLS Secret: the pod stays in `ContainerCreating` with a `FailedMount` event naming
   the Secret (observed on Kind);
-- a directive the broker does not know, in `spec.config` or in the generated file on an older
-  image: the pod stays in `Init:Error` / `Init:CrashLoopBackOff`, and
+- a value the broker refuses in `spec.config`, or a generated directive an older image does not
+  know: the pod stays in `Init:Error` / `Init:CrashLoopBackOff`, and
   `kubectl logs <pod> -c config-check` carries the broker's message with file and line, for
-  example `Error: Unknown configuration variable 'max_queued_mesages'.` and
+  example `Error: 'max_qos' must be between 0 and 2 inclusive.` and
   `Error found at /mosquitto/config/mosquitto.conf:<line>.` (observed on Kind,
   `TestE2E_ConfigCheck_StopsATypoBeforeTheBroker`). The check is the broker's `--test-config`: it
-  knows directive names, not what a plugin accepts, so a file it passes can still crash the broker;
+  knows directives and many values, not what a plugin accepts, so a file it passes can still crash
+  the broker. A directive outside the allowlist never gets this far: the pass is refused first;
+- `<name>-auth` missing — a pass that failed before writing it: the pod stays in
+  `ContainerCreating` until it exists;
 - an admission policy that rejects the pod: the StatefulSet exists and creates no pod. The broker
   pod satisfies the restricted Pod Security Standard
   ([installation.md](installation.md#the-namespace)), so this comes from a policy beyond it;
@@ -265,9 +294,9 @@ kubectl -n messaging logs broker-0
 four objects. Pods that were already running keep running on what they had. The causes:
 
 - an object the operator refuses ([above](#an-object-the-operator-refuses));
-- with `--secret-security=true`, a TLS Secret that is missing or lacks
-  `mko.gtrfc.com/consumable=true` (reasons `SecretNotFound`, `SecretNotConsumable`; nothing is
-  written and the pass is repeated every minute);
+- a refusal before anything is written: `ConfigDirectiveRefused`, `NamespaceNotGranted`, and with
+  `--secret-security=true` a TLS Secret that is missing or lacks `mko.gtrfc.com/consumable=true`
+  (`SecretNotFound`, `SecretNotConsumable`);
 - a `spec.storage.size` that does not parse as a quantity (`parsing spec.storage.size …`);
 - any write the API server rejects, such as a `403` from RBAC that falls short, or a conflict with
   another writer.
@@ -312,12 +341,14 @@ successor starts reconciling up to 15 seconds later.
 
 ## When the operator is not running
 
-The brokers keep running. They are ordinary StatefulSets that need nothing from the operator: no
-sidecar, and no API call from the broker pod, which mounts no ServiceAccount token. While the
-operator is down:
+The brokers keep running. They are ordinary StatefulSets that need nothing from the operator: the
+reloader reads a mounted Secret and makes no API call, and no container of the broker pod mounts a
+ServiceAccount token. A broker pod that restarts while the operator is down comes up with every
+user, because `<name>-auth` holds the whole rendered state. While the operator is down:
 
 - nothing reconciles;
-- `spec` changes wait;
+- `spec` changes wait, and so do new users, changed passwords and deleted users: nothing renders
+  `<name>-auth`, so a revoked credential keeps working until the operator is back;
 - the status keeps saying what the last pass saw;
 - a deleted `Mosquitto` is still collected, because the garbage collector works without the
   operator and no finalizer holds it.

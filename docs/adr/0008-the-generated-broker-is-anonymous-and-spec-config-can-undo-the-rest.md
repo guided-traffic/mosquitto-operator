@@ -5,8 +5,9 @@
 Accepted. Date: 2026-09-01. Both decision groups are **implemented** as described; the future work
 named in D11 and D12 is not.
 
-**Amended 2026-10-05 (decided, not built).** The title describes the tree today and stops being
-true when the first release of [ADR 0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) ships. New rules, added as Group C:
+**Amended 2026-10-05.** The title described the tree until Group C was built and is kept so the
+record's links stay stable; **Group C is built (2026-10-05)** and Groups A and B are history where
+it marks them. New rules, added as Group C:
 
 * **D13** — a broker the operator renders is **never** anonymous; there is no opt-in. Replaces D1
   and D2.
@@ -19,6 +20,19 @@ true when the first release of [ADR 0012](0012-the-first-release-is-one-broker-r
   ([broker-behaviour.md](../developer/broker-behaviour.md) M26).
 * **D16** — the operator ships **no NetworkPolicy**; the owner accepted the exposure after it was
   stated.
+
+**Built 2026-10-05:** `GenerateMosquittoConf` loads both plugins, binds them to the one listener
+with `listener_allow_anonymous false` and `use_username_as_clientid true`, and no longer generates
+`allow_anonymous true` (D13, D14, `TestGenerateMosquittoConf_RequiresALogin`); `spec.config` passes
+`ValidateSpecConfig` against the 26 directives of `AllowedConfigDirectives` or the pass is refused
+with reason `ConfigDirectiveRefused` and nothing written (D15, `TestValidateSpecConfig` observed
+failing with `listener` allowed, `TestReconcile_ARefusedConfigWritesNothing`); the chart and
+`config/` still ship no NetworkPolicy and the operations docs show one to write (D16). Observed on
+Kind (`TestE2E_Users_TheBrokerFollowsItsUsers`): an anonymous client is refused with `not
+authorised`, another user's client ID takes over no session, and a `spec.config` with a second
+listener is refused while the broker keeps serving. The pinned image's `--test-config` accepts the
+generated file of both shapes with every allowed directive appended
+(`TestImageAcceptsTheGeneratedConfiguration`).
 
 D11 and D12 are fulfilled by [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md): credentials are Secret
 references, rendered as the `password-file` and `acl-file` plugins. The measurements these rest
@@ -228,7 +242,7 @@ anonymous and needs its own field. Not implemented.
 
 ### Group C — the broker requires a login, and `spec.config` cannot take it back
 
-*Added 2026-10-05; decided, not built.*
+*Added 2026-10-05; built 2026-10-05.*
 
 **D13 — A broker the operator renders is never anonymous.** The single generated listener carries
 `listener_allow_anonymous false` and binds the `password-file` and `acl-file` plugins

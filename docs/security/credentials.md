@@ -5,17 +5,41 @@ one takes, and the places a credential can end up without anybody meaning it to.
 the build and release pipeline are [ci-and-supply-chain.md](ci-and-supply-chain.md); what reaches a
 running broker after a change, a rotated certificate included, is [rotation.md](rotation.md).
 
-## The operator holds no workload credential
+## What the operator holds
 
-There is no rule on `secrets` in either install path
-([privilege-footprint.md](privilege-footprint.md#what-is-absent)). `SetupWithManager` registers
-`For(&mkov1.Mosquitto{})` plus `Owns` on `appsv1.StatefulSet`, `corev1.ConfigMap` and
-`corev1.Service` — no `Watches`, and nothing on `Secret`
-([`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)).
-Not watching the TLS Secret is the privilege boundary, not an oversight
-([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D6), and
-[rotation.md](rotation.md) states what it costs. The one credential the operator process holds is
-its own ServiceAccount token ([privilege-footprint.md H-5](privilege-footprint.md#h-5)).
+Its own ServiceAccount token ([privilege-footprint.md H-5](privilege-footprint.md#h-5)) and, while
+a pass runs, the users' passwords. With `secretAccess.mode: all` it may read and write every Secret
+of the cluster, with `namespaces` those of the listed namespaces
+([privilege-footprint.md H-17](privilege-footprint.md#h-17)).
+
+- **The cache holds no Secret data.** Secrets are cached with `data`, `stringData`, the
+  annotations — `kubectl apply` records a whole Secret in one of them — and the managed fields
+  stripped (`controller.StripSecret` in
+  [`internal/controller/watches.go`](../../internal/controller/watches.go), wired in
+  [`cmd/main.go`](../../cmd/main.go)). Names, labels, owners and the type stay, which is what the
+  watches and `--secret-security`'s label check read.
+- **A password is read when its user is rendered**, with one uncached `get` of the user's
+  credentials Secret, after the label check, and leaves the pass as a `$7$` hash
+  (`readCredentials` in [`internal/controller/users.go`](../../internal/controller/users.go)). The
+  plaintext is not logged and not written anywhere; it lives in the process's memory until the
+  pass ends.
+- **The TLS Secret's data is never read.** With `secretSecurity: true` its labels are, through a
+  metadata-only `get`.
+
+## User credentials
+
+| Step | What happens | Read from |
+|---|---|---|
+| The Secret is created | By its owner — by hand, by SOPS through Flux, by whatever creates the client's Secret. **Never by this operator**: it generates no password | [ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D2 |
+| A `MosquittoUser` names it | `spec.credentialsSecret.name`, in the user's own namespace | [`api/v1/mosquittouser_types.go`](../../api/v1/mosquittouser_types.go) |
+| The operator renders it | Username and password read, the password hashed as `$7$` PBKDF2-SHA512, 1000 iterations, 64-byte random salt; an existing hash is kept while the password still verifies against it | [`internal/auth/render.go`](../../internal/auth/render.go), [`hash.go`](../../internal/auth/hash.go) |
+| `<broker>-auth` holds the result | Keys `passwd` (`username:hash` lines) and `acl`; **hashes only**; owned by the `Mosquitto` and collected with it. It lies in the same namespace as the Secrets it is rendered from, so whoever can read it could already read the plaintext | [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D2 |
+| The broker pod mounts it | As `auth-secret` at `/mosquitto/auth-secret`, mode `0440`, readable through the pod's group `1883`, in `auth-init` and `reloader` only | [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) |
+| The broker reads a copy | `auth-init` (every start) and `reloader` (every change) copy both files into the `emptyDir` `auth` at `/mosquitto/auth`, `1883:1883` mode `0600`; the broker mounts it read-only | [`internal/reloader/`](../../internal/reloader) |
+
+A pod compromise exposes the hashes in that `emptyDir` and the mount; at 1000 iterations they are
+cheap to attack offline, which ADR 0014 D3 accepted because a compromised broker pod reads every
+password in transit anyway. The plaintext reaches the broker only in the client's `CONNECT`.
 
 ## TLS material
 
@@ -42,7 +66,10 @@ resource ([tenancy.md H-12](tenancy.md#h-12)).
 
 - **`spec.config` is copied into a ConfigMap** — [H-14](#h-14).
 - **Not into status, and not into Events.** The reconciler writes phase, ready replicas, observed
-  generation and one `Ready` condition into `.status`; the condition message on a failed pass is the
+  generation, the user count and the `Ready` and `Users` conditions into a `Mosquitto`'s `.status`,
+  and a user's username — not a credential — and its `Ready` condition into the user's; a refusal
+  of a username quotes it, which is how a password mistakenly put under the username key would show
+  up there; the condition message on a failed pass is the
   error text — the operator's own names objects and, for an unparsable storage size, that value; an
   API server's refusal can quote the value it refused. It records **no Events at all**: no `EventRecorder`, `Recorder` or `Eventf` appears in
   `internal/`, `cmd/` or `api/`. The `events` rule that does exist belongs to client-go's
@@ -51,8 +78,9 @@ resource ([tenancy.md H-12](tenancy.md#h-12)).
 - **Broker logs go to stdout.** The generated file sets `log_dest stdout` with `log_type` `error`,
   `warning`, `notice` and `information`, so broker output is whatever `kubectl logs` shows and
   inherits the cluster's log retention and readers. At that level the broker logs every connection
-  with its source address and client id (ADR 0008's measurement record shows such lines); what else
-  appears once `spec.config` adds authentication or bridges was not measured.
+  with its source address, client id and username (`u'probe'`, observed on Kind), never a
+  password. The reloader logs `credentials changed, copied` and `signalled the broker to reload`,
+  never file content.
 - **The operator's own log** carries resource and object names on every create and update; the
   reconciler's own log lines carry no spec content, and a failed pass's error is logged by
   controller-runtime with the same text the status condition shows.
@@ -60,16 +88,16 @@ resource ([tenancy.md H-12](tenancy.md#h-12)).
 ## What this does not cover
 
 <a id="h-14"></a>
-### H-14 — A credential written into `spec.config` is stored in a ConfigMap
+### H-14 — Whatever is written into `spec.config` is stored in a ConfigMap
 
-Live whenever `spec.config` carries a credential — a bridge's `remote_password`, for example, which
-Mosquitto takes inline. `BuildConfigMap` writes the rendered file into `<name>-config` under the key
-`mosquitto.conf`, so the credential is readable twice: with `get` on `mosquittoes` and with `get` on
-`configmaps` in that namespace. A ConfigMap is not a Secret: an encryption-at-rest configuration of
-the API server that covers Secrets only does not cover it, and roles that may read ConfigMaps but
-not Secrets read it. What a cluster operator can do meanwhile: keep credentials out of
-`spec.config`, and treat read access to `mosquittoes` and to ConfigMaps in a broker's namespace as
-read access to whatever its `spec.config` holds.
+Narrowed: `spec.config` takes only the allowlisted tuning directives
+([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+D15), and none of them takes a credential — `password_file`, a bridge's `remote_password` and every
+plugin option are refused. What is left is a comment: a `#` line passes the allowlist, and
+`BuildConfigMap` writes the whole file into `<name>-config`, readable with `get` on `mosquittoes`
+or on `configmaps` in that namespace, where a Secret-only encryption at rest does not reach. What a
+cluster operator can do: keep credentials out of `spec.config` entirely; a client's credentials
+belong in its own Secret, named by a `MosquittoUser`.
 
 ### Encryption at rest
 

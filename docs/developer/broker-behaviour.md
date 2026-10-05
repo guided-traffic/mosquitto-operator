@@ -12,7 +12,7 @@ reasonable person would assume the other way, and the decisions in
 follow from them.
 
 **Rig.** Single-container docker 28.4.0 on arm64, the pinned image, configuration and credential
-files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M26 on 2026-10-05. **None of it
+files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M27 on 2026-10-05. **None of it
 ran on a cluster**, except M22 and M23, which were measured on Kind, and where a section says it
 was observed on Kind as well. The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
 to the parked high-availability research in [docs/planning/](../planning/), not to anything the
@@ -151,6 +151,22 @@ Error: `persistence true` cannot be used with a persistence plugin.       # pers
 
 So it catches typos in directives and not mistakes in plugin wiring. An initContainer running it
 is worth having and is not a correctness gate.
+
+*Added 2026-10-05:* it checks the **values** of the directives it knows as well, not only their
+names. One line appended to the generated configuration at a time:
+
+```
+max_keepalive notanumber  ->  Error: 'max_keepalive' value not a number.           rc=3
+max_qos 7                 ->  Error: 'max_qos' must be between 0 and 2 inclusive.
+max_keepalive 70000       ->  Error: Invalid 'max_keepalive' value (70000).
+log_type nonsense         ->  Error: Invalid 'log_type' value (nonsense).
+retain_available maybe    ->  Error: Invalid 'retain_available' value (maybe).
+autosave_interval -5      ->  Configuration file is OK.
+```
+
+each with `Error found at <file>:<line>.` So behind the `spec.config` allowlist, which refuses an
+unknown directive before anything is written (M26), the `config-check` init container is where a
+bad value of an allowed directive surfaces — not every bad value, as the last line shows.
 
 ## M9 — Dynsec bootstraps itself when its file is missing
 
@@ -507,6 +523,21 @@ that touches authentication or client identity (`*allow_anonymous`, `password_fi
 `auth_plugin_deny_special_chars`, `allow_zero_length_clientid`, `auto_id_prefix`,
 `clientid_prefixes`, `check_retain_source`, `enable_control_api`), and `mount_point`, which
 rewrites every topic of the listener under the ACLs.
+
+## M27 — An ACL topic may contain spaces; the rest of the line is the topic
+
+*Measured 2026-10-05*, same rig, both plugins. A user with the single entry
+`topic readwrite home/living room/#`:
+
+```
+subscribe "home/living room/#", publish "home/living room/lamp"  -> delivered
+subscribe "home/living", publish "home/living"                   -> Timed out
+```
+
+The `acl-file` parser takes everything after the access word as the topic, spaces included, and
+does not stop at the first space. So the renderer refuses only what changes the meaning of a line —
+a line break, any other control character, leading or trailing whitespace — and lets a topic with an
+inner space through (`auth.topicProblem` in [`internal/auth/render.go`](../../internal/auth/render.go)).
 
 ## Not measured
 

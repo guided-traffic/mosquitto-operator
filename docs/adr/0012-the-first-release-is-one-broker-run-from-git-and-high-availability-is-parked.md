@@ -23,11 +23,16 @@ PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "m
 securityContext.allowPrivilegeEscalation=false)`. The `config-check` init container is the first
 container added since D4 and passes the same guard.
 
-**Not built**, apart from what already exists: R5 is met by `Mosquitto` alone today
-(`status.observedGeneration` and one `Ready` condition, written together by `updateStatus` /
-`setPhase` in [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)),
-and R6 is met by the one container the operator renders today (D4 lists where). The
-work is ordered in [the project plan](../planning/project-plan.md).
+**Built 2026-10-05 as well:** R1 and R2 (`MosquittoUser`, [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)),
+R3 for users (a new user, a changed password, a removed user and a changed ACL reach the running
+broker without a restart, [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)),
+R5 for both kinds (each reports `observedGeneration` and a `Ready` condition with a reason, a user
+applied before its broker or its Secret converges through the watches —
+`TestIntegration_Users_ConvergeWhenTheirReferencesArrive` — and one user's failure leaves the broker
+and the other users alone — `TestReconcile_EveryUserReason`), and R6 for every container now in a
+broker pod (D4). **Not built:** R3 for a renewed certificate
+([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10), and D1's migration,
+which is the owner's to run. The work is ordered in [the project plan](../planning/project-plan.md).
 
 ## Context
 

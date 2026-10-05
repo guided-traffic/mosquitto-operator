@@ -6,23 +6,41 @@ write a `Mosquitto` and what that buys them is [trust-boundaries.md](trust-bound
 operator's own reach across namespaces is [privilege-footprint.md](privilege-footprint.md).
 
 **Read the second half before treating a namespace as a tenant boundary.** The objects the
-operator writes stay inside their resource's namespace and never adopt somebody else's; the
-brokers themselves accept anonymous clients from anywhere the network lets in.
+operator writes stay inside their resource's namespace and never adopt somebody else's, a user and
+everything it names share one namespace, and every broker requires a login — but the brokers are
+reachable from anywhere the network lets in, and the operator itself reaches Secrets across
+namespaces.
 
 ## What holds
 
 - **The operator writes only into the resource's own namespace.** Every builder sets
-  `Namespace: m.Namespace` on the ConfigMap, both Services and the StatefulSet
+  `Namespace: m.Namespace` on `<name>-auth`, the ConfigMap, both Services and the StatefulSet
   ([`internal/builder/`](../../internal/builder)), and `controllerutil.SetControllerReference`,
   which runs before every write, refuses an owner in another namespace (controller-runtime
   v0.24.1, `validateOwner`: "cross-namespace owner references are disallowed"). A `Mosquitto` has
   no field that names an object in another namespace; the TLS Secret is a `SecretVolumeSource`,
   which has no namespace and resolves in the pod's own.
-- **Every managed object carries a controller ownerReference**, set before the write, on the
-  ConfigMap, both Services and the StatefulSet. Deleting a `Mosquitto` therefore removes the
+- **A user, its broker, its Secret and its ACLs share one namespace.** No reference of the
+  `MosquittoUser` API carries a namespace field — `brokerRef` and `credentialsSecret` name objects
+  of the user's own namespace — so a reference across namespaces cannot be written
+  ([ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)
+  D1). The reconciler lists users with `client.InNamespace(m.Namespace)` and reads their Secrets
+  by `types.NamespacedName{Namespace: u.Namespace}` ([`internal/controller/users.go`](../../internal/controller/users.go)).
+- **Every broker requires a login.** The generated listener sets `listener_allow_anonymous false`,
+  binds the `password-file` and `acl-file` plugins and `use_username_as_clientid true`; there is no
+  field that turns anonymous access back on and `spec.config` cannot either
+  ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+  D13–D15). Observed on Kind: an anonymous `mosquitto_pub` gets `Connection Refused: not
+  authorised`, a user is refused outside its ACL, and a second user using another's client ID does
+  not take over its session (`TestE2E_Users_TheBrokerFollowsItsUsers`).
+- **`secretAccess.mode: namespaces` bounds the operator's Secret reach** to the listed namespaces:
+  one Role each, no Secret rule in the ClusterRole, the Secret cache restricted to the same list,
+  and a `Mosquitto` elsewhere refused with nothing written.
+- **Every managed object carries a controller ownerReference**, set before the write, on
+  `<name>-auth`, the ConfigMap, both Services and the StatefulSet. Deleting a `Mosquitto` therefore removes the
   workload through garbage collection, and the operator holds no `delete` verb to achieve it
-  ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D1, D2). The collection itself
-  is the kube-controller-manager's and was not observed here: envtest runs no garbage collector.
+  ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D1, D2). Observed on Kind: the
+  E2E suite deletes a `Mosquitto` and waits for all five objects to be collected.
 - **A pre-existing object holding a derived name is refused, never adopted.** `ensureOwned` uses
   `metav1.IsControlledBy`, which matches the controller reference **and its UID**; the refusal
   travels up as a reconcile failure — `phase: Failed`, `Ready=False`, reason `ReconcileFailed`,
@@ -38,26 +56,26 @@ brokers themselves accept anonymous clients from anywhere the network lets in.
   `reconcileResources` when `DeletionTimestamp` is set, so the operator never races the collection
   ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D6).
 - **The broker pods are hardened to the restricted Pod Security Standard.** From `buildPodSpec`
-  and `buildBrokerContainer` ([`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)):
+  and `containerSecurityContext` ([`internal/builder/statefulset.go`](../../internal/builder/statefulset.go)):
   `AutomountServiceAccountToken: false`; `RunAsNonRoot: true`; `RunAsUser`, `RunAsGroup` and
-  `FSGroup` all `1883`; the `RuntimeDefault` seccomp profile at pod level; on the container
-  `AllowPrivilegeEscalation: false`, `ReadOnlyRootFilesystem: true` and `Capabilities.Drop: [ALL]`.
-  The image entrypoint is bypassed — `Command: /usr/sbin/mosquitto -c …` — because it chowns
-  `/mosquitto` when it runs as root, which this pod never does.
-  `TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard` checks every control of the
-  standard the builder could violate, for every shape the builder produces; admission into a real
-  namespace labelled `pod-security.kubernetes.io/enforce=restricted` was not observed.
+  `FSGroup` all `1883`; the `RuntimeDefault` seccomp profile at pod level; on **every** container —
+  the broker, `reloader`, `auth-init`, `config-check` — `AllowPrivilegeEscalation: false`,
+  `ReadOnlyRootFilesystem: true` and `Capabilities.Drop: [ALL]`. The pod shares its process
+  namespace so the reloader can signal the broker; it can because it runs as the same uid, with no
+  capability (M22). The image entrypoint is bypassed — `Command: /usr/sbin/mosquitto -c …` —
+  because it chowns `/mosquitto` when it runs as root, which this pod never does.
+  `TestIntegration_PodSecurity_RestrictedAdmitsEveryShape` has an API server's PodSecurity
+  admission at `enforce=restricted` judge the pod of every shape the builder produces.
 - **Anti-affinity is per resource.** `BuildPodAntiAffinity` selects on `common.SelectorLabels(m)`,
   which carries `app.kubernetes.io/instance: <name>`, so one `Mosquitto` never repels another's
   pods (`TestAntiAffinityRepelsOnlyTheSameResource`).
 
 ## What does not hold
 
-- **Every broker is anonymous**, on every `Mosquitto` the API can express, TLS or not — [H-1](#h-1).
-- **The CR author controls the broker's configuration and image**, including listeners on ports no
-  Kubernetes object declares — [trust-boundaries.md H-2](trust-boundaries.md#h-2).
-- **No NetworkPolicy is shipped**, for the brokers or for the operator, so the network boundary the
-  anonymous posture leans on is not built here — [H-6](#h-6).
+- **The CR author picks the broker's image**, the code that handles every password a client sends —
+  [trust-boundaries.md H-2](trust-boundaries.md#h-2).
+- **No NetworkPolicy is shipped**, for the brokers or for the operator: every pod of the cluster
+  can reach a broker, try passwords, and without TLS read them on the wire — [H-6](#h-6).
 - **A namespace is not a boundary for the operator itself.** The binding is a ClusterRoleBinding,
   and `ensureOwned` bounds the reconcile path, not the grant: a compromised operator identity is
   not subject to its own guard — [privilege-footprint.md H-5](privilege-footprint.md#h-5).
@@ -66,54 +84,35 @@ brokers themselves accept anonymous clients from anywhere the network lets in.
 
 | Action | Removed | Left behind |
 |---|---|---|
-| Deleting a `Mosquitto` | Its ConfigMap, both Services and the StatefulSet with its pods, through the owner references | The PersistentVolumeClaims of `spec.storage` — [H-12](#h-12) |
-| `helm uninstall` | The operator, its RBAC, **the CRD**, and with the CRD every `Mosquitto` of the cluster and every object they own | The PVCs — [H-11](#h-11) |
+| Deleting a `Mosquitto` | `<name>-auth`, its ConfigMap, both Services and the StatefulSet with its pods, through the owner references | The PersistentVolumeClaims of `spec.storage` — [H-12](#h-12); its `MosquittoUser` objects, which report `BrokerNotFound`, and their Secrets |
+| Deleting a `MosquittoUser` | Its login, at the broker's next reload, open connections included | Its credentials Secret, which is the user's |
+| `helm uninstall` | The operator, its RBAC, **the CRDs**, and with them every `Mosquitto` and `MosquittoUser` of the cluster and every object they own | The PVCs and the credentials Secrets — [H-11](#h-11) |
 | `make uninstall` | The CRD and the RBAC of `config/rbac` — the Makefile's comment warns that removing the CRD deletes every `Mosquitto` with its workload | The PVCs |
 
 ## What this does not cover
 
-<a id="h-1"></a>
-### H-1 — Every broker accepts anonymous clients
-
-Live today, on every `Mosquitto` the current API can express. `GenerateMosquittoConf` appends
-`allow_anonymous true` on the plaintext and on the TLS branch, unconditionally, and the API
-models no authentication field of any kind
-([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
-D1). Anything that can open a TCP connection to the broker — through the Service `<name>`, the
-headless Service or a pod IP — can publish and subscribe to every topic. The generated file says
-so in its own comments, so `kubectl get configmap <name>-config -o yaml` is a complete answer.
-Without `allow_anonymous true` the pinned Mosquitto 2.1 image refuses every client on a listener
-with no authentication configured, which is why the line is there (measured against the pinned
-image and recorded in ADR 0008's Status).
-
-**TLS changes the transport, not the trust.** With `spec.tls` set the generated block emits
-`listener 8883`, `certfile` and `keyfile`, and nothing else; `require_certificate` occurs nowhere
-in the generator. TLS encrypts the connection and proves the broker's identity to clients that
-check it; it authenticates **no client to the broker**
-([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D9). An
-encrypted anonymous broker is still an anonymous broker.
-
-What a cluster operator can do meanwhile: a NetworkPolicy of the cluster's own that admits only the
-intended clients to the broker pods ([H-6](#h-6)); RBAC on who may create a `Mosquitto` at all;
-and authentication configured through `spec.config` by whoever owns the resource — which is the
-same authority [trust-boundaries.md H-2](trust-boundaries.md#h-2) describes, and which nothing in
-the operator checks.
-
 <a id="h-6"></a>
 ### H-6 — No NetworkPolicy ships, for the brokers or for the operator
 
-Live today. The network is the only boundary the anonymous posture has ([H-1](#h-1)), and this
-project builds none of it: no template in the chart and no manifest under `config/` is a
-NetworkPolicy. The chart states the reason in
-[`values.yaml`](../../deploy/helm/mosquitto-operator/values.yaml) and
-[`templates/service.yaml`](../../deploy/helm/mosquitto-operator/templates/service.yaml): a policy
-that fits one cluster's CNI and monitoring topology fits few others. Without a policy of the
-cluster's, every pod of the cluster reaches every broker pod on every port its process listens
-on, and reaches the operator's `:8080` and `:8081`
-([privilege-footprint.md H-4](privilege-footprint.md#h-4)). What a cluster operator can do: write
-the policy — ingress to the broker pods (selector `app.kubernetes.io/instance=<name>`,
-`app.kubernetes.io/name=mosquitto`, `app.kubernetes.io/managed-by=mosquitto-operator`) from the
-intended clients only, and ingress to the operator pod from the monitoring namespace only.
+Live today, by the owner's decision
+([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+D16). No template in the chart and no manifest under `config/` is a NetworkPolicy, so every pod of
+the cluster reaches every broker pod on every port its process listens on, and the operator's
+`:8080` and `:8081` ([privilege-footprint.md H-4](privilege-footprint.md#h-4)). What that means
+now that every broker requires a login:
+
+- **any workload can try passwords**, bounded by nothing but the login: no rate limit, no lockout.
+  Each failed attempt costs the broker one PBKDF2 at 1000 iterations, so many attempts are also a
+  way to load it ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D3);
+- **without `spec.tls`, a client's username and password cross the pod network in plaintext**, to
+  any workload that can observe that traffic;
+- a user's ACL bounds what it reaches once logged in; the network bounds nothing.
+
+What a cluster operator can do: write the policy — ingress to the broker pods (selector
+`app.kubernetes.io/instance=<name>`, `app.kubernetes.io/managed-by=mosquitto-operator`) from the
+intended clients only, an example of which is in
+[docs/operations/users.md](../operations/users.md#who-can-reach-the-broker) — and serve MQTTS. It
+depends on the CNI enforcing NetworkPolicy; none was tested here.
 
 <a id="h-11"></a>
 ### H-11 — `helm uninstall` deletes the CRD, and with it every broker in the cluster
