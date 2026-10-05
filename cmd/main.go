@@ -55,8 +55,8 @@ func bindOperatorFlags(fs *flag.FlagSet) *operatorFlags {
 		"How many Mosquitto resources are reconciled at the same time. Passes for the same "+
 			"resource stay serialised at any value.")
 	fs.BoolVar(&f.secretSecurity, "secret-security", false,
-		"Mount a TLS Secret only when it carries the label "+mkov1.SecretConsumableLabel+"="+
-			mkov1.SecretConsumableValue+". Needs get on secrets. With false, any Secret of a "+
+		"Mount a TLS Secret only when it carries the label "+mkov1.ConsumableLabel+"="+
+			mkov1.ConsumableLabelValue+". Needs get on secrets. With false, any Secret of a "+
 			"Mosquitto's namespace may be named, so whoever may write a Mosquitto may read the "+
 			"Secrets of its namespace.")
 

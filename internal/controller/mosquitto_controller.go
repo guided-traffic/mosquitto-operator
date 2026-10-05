@@ -47,7 +47,7 @@ type MosquittoReconciler struct {
 	MaxConcurrentReconciles int
 
 	// SecretSecurity is --secret-security: a TLS Secret is mounted only when it
-	// carries mkov1.SecretConsumableLabel (ADR 0014 D10).
+	// carries mkov1.ConsumableLabel (ADR 0014 D10).
 	SecretSecurity bool
 
 	// APIReader reads the metadata of a TLS Secret while SecretSecurity is on. It
@@ -157,14 +157,14 @@ func (r *MosquittoReconciler) refuseTLSSecret(ctx context.Context, m *mkov1.Mosq
 	case apierrors.IsNotFound(err):
 		r.setPhase(m, mkov1.PhaseFailed, metav1.ConditionFalse, mkov1.ReasonSecretNotFound,
 			fmt.Sprintf("TLS Secret %s does not exist; with --secret-security=true it must exist and carry %s=%s",
-				m.Spec.TLS.SecretName, mkov1.SecretConsumableLabel, mkov1.SecretConsumableValue))
+				m.Spec.TLS.SecretName, mkov1.ConsumableLabel, mkov1.ConsumableLabelValue))
 		return true, nil
 	case err != nil:
 		return false, fmt.Errorf("reading the metadata of TLS Secret %s: %w", m.Spec.TLS.SecretName, err)
-	case secret.GetLabels()[mkov1.SecretConsumableLabel] != mkov1.SecretConsumableValue:
+	case secret.GetLabels()[mkov1.ConsumableLabel] != mkov1.ConsumableLabelValue:
 		r.setPhase(m, mkov1.PhaseFailed, metav1.ConditionFalse, mkov1.ReasonSecretNotConsumable,
 			fmt.Sprintf("TLS Secret %s does not carry %s=%s, which --secret-security=true requires",
-				m.Spec.TLS.SecretName, mkov1.SecretConsumableLabel, mkov1.SecretConsumableValue))
+				m.Spec.TLS.SecretName, mkov1.ConsumableLabel, mkov1.ConsumableLabelValue))
 		return true, nil
 	}
 	return false, nil

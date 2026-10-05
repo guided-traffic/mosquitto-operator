@@ -116,7 +116,7 @@ the generated listener rather than adding one.
 | `mko.gtrfc.com/config-hash` | 8 hex digits over the generated `mosquitto.conf` | the pod template |
 | `mko.gtrfc.com/applied-pod-labels` | the keys of `spec.podLabels` last written, sorted, comma-separated | the StatefulSet object |
 | `mko.gtrfc.com/applied-pod-annotations` | the keys of `spec.podAnnotations` last written, sorted, comma-separated | the StatefulSet object |
-| `mko.gtrfc.com/consumable` | `true` | a TLS Secret **you** label, the consent `secretSecurity: true` requires ([`mkov1.SecretConsumableLabel`](api/v1/mosquitto_types.go)) |
+| `mko.gtrfc.com/consumable` | `true` | a TLS Secret **you** label, the consent `secretSecurity: true` requires ([`mkov1.ConsumableLabel`](api/v1/mosquitto_types.go)) |
 
 The pod template carries `spec.podLabels` and `spec.podAnnotations` too, under the keys above: a
 key the operator sets always wins. Labels and annotations other tools add to any of the objects

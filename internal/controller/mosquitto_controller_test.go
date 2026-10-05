@@ -582,7 +582,7 @@ func withTLSSecret(m *mkov1.Mosquitto) {
 // refused visibly and nothing is written; with the label, or with the switch
 // off, the broker is built as before.
 func TestReconcile_SecretSecurity(t *testing.T) {
-	consenting := map[string]string{mkov1.SecretConsumableLabel: mkov1.SecretConsumableValue}
+	consenting := map[string]string{mkov1.ConsumableLabel: mkov1.ConsumableLabelValue}
 
 	tests := []struct {
 		name       string
@@ -593,7 +593,7 @@ func TestReconcile_SecretSecurity(t *testing.T) {
 		{"on, labelled: accepted", true, tlsSecret(consenting), ""},
 		{"on, unlabelled: refused", true, tlsSecret(nil), mkov1.ReasonSecretNotConsumable},
 		{"on, label with another value: refused", true,
-			tlsSecret(map[string]string{mkov1.SecretConsumableLabel: "yes"}), mkov1.ReasonSecretNotConsumable},
+			tlsSecret(map[string]string{mkov1.ConsumableLabel: "yes"}), mkov1.ReasonSecretNotConsumable},
 		{"on, no Secret: refused", true, nil, mkov1.ReasonSecretNotFound},
 		{"off, unlabelled: accepted", false, tlsSecret(nil), ""},
 	}
@@ -625,7 +625,7 @@ func TestReconcile_SecretSecurity(t *testing.T) {
 			assert.Equal(t, mkov1.PhaseFailed, stored.Status.Phase)
 			assert.Equal(t, metav1.ConditionFalse, readyCondition(t, stored).Status)
 			assert.Equal(t, tt.wantReason, readyCondition(t, stored).Reason)
-			assert.Contains(t, readyCondition(t, stored).Message, mkov1.SecretConsumableLabel,
+			assert.Contains(t, readyCondition(t, stored).Message, mkov1.ConsumableLabel,
 				"the message names the label, so the fix is readable from kubectl get")
 			assert.Equal(t, secretRecheckInterval, result.RequeueAfter,
 				"no Secret is watched, so a label added later is noticed by the requeue")
@@ -637,7 +637,7 @@ func TestReconcile_SecretSecurity(t *testing.T) {
 // label refuses the next pass, and the StatefulSet stays as it was - the change
 // that pass would have made is not applied.
 func TestReconcile_SecretSecurityLeavesARunningBrokerAlone(t *testing.T) {
-	secret := tlsSecret(map[string]string{mkov1.SecretConsumableLabel: mkov1.SecretConsumableValue})
+	secret := tlsSecret(map[string]string{mkov1.ConsumableLabel: mkov1.ConsumableLabelValue})
 	r, c := newReconcilerFor(t, newCR(withTLSSecret), secret)
 	r.SecretSecurity = true
 	ctx := context.Background()

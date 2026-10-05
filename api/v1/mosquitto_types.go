@@ -48,15 +48,15 @@ const (
 	PhaseFailed = "Failed"
 )
 
-// SecretConsumableLabel is the label a Secret carries to consent to being named
-// by a Mosquitto while the operator runs with --secret-security=true (ADR 0014
-// D10). Whoever can label a Secret can write it, so the label is the consent of
-// the Secret's owner. The value must be SecretConsumableValue.
-const SecretConsumableLabel = "mko.gtrfc.com/consumable"
+// ConsumableLabel is the label a Secret carries to consent to being named by a
+// Mosquitto while the operator runs with --secret-security=true (ADR 0014 D10).
+// Whoever can label a Secret can write it, so the label is the consent of the
+// Secret's owner. The value must be ConsumableLabelValue.
+const ConsumableLabel = "mko.gtrfc.com/consumable"
 
-// SecretConsumableValue is the only value of SecretConsumableLabel that counts
-// as consent.
-const SecretConsumableValue = "true"
+// ConsumableLabelValue is the only value of ConsumableLabel that counts as
+// consent.
+const ConsumableLabelValue = "true"
 
 // Reasons of the Ready condition when --secret-security=true refuses the TLS
 // Secret a Mosquitto names. The StatefulSet is left as it is.
@@ -65,7 +65,7 @@ const (
 	// be checked.
 	ReasonSecretNotFound = "SecretNotFound"
 	// ReasonSecretNotConsumable: the named Secret does not carry
-	// SecretConsumableLabel with SecretConsumableValue.
+	// ConsumableLabel with ConsumableLabelValue.
 	ReasonSecretNotConsumable = "SecretNotConsumable"
 )
 
