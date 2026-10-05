@@ -25,7 +25,13 @@ force during that time, and releases `v0.1.1` to `v0.1.8` were cut without an E2
 
 The multi-node run also settles D3's assumption in the direction that matters: three replicas
 spread hard over three workers next to a control-plane node, so the control-plane took no broker
-pod. The first CI run of both legs is recorded below once it exists.
+pod.
+
+**Observed in CI, 2026-10-05:** the first run with the jobs restored — `Test and Release` run
+`37367556237`, on pull request #46 — passed both legs on `kindest/node:v1.33.4`, and `E2E Tests`,
+the gate, passed. The multi-node log carries `--- PASS: TestE2E_AntiAffinity_HardSpreadsAcrossNodes`
+unindented and the guard step passed after it; the single-node leg passed every test but the hard
+spread, which it skipped.
 
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) (the `on:` block, the
