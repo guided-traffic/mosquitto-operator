@@ -2,13 +2,14 @@
 
 **Parked.** The first release is one broker run from Git
 ([ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md));
-everything highly-available or multi-replica waits here until that record's trigger reopens it.
+everything highly-available or multi-replica waits here for the last phase of
+[the project plan](project-plan.md), which starts only when every other phase is done.
 This page is the research the decision will need then: what open-source Mosquitto can and cannot
 do, how the field makes MQTT highly available, which move is open to this operator, and the
 questions that have to be answered first (HA1–HA7 at the end). It is a planning document
 ([ADR 0011](../adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md)
 D10): nothing in code or in a record's `Decision` cites it, and it is consumed into records and
-tickets when the work starts, or deleted if it is dropped.
+the plan's last phase when the work starts.
 
 Until then `spec.replicas` keeps its meaning — independent brokers, no shared state — and nothing
 built for the first release relies on `replicas > 1`.

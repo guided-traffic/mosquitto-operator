@@ -52,9 +52,9 @@ built, or supersedes a rule, updates the row's *State* with it.
 The founding question catalog was worked one question per turn and closed on 2026-10-05 into
 ADR 0012 to ADR 0014 and amendments of ADR 0001, 0002, 0006, 0007 and 0008
 ([ADR 0011](0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md) D10).
-From here on an open decision lives in a ticket's `## Open questions` section
-([docs/tickets/README.md](../tickets/README.md)), is put to the owner one at a time with its
-options and a recommendation, and **an answered question becomes an amendment of the record it
+From here on an open decision lives in the step of [the project plan](../planning/project-plan.md)
+that needs it (ADR 0011 D12), is put to the owner one at a time with its options and a
+recommendation, and **an answered question becomes an amendment of the record it
 changes, or a new ADR when no record covers it, in the same session**.
 
 ## Index

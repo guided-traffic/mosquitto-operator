@@ -7,8 +7,8 @@ Kind `Mosquitto`, resource `mosquittoes`, short name `mq`.
 anonymous. The next release is decided and not built: one broker run from Git through Flux, with
 `MosquittoUser` objects, credentials in the users' own Secrets and changes that apply themselves
 ([ADR 0012](docs/adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
-High availability is parked.** The order of the work is [the project plan](docs/planning/project-plan.md);
-the work lists are in [docs/tickets/](docs/tickets/README.md).
+High availability comes last, after every other phase.** The work list is
+[the project plan](docs/planning/project-plan.md).
 
 **Nothing in this repository has ever been observed running against a real cluster.** Every
 statement here is read out of the tree. The E2E suite exists, but its CI jobs in
@@ -33,14 +33,15 @@ A statement has exactly one home
 | What the pinned broker image actually does, measured | [docs/developer/broker-behaviour.md](docs/developer/broker-behaviour.md) |
 | What somebody running the operator needs | [docs/operations/](docs/operations/README.md) |
 | The threat model and the gap each mechanism leaves | [docs/security/](docs/security/README.md), one page per perspective, each ending with `## What this does not cover`; reporting is [SECURITY.md](SECURITY.md); there is no `SECURITY_ARCHITECTURE.md` |
-| Work still outstanding | a [ticket](docs/tickets/README.md), archived when the work lands |
+| Work still outstanding, and every finding | a step of [the project plan](docs/planning/project-plan.md) — the plan is the work list; there are no tickets for planned work |
+| An unfixed security finding that must stay out of tracked files | an embargoed `local_` [ticket](docs/tickets/README.md) |
 | The reference tables (CRD fields, Helm values, operator flags, deterministic names) | [README.md](README.md) and nowhere else |
-| An open decision | the `## Open questions` section of a [ticket](docs/tickets/README.md) |
-| The plan and the parked HA research | [docs/planning/](docs/planning/) — transitional, consumed into ADRs and tickets |
+| An open decision | the plan step that needs it, with its options and an answer line |
+| The plan and the parked HA research | [docs/planning/](docs/planning/) — the plan is deleted phase by phase as phases are done |
 
 **Read the page for a subsystem before you change it, and update it in the same change.**
 
-## Decisions live in ADRs; tickets are work lists that get archived
+## Decisions live in ADRs; the plan is the work list
 
 - **Every durable decision is an ADR** in the format of [docs/adr/README.md](docs/adr/README.md),
   written in the session the decision is taken; a new ADR gets its row in the index in the same
@@ -48,22 +49,22 @@ A statement has exactly one home
   decision that changes an existing record is an amendment of that record, never a new ADR**: its
   `Decision` states the new rule, its `Status` records the amendment with the date, the old rule
   is marked in place. A rule decided but not built says so where it stands.
-- **A ticket is a work list and nothing else:** `docs/tickets/NNN-<slug>.md`, frontmatter per the
-  rules page, current state only (no History, no strike-throughs, no dated annotations), closed by
-  extraction then moved to `docs/tickets/archive/`. A finding goes into an existing ticket first.
-  A number is never reused.
-- **An open security finding is embargoed:** `security: live|boundary` unfixed → the file is
-  `local_NNN-<slug>.md` (gitignored by this repository's `.gitignore`), and no tracked file,
-  commit or PR carries its details or its file name.
+- **The plan is the work list** ([ADR 0011](docs/adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md)
+  D12): each phase of [project-plan.md](docs/planning/project-plan.md) is worked out to the step
+  and built from there, never converted into tickets. A finding becomes a step of the phase that
+  does the work. A phase that is done is deleted from the plan, after its decisions, operator
+  facts, security facts and contributor knowledge were extracted into their homes.
+- **A ticket exists only for an open security finding that is embargoed:** `security:
+  live|boundary` unfixed → `docs/tickets/local_NNN-<slug>.md` (gitignored by this repository's
+  `.gitignore`), frontmatter per the rules page; no tracked file, commit or PR carries its details
+  or its file name. When the embargo ends, its work moves into the plan and it is archived. A
+  number is never reused.
 - **Nothing outside `docs/tickets/` cites a ticket** — not by number, label, path or file name.
-  Cite the ADR.
-- **A phase of the plan becomes tickets when it starts**, in a session dedicated to that
-  conversion: a family ticket and its children.
 
 ## Open decisions are worked one question at a time
 
 The founding question catalog is consumed ([docs/planning/questions.md](docs/planning/questions.md)
-is a tombstone). A new open decision lives in a ticket's `## Open questions` section. Present
+is a tombstone). A new open decision lives in the plan step that needs it. Present
 **one** question per turn to the owner, with the options researched against this tree — and
 measured against the pinned image where broker behaviour decides it — and the recommended one
 justified. An answered question becomes an ADR or an amendment in the same session. Do not build

@@ -17,7 +17,7 @@ index here would be a second place to keep current. The file names are the index
 | Why a decision was taken, what was rejected | an [ADR](../adr/README.md) |
 | How the code works, for somebody changing it | [docs/developer/](../developer/) |
 | What somebody installing or running the operator configures — the CRD, the chart values, the flags | [README.md](../../README.md) |
-| Work still outstanding | a ticket, never a page here |
+| Work still outstanding | [the project plan](../planning/project-plan.md), never a page here |
 | How to report a vulnerability | [SECURITY.md](../../SECURITY.md) at the root |
 
 A page here is written for somebody who has to judge whether the operator is safe enough for their
@@ -58,8 +58,8 @@ their own.
 - **A gap is documented, not hidden.** Name which mechanism, which adversary, whether it is live
   today or dormant, and what an operator can do in the meantime.
 - **No tickets.** No checkbox lists, no owners, no dates for work that has not happened, no
-  "planned for". A page here states what the tree does today. Outstanding work is a ticket and
-  lives elsewhere; a decision is an ADR and lives elsewhere.
+  "planned for". A page here states what the tree does today. Outstanding work is a step of
+  the project plan and lives elsewhere; a decision is an ADR and lives elsewhere.
 - **History only where it carries a rule**, as prose inside the mechanism's own section.
 - **A fixed identifier for an open gap.** An open gap carries an `H-<n>` in its heading, and the
   number never changes or gets reused, because reports and conversations name it. An explicit

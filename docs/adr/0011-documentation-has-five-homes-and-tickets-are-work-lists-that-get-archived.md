@@ -7,6 +7,12 @@ moved onto the format of a sibling project, whose rules were decided there betwe
 and 2026-10-01; this record adopts them for this repository, with the planning rule (D10) taken
 from the same project's record on consuming a question catalog.
 
+**Amended 2026-10-05, the same day:** the owner wants no individual tickets for planned work,
+only a worked-out implementation plan. D12 states the rule: the plan is the work list for planned
+work and for findings; a ticket is opened only for an embargoed security finding. D3, D5 and two
+bullets of D10 are marked in place. The tracked tickets the restructuring had opened were folded
+into the plan and moved to `docs/tickets/archive/` as dropped.
+
 **Implemented** in the change that wrote this record:
 
 - the root `DEVELOPER.md` moved into [docs/developer/](../developer/README.md), the root
@@ -60,7 +66,8 @@ restructuring.
 values, the operator flags and the deterministic names are tables in the README and nowhere
 else; a page under `docs/operations/` explains a setting without restating the table.
 
-**D3 — A ticket is a work list and nothing else.** `docs/tickets/NNN-<slug>.md`, closed by
+**D3 — A ticket is a work list and nothing else.** *(Narrowed by D12, amended 2026-10-05: a
+ticket now exists only for an embargoed finding; the rest of D3 holds for it.)* `docs/tickets/NNN-<slug>.md`, closed by
 moving it to `docs/tickets/archive/` when the work lands. **The extraction is the close**: the
 decision goes into an ADR, the operator-facing consequence into the README or
 `docs/operations/`, the security-relevant one into `docs/security/`, the contributor knowledge
@@ -69,7 +76,8 @@ into `docs/developer/` — an archived ticket is history, never the source of a 
 **D4 — A number is never reused,** not an embargoed ticket's, not a merged ticket's. The
 numbering command on the rules page reads deleted files from git history for that reason.
 
-**D5 — A finding goes into an existing ticket first.** The open ticket of the same subject
+**D5 — A finding goes into an existing ticket first.** *(Superseded by D12, amended 2026-10-05:
+a finding goes into the plan, into the phase that does the work.)* The open ticket of the same subject
 collects it; a new ticket only when none fits. A collecting ticket is still one subject.
 
 **D6 — A ticket carries no history.** Current state, required changes, open questions with an
@@ -98,18 +106,32 @@ the tombstone of the question catalog and the parked research the plan names.
   [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md),
   [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
   and amendments of ADR 0001, 0002, 0006, 0007 and 0008; `docs/planning/questions.md` is a
-  tombstone that says so. A new open decision lives in a ticket's `## Open questions` section.
-- **A phase of the plan becomes tickets when it starts, in a session dedicated to that
-  conversion** — a family ticket for the phase, children per deliverable. Until then the phase
-  stays in [project-plan.md](../planning/project-plan.md), and a phase that ends is deleted
-  from it.
+  tombstone that says so. ~~A new open decision lives in a ticket's `## Open questions` section.~~
+*(Superseded by D12: it lives in the plan, at the step that needs it.)*
+- ~~**A phase of the plan becomes tickets when it starts, in a session dedicated to that
+  conversion** — a family ticket for the phase, children per deliverable.~~ *(Superseded by D12.)*
+  A phase stays in [project-plan.md](../planning/project-plan.md) until it is done, and a phase
+  that is done is deleted from it.
 - A measurement that a decision rests on is a fact about the code's environment and lives in
   [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md), not in the plan.
-- `docs/planning/` is deleted when the plan's last phase has started and the parked research
-  has been either taken up by a phase or dropped. Nothing in code cites a planning document.
+- `docs/planning/` is deleted when the plan's last phase is done *(amended 2026-10-05: was "has
+  started")*. Nothing in code cites a planning document.
 
 **D11 — English, everywhere.** Code, comments, commit messages, documentation. Conversation
 with the owner may be German; the repository is not.
+
+**D12 — The plan is the work list; a ticket exists only for an embargoed finding.** *(Added
+2026-10-05.)* Planned work is built straight from [project-plan.md](../planning/project-plan.md):
+each phase is worked out there to the step — the files and functions it touches, the tests in
+their tiers, the documentation and the records it updates, its definition of done — and is not
+converted into tickets. A finding goes into the plan, into the phase that will do the work, as a
+step; an open decision goes into the step that needs it, with its options, the recommended one
+justified, and an answer line, and once answered it becomes a record or an amendment in the same
+session, as before. A ticket under `docs/tickets/` is opened only for a security finding that D7
+embargoes, because a tracked plan cannot carry it; it keeps the frontmatter, the `local_` prefix
+and the rules of [docs/tickets/README.md](../tickets/README.md), and when its embargo ends its
+remaining work moves into the plan and the ticket is archived. D8 still holds: nothing outside
+`docs/tickets/` cites a ticket.
 
 ## Consequences
 

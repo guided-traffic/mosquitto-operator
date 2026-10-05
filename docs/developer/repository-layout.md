@@ -50,8 +50,9 @@ mosquitto-operator/                      # Go module github.com/guided-traffic/m
 │   ├── adr/                             # decisions, one file per decision family
 │   ├── developer/                       # this directory: contributor entry point
 │   ├── operations/                      # running the operator
+│   ├── planning/                        # the project plan (the work list) and the parked HA research
 │   ├── security/                        # the security architecture, one page per perspective
-│   └── tickets/                         # work lists
+│   └── tickets/                         # embargoed security findings only (local_*, gitignored)
 ├── .github/
 │   ├── workflows/release.yml            # "Test and Release": every check, plus semantic-release. PR and push to main
 │   ├── workflows/build.yml              # "Release Docker & Helm": image and chart, on `release: published`

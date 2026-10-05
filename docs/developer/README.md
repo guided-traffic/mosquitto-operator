@@ -8,8 +8,8 @@ a design that looks odd is the way it is, and the workflow around it.
 that the code cannot state on its own, and everything about contributing: the layout, the build
 and test matrix, continuous integration and the release, the checklists, the conventions.
 
-**What does not:** decisions (those are [ADRs](../adr/README.md)), work lists (those are
-tickets), what somebody running the operator needs (that is
+**What does not:** decisions (those are [ADRs](../adr/README.md)), the work list (that is
+[the project plan](../planning/project-plan.md)), what somebody running the operator needs (that is
 [docs/operations/](../operations/README.md), with the reference tables — the CRD fields, the
 chart values, the operator flags, the deterministic names — in [README.md](../../README.md)), and
 the security design (that is [docs/security/](../security/README.md)). There is no `DEVELOPER.md`

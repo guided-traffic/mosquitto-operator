@@ -14,7 +14,7 @@ all indexed in [docs/adr/README.md](../adr/README.md). The measurements the answ
 [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md). The questions about high
 availability were not answered; they wait, renumbered HA1–HA7, in [ha-research.md](ha-research.md).
 
-Nothing is added here. A new open decision lives in a ticket's `## Open questions` section
-([docs/tickets/README.md](../tickets/README.md)). This file stays only so that the records'
+Nothing is added here. A new open decision lives in the step of
+[the project plan](project-plan.md) that needs it. This file stays only so that the records'
 references to "the catalog" resolve; it is deleted with this directory
 ([ADR 0011](../adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md) D10).

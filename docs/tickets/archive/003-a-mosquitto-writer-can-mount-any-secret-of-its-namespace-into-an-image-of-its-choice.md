@@ -1,7 +1,7 @@
 ---
 id: T3
 title: a mosquitto writer can mount any secret of its namespace into an image of its choice
-state: decided
+state: dropped
 severity: high
 security: boundary
 threat: a subject allowed to create or update a Mosquitto in namespace N, but not to read Secrets or create pods there, reads every Secret of N (and acts as any ServiceAccount whose legacy token Secret exists in N) through the StatefulSet the operator writes on its behalf
@@ -13,25 +13,26 @@ opened: 2026-10-05
 decided: 2026-10-05
 done:
 publication-accepted: 2026-10-05
+dropped-reason: folded into the project plan, which is the work list (ADR 0011 D12)
 ---
 
 ## Current state
 
-The gap is public as H-15 on [trust-boundaries.md](../security/trust-boundaries.md#h-15), by the
+The gap is public as H-15 on [trust-boundaries.md](../../security/trust-boundaries.md#h-15), by the
 owner's decision before a switch exists. `spec.tls.secretName` may name any Secret of the
-namespace and is mounted whole ([`statefulset.go:129-139`](../../internal/builder/statefulset.go#L129-L139));
+namespace and is mounted whole ([`statefulset.go:129-139`](../../../internal/builder/statefulset.go#L129-L139));
 `spec.image` is free, and the container runs whatever the image puts at `/usr/sbin/mosquitto`. The
-decided `credentialsSecret` of [ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)
+decided `credentialsSecret` of [ADR 0013](../../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)
 D2 would widen the same pattern: the operator would hash any Secret's value of the namespace into
 `<name>-auth`, and MQTT logins would become an online oracle for that value.
 
-The decision is [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
-D10, with amendments in [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
+The decision is [ADR 0014](../../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
+D10, with amendments in [ADR 0001](../../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
 D1/D6 and ADR 0013 D2: an install-time switch `secretSecurity`, default `false` (the owner's choice
 against the recommended `true`). With `true` only Secrets carrying an opt-in label may be named.
 Nothing of it is built.
 
-The image half stays with the cluster: [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)
+The image half stays with the cluster: [ADR 0007](../../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)
 D9 leaves image policy to admission control, and H-2 says so.
 
 ## Required changes

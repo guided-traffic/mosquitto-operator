@@ -8,6 +8,8 @@ and was re-cut on 2026-10-05: high availability "seems harder than expected", an
 release is to make one concrete migration easy — moving the MQTT broker of a Home Assistant
 installation into a cluster managed by Flux.
 
+*Amended 2026-10-05:* D3 — HA comes last, after every other phase of the plan.
+
 **Not built**, apart from what already exists: R5 is met by `Mosquitto` alone today
 (`status.observedGeneration` and one `Ready` condition, written together by `updateStatus` /
 `setPhase` in [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)),
@@ -54,8 +56,10 @@ cluster without hand-written configuration and without manual steps after a chan
 **D3 — High availability and everything multi-replica is parked.** `spec.replicas` keeps its
 `v0.1.0` meaning — independent brokers, no shared state, no shared sessions — and nothing built
 for this release may rely on `replicas > 1`. The parked research holds the open questions
-(HA1–HA7) that must be answered before any HA mechanism is built. It is reopened by the owner's
-call, at the latest when a client needs a bounded failover the single broker cannot give.
+(HA1–HA7) that must be answered before any HA mechanism is built. ~~It is reopened by the owner's
+call, at the latest when a client needs a bounded failover the single broker cannot give.~~
+*(Amended 2026-10-05 by the owner:)* **High availability is the last phase of the plan**, started
+only when every other phase is done; no HA question is put to the owner before then.
 
 **D4 — Every container the operator renders meets the restricted Pod Security Standard and runs
 as uid `1883`, from the first release on.** No root, no capabilities, no privilege escalation, a

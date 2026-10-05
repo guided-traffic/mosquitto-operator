@@ -8,9 +8,12 @@ a ticket; decisions live in [docs/adr/](../adr/README.md) and may be referenced 
 The rule and the reasoning behind it are
 [ADR 0011](../adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md).
 
-Where tickets come from: a phase of [the project plan](../planning/project-plan.md) becomes a
-family ticket and its children when the phase starts, in a session dedicated to that conversion
-(ADR 0011 D10); a finding becomes part of an open ticket or, when none fits, a new one.
+**A ticket exists here only for an embargoed security finding** (ADR 0011 D12): planned work and
+every other finding are steps of [the project plan](../planning/project-plan.md), which is the work
+list, and an open decision sits in the plan step that needs it. A ticket is opened when a
+`security: live` or `security: boundary` finding must stay out of tracked files; when its embargo
+ends, its remaining work moves into the plan and the ticket is archived. The rules below apply to
+those tickets.
 
 Before archiving a ticket, move anything durable out of it — the decision into an
 [ADR](../adr/README.md), the operator-visible consequence into [README.md](../../README.md) or

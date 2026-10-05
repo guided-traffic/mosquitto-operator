@@ -1,7 +1,7 @@
 ---
 id: T6
 title: the release pipeline holds more authority than it uses and runs unreviewed code beside it
-state: filed
+state: dropped
 severity: medium
 security: hardening
 threat: would additionally cover a compromised third-party action or a moved image tag reaching the Docker Hub credential, the release token or the published image
@@ -12,21 +12,22 @@ filed-from: the documentation restructuring of 2026-10-05 (security pages)
 opened: 2026-10-05
 decided:
 done:
+dropped-reason: folded into the project plan, which is the work list (ADR 0011 D12)
 ---
 
 ## Current state
 
 No concrete attack path today; each item widens what a compromise elsewhere could reach. The public
 gaps they belong to are H-9 and H-10 on
-[docs/security/ci-and-supply-chain.md](../security/ci-and-supply-chain.md).
+[docs/security/ci-and-supply-chain.md](../../security/ci-and-supply-chain.md).
 
 - **Unused job permissions.** `semantic-release` declares `contents`, `issues`, `pull-requests` and
-  `id-token` write ([`release.yml:1256-1260`](../../.github/workflows/release.yml#L1256-L1260)); every
+  `id-token` write ([`release.yml:1256-1260`](../../../.github/workflows/release.yml#L1256-L1260)); every
   write it makes goes through the GitHub App token, so none of the job token's scopes is used.
 - **No `permissions:` floor in `build.yml`** — the only workflow without a top-level block
   (`release.yml:28` has one).
 - **The Docker Hub credential stays on disk in `build`.** No `docker logout` runs in that job, so
-  `anchore/sbom-action@v0` ([`build.yml:115`](../../.github/workflows/build.yml#L115)) and
+  `anchore/sbom-action@v0` ([`build.yml:115`](../../../.github/workflows/build.yml#L115)) and
   `softprops/action-gh-release@v3` (`build.yml:125`, `:259`) run with it present.
 - **Tag-referenced third-party actions outside the documented exception list:**
   `anchore/sbom-action@v0`, `softprops/action-gh-release@v3`,
@@ -37,7 +38,7 @@ gaps they belong to are H-9 and H-10 on
   Renovate manager moves it.
 - **Images by tag with unreviewed automerge.** The broker default image, both `Containerfile` base
   images and the chart's operator image are referenced by tag; Renovate automerges their minor,
-  patch and digest updates ([`renovate.json:128-139`](../../renovate.json#L128-L139), `:217-228`).
+  patch and digest updates ([`renovate.json:128-139`](../../../renovate.json#L128-L139), `:217-228`).
 
 ## Required changes
 
