@@ -12,8 +12,9 @@ DNS name, and a ClusterIP Service in front of all of them — with optional per-
 persistence, optional pod anti-affinity and an optional TLS listener. The broker pods are
 **independent Mosquitto processes behind one Service**: there is no bridging between them, no
 shared session state, no shared retained messages and no clustering. Raising `spec.replicas`
-buys process redundancy, not a highly available broker. Highly available brokers are the goal
-of this project; this version does not deliver them.
+buys process redundancy, not a highly available broker. High availability is parked until every
+other part of the plan is built
+([ADR 0012](docs/adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
 
 ```mermaid
 flowchart LR
@@ -31,11 +32,11 @@ flowchart LR
   HS -. "per-pod DNS" .-> P1
 ```
 
-Every claim in this document was verified by reading this repository. What was **not** done:
-running any of it against a real Kubernetes cluster. The E2E suite in [`test/e2e/`](test/e2e/)
-exercises the provisioning path, but its CI jobs have been commented out since 2026-09-01 and no
-run of it has been observed. Commands below are transcribed from the code and from that suite;
-the ones that need no cluster were executed while writing this file.
+Every claim in this document was verified by reading this repository. The E2E suite in
+[`test/e2e/`](test/e2e/) exercises the provisioning path on a Kind cluster on every pull request
+and before every release; Kind is the only cluster this operator has been observed on. Commands
+below are transcribed from the code and from that suite; the ones that need no cluster were
+executed while writing this file.
 
 ## ✨ Key Features
 

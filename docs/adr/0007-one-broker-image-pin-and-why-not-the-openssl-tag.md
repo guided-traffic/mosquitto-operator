@@ -34,7 +34,9 @@ and the rendered CRD [`config/crd/bases/mko.gtrfc.com_mosquittoes.yaml`](../../c
 `test/testimages/images.go`; and `docker manifest inspect` plus `docker run` against the upstream
 images (see Context for the numbers, and Residual risks for what the numbers do and do not mean).
 
-**Not verified:** no broker has been observed running on a real cluster from this repository. The
+**Not verified:** no broker has been observed running on a production cluster from this
+repository; the E2E suite runs the pinned image on Kind (first observed 2026-10-05,
+[ADR 0004](0004-two-e2e-legs-and-no-version-matrix.md) `Status`). The
 image evidence below says what is *in* the image; it says nothing about how `mosquitto 2.1.2`
 behaves under load, and the 2.1 deprecation and `max_packet_size` claims come from upstream
 release notes, not from anything measured here.
@@ -124,7 +126,12 @@ The `customManagers` entry in [`renovate.json`](../../renovate.json) whose descr
 `managerFilePatterns`, with `versioningTemplate: "docker"` and a single `matchStrings` regex that
 anchors on the `renovate:` comment line. Both copies therefore land in one pull request. That
 matters because of D3: a manager that moved only one would open a pull request that is red by
-construction.
+construction. *(Amended 2026-10-05:)* A **minor** update of the pin waits for a human: a
+packageRule after the general `custom.regex` automerge rule matches `eclipse-mosquitto` with
+`matchUpdateTypes: ["minor"]`, sets `automerge: false` and the label `broker-image`, because the
+operator ships `DefaultImage` as the broker of every `Mosquitto` that names no image — a new minor
+reaches every installation with the next operator release. Patch and digest updates stay
+automerged.
 
 **D5 — An inert regex is a CI failure, not a silent stall.**
 [`hack/verify-ci-references.mjs`](../../hack/verify-ci-references.mjs) walks every

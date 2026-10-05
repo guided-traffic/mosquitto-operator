@@ -5,10 +5,10 @@ E2E legs, and the environment variables the suites read. The Make targets themse
 [build-test-lint.md](build-test-lint.md); the CI jobs are [ci-and-release.md](ci-and-release.md).
 Read against the tree on 2026-10-05.
 
-**Nothing in this repository has been observed running against a real cluster.** The E2E tier
-exists and can be run locally, but its CI jobs are commented out
-([ci-and-release.md](ci-and-release.md#the-e2e-jobs-are-commented-out)); everything this page says
-about E2E behaviour is read from the code.
+**The only cluster this operator runs on is Kind.** The E2E tier runs on every pull request and
+before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)) and was first observed
+passing on 2026-10-05, locally with `make e2e-local` on both legs; nothing has been observed on a
+production cluster.
 
 ## The tiers
 
@@ -167,8 +167,8 @@ E2E_REQUIRE_MULTI_NODE=true make e2e-local KIND_WORKERS=3 \
 `e2e-local` builds the image with `docker build` directly (not `make docker-build`), installs the
 chart with [`test/e2e/helm-values.yaml`](../../test/e2e/helm-values.yaml) — image
 `mosquitto-operator:test` with `pullPolicy: Never`, leader election off — and does **not** preload
-the broker image into the nodes, so the kubelet pulls `eclipse-mosquitto` anonymously. The
-commented-out CI job does preload it, reading the tag out of `test/testimages/images.go`.
+the broker image into the nodes, so the kubelet pulls `eclipse-mosquitto` anonymously. The CI
+job does preload it, reading the tag out of `test/testimages/images.go`.
 
 ## Image-tools tests
 

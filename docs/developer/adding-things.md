@@ -83,8 +83,8 @@ update in the same change. Read against the tree on 2026-10-05.
 7. If the scenario depends on the node count, guard it with `tc.requireThreeSchedulableNodes(t)`;
    `E2E_REQUIRE_MULTI_NODE=true` turns its skip into a failure on the multi-node leg.
 8. If you rename a test the multi-node leg's `run_filter` selects, update the guard grep in the
-   `Run E2E tests` step of [`release.yml`](../../.github/workflows/release.yml) — currently inside
-   the commented-out block ([ci-and-release.md](ci-and-release.md#the-e2e-jobs-are-commented-out)).
+   `Run E2E tests` step of [`release.yml`](../../.github/workflows/release.yml)
+   ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)).
 9. Run it: `make e2e-local KIND_WORKERS=0` for the single-node leg, the multi-node invocation in
    [testing.md](testing.md#the-two-legs) for the other. Add the scenario to the table in
    [testing.md](testing.md#e2e-tests).

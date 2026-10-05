@@ -38,13 +38,21 @@ line 1225).
 The two failing runs were done in a copy of the tree produced with `git archive HEAD`, outside
 the repository; nothing in the working tree was modified.
 
-**Implemented:** three guards, all three runnable without a Kubernetes cluster, and three
-recorded observations of a guard failing on purpose — spread over two of them.
-`hack/verify-ci-references.mjs` is the third guard and has no deliberate break on record; see
-Residual risks for what it has instead.
+**Implemented:** three guards, all three runnable without a Kubernetes cluster, and four
+recorded observations of a guard failing on purpose — now spread over all three.
 
-**Open / not verified:** no job of this pipeline has been observed executing on GitHub — the
-whole pipeline landed in one commit and I could not check Actions history. The reproductions
+**Amended 2026-10-05 — the third guard failed on purpose.** With the seventh customManager (the
+BuildKit image of `build.yml`) added, its `matchStrings` entry was edited from
+`image=moby/buildkit:(?<currentValue>v[\\d.]+)` to `image=moby/buildkit@(?<currentValue>v[\\d.]+)`
+and `make verify-ci-references` run: exit 2, `BAD: customManagers[6] "Update the BuildKit image the
+release build runs …"`, `.github/workflows/build.yml (0)`, and `FAIL: 1 Renovate customManager
+problem(s) in renovate.json: … matchString "image=moby/buildkit@(?<currentValue>v[\\d.]+)" matches
+no line in [".github/workflows/build.yml"]`. Restored, it prints `OK: all 7 Renovate
+customManagers reference real files and lines`.
+
+**Open / not verified:** ~~no job of this pipeline has been observed executing on GitHub~~
+*(amended 2026-10-05: the release workflow has run on every push to `main` and built
+`v0.1.0` to `v0.1.8`; the individual guard steps were not inspected run by run).* The reproductions
 above used `helm v3.21.3` while the `generated-manifests` job installs `v4.2.4` via
 `azure/setup-helm@v5`, so the rendering half of the parity test has not been exercised with the
 helm major CI uses. Nothing in this repository has ever run against a real cluster.
@@ -240,13 +248,12 @@ tree deliberately broken, tests the thing that ships.
 
 ## Residual risks
 
-* **Three observations, two guards.** `hack/verify-release-tooling.mjs` and
-  `test/rbacparity/rbac_parity_test.go` have been seen failing on purpose.
-  `hack/verify-ci-references.mjs` has not: it earned its place the other way round, by catching a
-  real defect during the port (a missing `customManager` for
-  `.github/workflows/*.yml`, [ADR 0003](0003-the-go-version-is-one-fact-in-four-files.md)),
-  which is stronger evidence than a synthetic break but is not the same thing as knowing which
-  synthetic breaks it catches.
+* **One synthetic break per guard, not a catalogue.** Each of the three guards has been seen
+  failing on purpose once or twice — `hack/verify-ci-references.mjs` on 2026-10-05, on a
+  `matchString` that stopped matching its file — and `hack/verify-ci-references.mjs` also caught a
+  real defect during the port (a missing `customManager` for `.github/workflows/*.yml`,
+  [ADR 0003](0003-the-go-version-is-one-fact-in-four-files.md)). Which other synthetic breaks
+  each one catches is inferred from reading it, not observed.
 * **`verify-ci-references` tolerates zero hits per file within a manager, by design (D6), so it
   cannot detect a workflow file that has quietly lost its `GO_VERSION` line** as long as one
   other selected file still has one. Today `.github/workflows/renovate.yml (0)` is the

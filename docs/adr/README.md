@@ -104,6 +104,6 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0003](0003-the-go-version-is-one-fact-in-four-files.md) | The Go version is one fact in four files, and one Renovate PR moves all four | Implemented |
-| [0004](0004-two-e2e-legs-and-no-version-matrix.md) | Two E2E legs, shaped by node count, and no version matrix | Partly built — the legs and the gate are written in `release.yml` but commented out since 2026-09-01; the record's own `Status` does not say so yet |
+| [0004](0004-two-e2e-legs-and-no-version-matrix.md) | Two E2E legs, shaped by node count, and no version matrix | Implemented — out of CI from 2026-09-01 to 2026-10-05, restored |
 | [0005](0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) | Fork pull requests execute on the self-hosted runners, gated outside the repository | Implemented — the gate is a GitHub setting, not verifiable from the tree |
 | [0010](0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md) | A check is not a check until it has failed on purpose | Implemented |

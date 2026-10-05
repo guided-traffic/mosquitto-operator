@@ -12,13 +12,13 @@ restates the reference tables, which live in the README and nowhere else.
 | [runtime.md](runtime.md) | You want to know what the operator does when it starts and what one reconcile pass writes or leaves alone. It also covers which `spec` changes restart the broker pods, changing `spec.storage` on a running broker, what `Pending`, `Progressing`, `Ready` and `Failed` mean, the operator's ports and probes, what happens while it is not running, what it logs, and how a renewed certificate reaches a broker |
 
 **What these pages rest on.** Every statement about the operator was read from this repository's
-code, manifests and tests. None of it has been observed running on a real cluster. The E2E suite in
-[`test/e2e/`](../../test/e2e/) installs the chart into a Kind cluster and runs brokers. It is in
-the tree, but its CI jobs have been commented out of
-[`.github/workflows/release.yml`](../../.github/workflows/release.yml) since 2026-09-01. So no
-install path, no rollout and no garbage collection described here has a recorded run behind it.
-Where a page describes what Kubernetes itself does with the objects the operator writes, it says
-so. Those statements are standard Kubernetes behaviour, not something this repository tests.
+code, manifests and tests. The E2E suite in [`test/e2e/`](../../test/e2e/) installs the chart into
+a Kind cluster, runs brokers, speaks MQTT to them and watches their objects collected; it runs on
+every pull request and before every release, and was first observed passing on 2026-10-05. Kind is
+the only cluster any of it has run on: the Helm install path, a rollout and garbage collection have
+a recorded run behind them there, the kustomize path and every production-cluster property
+(CNI, storage driver, admission chain) do not. Where a page describes what Kubernetes itself does
+with the objects the operator writes beyond what the suite checks, it says so.
 
 **What the brokers are.** One `Mosquitto` runs independent Mosquitto processes behind one Service.
 There is no bridging, no shared sessions, no shared retained messages and no clustering. More

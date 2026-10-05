@@ -53,12 +53,10 @@ change.
   ([testing.md](testing.md)).
 - **A check is not a check until it has failed on purpose**
   ([ADR 0010](../adr/0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md)).
-- **Nothing here has been observed running against a real cluster.** The unit, integration,
-  image-tools and RBAC-parity tiers need none; the E2E tier does, and its CI jobs are commented out
-  of [`release.yml`](../../.github/workflows/release.yml) since 2026-09-01. The comment there
-  records that both legs once started in CI and that the multi-node leg died installing packages
-  before it reached a test; whether any leg ever completed the suite is not recorded in the tree
-  ([ci-and-release.md](ci-and-release.md#the-e2e-jobs-are-commented-out)).
+- **The only cluster this operator runs on is Kind.** The unit, integration, image-tools and
+  RBAC-parity tiers need none; the E2E tier creates a Kind cluster per leg, on every pull request
+  and before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)). It was first
+  observed passing on 2026-10-05; nothing has been observed on a production cluster.
 - **English only**, in code, comments, commits and documentation.
 
 | Page | Read it when |
@@ -88,8 +86,8 @@ change.
 | A rotated TLS Secret | Nothing: the Secret is not watched, and running pods serve the old material until they restart | [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) |
 | Deleting a `Mosquitto` | The reconciler writes nothing; the garbage collector removes the four objects through their controller references | [ADR 0009](../adr/0009-delete-only-through-owner-references.md) |
 | An RBAC change | Marker in the controller, `make generate-all` for `config/rbac/role.yaml`, the chart's ClusterRole by hand, `make verify-rbac-parity` | [adding-things.md](adding-things.md#a-managed-object) |
-| A pull request | Twelve jobs on self-hosted runners, each check entered through a Make target; the E2E jobs are commented out | [ci-and-release.md](ci-and-release.md#test-and-release) |
-| A release | On a push to `main`, after those twelve jobs, `semantic-release` cuts the version from Conventional Commits with a GitHub App token; the published release builds and pushes the image and publishes the chart to `gh-pages` | [ci-and-release.md](ci-and-release.md#the-release) |
+| A pull request | Fourteen jobs on self-hosted runners — two E2E legs and their gate among them — each check entered through a Make target | [ci-and-release.md](ci-and-release.md#test-and-release) |
+| A release | On a push to `main`, after thirteen of those jobs, `semantic-release` cuts the version from Conventional Commits with a GitHub App token; the published release builds and pushes the image and publishes the chart to `gh-pages` | [ci-and-release.md](ci-and-release.md#the-release) |
 | A dependency update | Self-hosted Renovate nightly; minor, patch and digest updates automerge after CI, majors wait for a human; `make verify-ci-references` proves every customManager still matches | [ci-and-release.md](ci-and-release.md#renovate) |
 
 ## What has no page here

@@ -118,7 +118,8 @@ what it references. A failure of one user never makes the broker or another user
 - Not verified: that a sidecar running as uid `1883` with every capability dropped can signal the
   broker across `shareProcessNamespace` under PodSecurity `restricted`. It is the kernel's
   documented rule, not measured in a pod.
-- Nothing in this repository has ever been observed running against a real cluster.
+- Kind is the only cluster this operator has been observed on (the E2E tier, first observed
+  2026-10-05); D1's migration is the first production observation.
 
 ## References
 

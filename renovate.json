@@ -227,6 +227,23 @@
       "automerge": true
     },
     {
+      "description": "Mosquitto broker image: minor updates wait for a human. The operator ships builder.DefaultImage as the default broker of every Mosquitto in every cluster, so a new minor reaches every installation with the next operator release; it is read before it merges (docs/adr/0007). Patch and digest updates stay automerged by the rule above. This rule comes after that one because later packageRules win.",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "eclipse-mosquitto"
+      ],
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "automerge": false,
+      "labels": [
+        "dependencies",
+        "broker-image"
+      ]
+    },
+    {
       "description": "Makefile-pinned Go tools (custom regex manager): require manual review for major updates",
       "matchManagers": [
         "custom.regex"
@@ -346,6 +363,19 @@
       "matchStrings": [
         "//\\s*renovate:\\s*datasource=(?<datasource>[^\\s]+)\\s+depName=(?<depName>[^\\s]+)\\s*\\n\\s*\\w+\\s*=\\s*\"[^\":]+:(?<currentValue>[^\"]+)\""
       ],
+      "versioningTemplate": "docker"
+    },
+    {
+      "description": "Update the BuildKit image the release build runs (driver-opts image= line of docker/setup-buildx-action in build.yml). It was frozen at v0.12.0 with no manager until 2026-10-05.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/build\\.yml$/"
+      ],
+      "matchStrings": [
+        "image=moby/buildkit:(?<currentValue>v[\\d.]+)"
+      ],
+      "depNameTemplate": "moby/buildkit",
+      "datasourceTemplate": "docker",
       "versioningTemplate": "docker"
     }
   ],

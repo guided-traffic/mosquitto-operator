@@ -10,11 +10,11 @@ anonymous. The next release is decided and not built: one broker run from Git th
 High availability comes last, after every other phase.** The work list is
 [the project plan](docs/planning/project-plan.md).
 
-**Nothing in this repository has ever been observed running against a real cluster.** Every
-statement here is read out of the tree. The E2E suite exists, but its CI jobs in
-[`release.yml`](.github/workflows/release.yml) have been commented out since 2026-09-01, and
-`semantic-release` no longer waits for them; no run of the suite has been seen. Where that
-matters, the ADRs say so in their own `Status` sections.
+**Kind is the only cluster this operator has been observed on.** The E2E suite runs on a Kind
+cluster per leg on every pull request, and `semantic-release` waits for it
+([`release.yml`](.github/workflows/release.yml)); it was commented out from 2026-09-01 to
+2026-10-05 and first observed passing on 2026-10-05. Nothing has run on a production cluster.
+Where that matters, the ADRs say so in their own `Status` sections.
 
 ## Language policy
 
