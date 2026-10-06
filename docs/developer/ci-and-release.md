@@ -23,6 +23,8 @@ that need more. `env`: `GO_VERSION: '1.27.1'`, `KUBERNETES_VERSION: '1.33.4'`.
 
 | Job (status context) | Runs | Notes |
 |---|---|---|
+| `e2e-tests` (E2E Tests (single-node), E2E Tests (multi-node)) | `make test-e2e` on a Kind cluster per leg | [The E2E jobs](#the-e2e-jobs). 60-minute timeout. Logs in to Docker Hub. |
+| `e2e-gate` (E2E Tests) | `[ "${result}" = "success" ]` over `needs.e2e-tests.result` | `if: always()`, so a failed or cancelled matrix fails the stable status context instead of skipping it. |
 | `linter` (Code Linting) | `make lint` | |
 | `gosec` (GoSec Security Scan) | `make gosec` | 15-minute job timeout, 10-minute step timeout. |
 | `malware-scan` (Malware Scan (Source Code)) | ClamAV over the tree, `.git`, `node_modules` and `vendor` excluded | Fails unless the report says `Infected files: 0`; uploads the report for 30 days. |
@@ -35,7 +37,7 @@ that need more. `env`: `GO_VERSION: '1.27.1'`, `KUBERNETES_VERSION: '1.33.4'`.
 | `coverage-report` (Combined Coverage Report) | `needs: [unit-tests, integration-tests]`, runs when at least one succeeded | Merges the profiles, writes the job summary and a sticky PR comment (per-package table, difference to the badge on `main`); on a push to `main` writes the badge and uploads it as the `coverage-badge` artefact ([build-test-lint.md](build-test-lint.md#coverage)). `pull-requests: write`. |
 | `container-malware-scan` (Container Malware Scan) | `needs: [malware-scan]` | Builds the image with `persist-credentials: false` on the checkout, **logs out of Docker Hub**, then runs Trivy twice — table at `CRITICAL,HIGH` with `exit-code: 1`, then SARIF. Trivy is pinned to a commit SHA because it used to track a moving branch two steps after a registry login. |
 | `release-tooling` (Release Tooling) | `make verify-ci-references`, `npm ci --ignore-scripts`, `npm audit signatures`, `node hack/verify-release-tooling.mjs` | Calls the node script directly rather than `make test-release-tooling`: the Makefile target runs `npm ci --no-audit --no-fund`, the job runs `--ignore-scripts` and checks registry signatures. |
-| `semantic-release` (Semantic Release) | only on a push to `main`; `needs:` the twelve jobs above | [The release](#the-release). |
+| `semantic-release` (Semantic Release) | only on a push to `main`; `needs:` the thirteen jobs above except `e2e-gate` — `e2e-tests` itself | [The release](#the-release). `permissions: contents: read` only. |
 
 <details>
 <summary>The checks that exist, by entry point</summary>
@@ -53,27 +55,22 @@ that need more. `env`: `GO_VERSION: '1.27.1'`, `KUBERNETES_VERSION: '1.33.4'`.
 | Unit and integration coverage, badge, PR comment | `make test-unit-coverage`, `make test-integration-coverage` | `unit-tests`, `integration-tests`, `coverage-report` |
 | The pinned image contains what this repository executes | `make test-image-tools` | `mosquitto-image-tools` |
 | ClamAV source scan, Trivy container scan | in-workflow | `malware-scan`, `container-malware-scan` |
-| E2E, two legs | `make test-e2e` | `e2e-tests` → `e2e-gate` — **commented out**, below |
+| E2E, two legs | `make test-e2e` | `e2e-tests` → `e2e-gate`, below |
 
 </details>
 
-### The E2E jobs are commented out
+### The E2E jobs
 
-The `e2e-tests` matrix and the `e2e-gate` job sit at the top of the `jobs:` block **as comments**,
-disabled on 2026-09-01. The comment above them records why: a multi-node leg died after ten minutes
-inside `sudo apt-get install build-essential`, before it reached a test — an ephemeral runner pod
-losing its network, not a defect of this repository. They are commented out rather than skipped
-with `if: false` because a skipped matrix would make the gate's `[ "$result" = "success" ]` fail,
-and GitHub skips every job whose `needs` were skipped, so `semantic-release` would stop too.
-`e2e-tests` is likewise removed from `semantic-release`'s `needs:` (marked `TEMPORARILY REMOVED`).
+The `e2e-tests` matrix and the `e2e-gate` job open the `jobs:` block. They were commented out from
+2026-09-01 until 2026-10-05 — a multi-node leg had died inside `sudo apt-get install
+build-essential` when its ephemeral runner pod lost its network — and were restored, with
+`e2e-tests` back in `semantic-release`'s `needs:`, when both legs had passed on a local Kind
+cluster ([ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) `Status` names the runs).
+`main` carries no branch protection that names a check (a repository setting the tree cannot
+show — not verified here); `E2E Tests`, the gate, is the context a required check would name.
 
-**To restore:** uncomment the block and add `e2e-tests` back to that `needs:` list. The same
-comment notes that `main` carries no branch protection today; if a required status check named
-`E2E Tests` is ever configured, this block has to come back first. That branch-protection state is
-a repository setting the tree cannot show — not verified here.
-
-What the disabled job does, as written — read it before restoring it, because each step exists for
-a mechanic of Docker-in-Docker runners that still applies:
+What the job does — read it before changing it, because each step exists for a mechanic of
+Docker-in-Docker runners:
 
 - a matrix of the two legs ([testing.md](testing.md#the-two-legs)), `fail-fast: false`, 60-minute
   timeout, distinct cluster names per leg;
@@ -97,20 +94,22 @@ a mechanic of Docker-in-Docker runners that still applies:
 - on failure, operator logs (2000 lines), node conditions, and per `e2e-*` namespace the pods, the
   events and both current and previous container logs; the cluster is deleted `if: always()`.
 
-`e2e-gate`, named `E2E Tests`, would carry the stable status context: a matrix leg reports as
+`e2e-gate`, named `E2E Tests`, carries the stable status context: a matrix leg reports as
 `E2E Tests (<topology>)`, renamed whenever a leg is, so a required check never points at a leg
 ([ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md)).
 
 ## The release
 
-`semantic-release` runs on a push to `main`, after all twelve jobs above succeeded. Its first step
+`semantic-release` runs on a push to `main`, after the thirteen jobs it names succeeded. Its job
+token holds `contents: read` and nothing else: every write goes through the app token. Its first step
 mints a GitHub App installation token (`actions/create-github-app-token`, from `APP_CLIENT_ID` and
 `APP_PRIVATE_KEY`, scoped to this repository with `contents: write`, valid one hour, revoked when
 the job ends). Not `GITHUB_TOKEN`, because a release that token creates does not trigger
 `build.yml`. The checkout uses `persist-credentials: false`; the coverage badge artefact is
 downloaded into `.github/badges/` (the committed file stays when it is missing); `npm ci
---ignore-scripts` and `npm audit signatures`, because this job holds the token; then
-`npx semantic-release` with the token as `GITHUB_TOKEN`.
+--ignore-scripts`, so no lifecycle script runs on the runner, and `npm audit signatures`; then
+`npx semantic-release` with the token as `GITHUB_TOKEN` — the only step whose environment holds
+it.
 
 [`.releaserc.json`](../../.releaserc.json): branch `main`; `@semantic-release/commit-analyzer`
 with the `conventionalcommits` preset; `@semantic-release/release-notes-generator` loading
@@ -122,7 +121,7 @@ The version follows the Conventional Commits since the last tag — a `!` or a `
 footer is a major ([conventions.md](conventions.md)).
 
 The release-notes template states that a release is cut only after "unit, integration and E2E
-tests" went green. While the E2E jobs are commented out, that sentence is not true.
+tests" went green; with `e2e-tests` in `needs:`, that is what the workflow enforces.
 
 ## Release Docker & Helm
 
@@ -130,16 +129,19 @@ tests" went green. While the E2E jobs are commented out, that sentence is not tr
 Serialised by a workflow-wide concurrency group with `cancel-in-progress: false`, because two runs
 would both rebase the same `gh-pages` `index.yaml`. `env`: `GO_VERSION: '1.27.1'`.
 
+The file sets `permissions: contents: read` at the top; each job widens it in its own block.
+
 1. **`build` (Build Docker Image)** — `contents: write` only. Checkout with
    `persist-credentials: false` (the `Containerfile` does `COPY . .`, and
    [`.dockerignore`](../../.dockerignore) excludes `.git/` as the second half). QEMU, buildx
-   (`moby/buildkit:v0.12.0`), Docker Hub login; `docker/metadata-action` tags `{{version}}`,
+   (`moby/buildkit` pinned by tag and moved by a Renovate customManager), Docker Hub login; `docker/metadata-action` tags `{{version}}`,
    `{{major}}.{{minor}}`, `{{major}}` and the commit sha — its `latest` entry is gated on
    `github.ref == refs/heads/main`, which a `release` run never matches, so this workflow does not
    move `latest`. Builds and pushes `guidedtraffic/mosquitto-operator` for `linux/amd64` only (arm64
    is commented out), with `provenance: true` and `sbom: true` and the build args `BUILD_NUMBER`
    (the tag without `v`), `GIT_COMMIT`, `BUILD_TIME`; the GitHub Actions build cache stays off. Then
-   an SPDX SBOM uploaded to the release, and a Docker Scout CVE scan.
+   `docker logout`, an SPDX SBOM uploaded to the release by two commit-pinned actions, and a Docker
+   Scout CVE scan that takes the credential as its own input.
 2. **`release-helm-gh` (Release Helm Chart to GitHub Pages)** — `needs: build`, `contents: write`.
    Helm `v4.3.0`; `make generate-all` and the same dirty-tree check as `generated-manifests`, so a
    released chart cannot carry a stale CRD; the release version stamped into `version` and
@@ -149,8 +151,9 @@ would both rebase the same `gh-pages` `index.yaml`. `env`: `GO_VERSION: '1.27.1'
    (somebody published in between) fails the job instead of overwriting their entry; the `.tgz`
    and `index.yaml` attached to the release.
 
-Whether a release has ever been cut is not visible from the tree: the chart in `main` carries
-`0.1.0`, and the local clone holds no tags.
+Releases `v0.1.0` to `v0.1.8` were cut between 2026-09-01 and 2026-10-02, and this workflow built
+and published each of them successfully (its run list on GitHub, checked on 2026-10-05). The chart
+in `main` still carries `0.1.0`, because the version is stamped into the job's checkout only.
 
 ## Renovate
 
@@ -176,12 +179,16 @@ when the job ends.
 - **Groups:** `Go version` (the `golang-version` datasource and `golang.org/x/*`, so the four Go
   version sites move in one PR — [ADR 0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md)),
   and `Kubernetes Go modules` (`k8s.io/*`, `sigs.k8s.io/*`).
-- **`eclipse-mosquitto` stays below 3** (`allowedVersions: "<3"`,
-  [ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)).
+- **`eclipse-mosquitto` stays below 3** (`allowedVersions: "<3"`), and its **minor updates wait for
+  a human** (label `broker-image`): the operator ships the pin as the default broker of every
+  `Mosquitto` ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D4).
 - **Commit types:** `fix` for minor, patch, digest and pin updates, `chore` for every GitHub
   Actions update, so each lands in the right release-notes section.
-- **Six customManagers:** the Makefile tool pins, the Go version in `Containerfile`, in `go.mod`,
+- **Seven customManagers:** the Makefile tool pins, the Go version in `Containerfile`, in `go.mod`,
   in `GO_VERSION` of every workflow (which also selects `renovate.yml`, a tolerated zero) and in
-  the release-template badge (`loose` versioning, because the badge carries `1.27`), and the broker
-  image in `test/testimages/images.go` and `internal/builder/statefulset.go`. A customManager whose
+  the release-template badge (`loose` versioning, because the badge carries `major.minor`), the
+  broker image in `test/testimages/images.go` and `internal/builder/statefulset.go`, and the
+  BuildKit image of `build.yml`.
+- **Third-party actions are pinned to a commit** with the version as a comment; Renovate's
+  github-actions manager moves both, and digest updates automerge like minor ones. A customManager whose
   regex matches nothing fails silently in Renovate; `make verify-ci-references` is what catches it.

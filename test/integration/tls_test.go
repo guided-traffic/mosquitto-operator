@@ -47,8 +47,7 @@ func TestIntegration_TLS_MountsTheSecretAndMovesTheListener(t *testing.T) {
 	}
 	assert.Equal(t, secretName, mountedSecret, "the referenced secret is not a volume")
 
-	require.Len(t, sts.Spec.Template.Spec.Containers, 1)
-	container := sts.Spec.Template.Spec.Containers[0]
+	container := brokerContainer(t, sts)
 
 	var tlsMount *corev1.VolumeMount
 	for i := range container.VolumeMounts {
@@ -98,7 +97,7 @@ func TestIntegration_TLS_DoesNotWaitForTheSecret(t *testing.T) {
 	})
 
 	sts := waitForStatefulSet(t, ns, name)
-	assert.Equal(t, int32(8883), sts.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort)
+	assert.Equal(t, int32(8883), brokerContainer(t, sts).Ports[0].ContainerPort)
 
 	secret := &corev1.Secret{}
 	err := k8sClient.Get(testCtx, types.NamespacedName{Namespace: ns, Name: "does-not-exist"}, secret)

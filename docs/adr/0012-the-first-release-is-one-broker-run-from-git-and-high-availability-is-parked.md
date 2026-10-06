@@ -10,11 +10,30 @@ installation into a cluster managed by Flux.
 
 *Amended 2026-10-05:* D3 — HA comes last, after every other phase of the plan.
 
-**Not built**, apart from what already exists: R5 is met by `Mosquitto` alone today
-(`status.observedGeneration` and one `Ready` condition, written together by `updateStatus` /
-`setPhase` in [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)),
-and R6 is met by the one container the operator renders today (D4 lists where). The
-work is ordered in [the project plan](../planning/project-plan.md).
+**Built 2026-10-05:** D5 — `spec.podLabels` and `spec.podAnnotations`, merged under the
+operator's keys in `BuildStatefulSet` and observed reaching the pods on Kind
+(`TestE2E_PodMetadata_ReachesAndLeavesThePods`, which against the operator of `main` before this
+change failed with `no ready broker pod of e2e-pod-metadata/broker carries the label and the
+annotation of the CR`); and D4's guard — an API server's PodSecurity
+admission at `enforce=restricted` judges the pod of every shape the builder renders
+(`TestIntegration_PodSecurity_RestrictedAdmitsEveryShape`, envtest `1.29.0`, which enforces
+PodSecurity: the test's control pod is refused). Observed failing once with
+`allowPrivilegeEscalation: true` on the broker container: `pods "broker-0" is forbidden: violates
+PodSecurity "restricted:latest": allowPrivilegeEscalation != false (container "mosquitto" must set
+securityContext.allowPrivilegeEscalation=false)`. The `config-check` init container is the first
+container added since D4 and passes the same guard.
+
+**Built 2026-10-05 as well:** R1 and R2 (`MosquittoUser`, [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)),
+R3 for users (a new user, a changed password, a removed user and a changed ACL reach the running
+broker without a restart, [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)),
+R5 for both kinds (each reports `observedGeneration` and a `Ready` condition with a reason, a user
+applied before its broker or its Secret converges through the watches —
+`TestIntegration_Users_ConvergeWhenTheirReferencesArrive` — and one user's failure leaves the broker
+and the other users alone — `TestReconcile_EveryUserReason`), and R6 for every container now in a
+broker pod (D4). R3 for a renewed certificate is built as well
+([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10: a cert-manager
+renewal reaches a fresh handshake with no restart, observed on Kind). **Not built:** D1's
+migration, which is the owner's to run. The work is ordered in [the project plan](../planning/project-plan.md).
 
 ## Context
 
@@ -115,10 +134,12 @@ what it references. A failure of one user never makes the broker or another user
 
 - Not verified: that Flux's health checks evaluate a custom resource's `Ready` condition the way
   D6 assumes. This rests on Flux's documentation, not on a run in this repository.
-- Not verified: that a sidecar running as uid `1883` with every capability dropped can signal the
-  broker across `shareProcessNamespace` under PodSecurity `restricted`. It is the kernel's
-  documented rule, not measured in a pod.
-- Nothing in this repository has ever been observed running against a real cluster.
+- ~~Not verified: that a sidecar running as uid `1883` with every capability dropped can signal
+  the broker across `shareProcessNamespace` under PodSecurity `restricted`.~~ *(Measured 2026-10-05
+  on Kind, [broker-behaviour.md](../developer/broker-behaviour.md) M22: it can; a container under
+  another uid gets `Operation not permitted`.)*
+- Kind is the only cluster this operator has been observed on (the E2E tier, first observed
+  2026-10-05); D1's migration is the first production observation.
 
 ## References
 

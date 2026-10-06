@@ -2,8 +2,18 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** D9 — an update keeps the
-labels other writers added, and the pod-template annotations. **And (decided, matches the tree):**
+Accepted. Date: 2026-09-01. **Amended 2026-10-05:** D9 — an update keeps the labels other writers
+added, and the pod-template annotations. **D9 built 2026-10-05**: `common.MergeLabels` in
+`reconcileConfigMap` and `reconcileService`, `builder.MergeStatefulSet` in `reconcileStatefulSet`;
+`TestReconcile_UpdatesKeepForeignLabels` and
+`TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded` were observed failing against the
+wholesale assignments (`expected: "mqtt"`, `actual  : ""` for each of the four objects). Building
+it met an open question this record does not answer — what happens to a key of
+`spec.podLabels` or `spec.podAnnotations` that is deleted from the resource, which D9's accepted
+cost would leave on the pods forever. It is built on the recommended answer, pending the owner's
+decision in [the project plan](../planning/project-plan.md): the StatefulSet records the keys it
+applied (`mko.gtrfc.com/applied-pod-labels`, `mko.gtrfc.com/applied-pod-annotations`) and removes
+exactly the keys that left the spec. **And (decided, matches the tree):**
 D5's precise refusal message stays, with the existence oracle it gives a `Mosquitto` writer
 accepted by the owner and published on
 [docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-16). Today every update assigns the desired label map wholesale
@@ -46,11 +56,20 @@ itself — two `Namespaces().Delete` calls and the `deleteMosquitto` helper that
 under test. None of them is operator code, and none of them runs with the operator's
 ServiceAccount.
 
-**Not verified.** Nothing in this repository has ever run against a real cluster, so the
-central claim — *the garbage collector actually removes these objects* — is verified as
-**intent** (the references are set, and asserted to be set) and as **encoded expectation** (the
-E2E subtest below), never as an observation. The E2E leg that would observe it exists in the
-tree; I did not run it and no run of it is recorded anywhere here.
+**D5's message is pinned (2026-10-05).** `TestReconcile_RefusesForeignObjects` asserts the exact
+text for the ConfigMap, both Services and the StatefulSet — on the returned error and on the
+`Ready` condition — and was observed failing against the format string edited to `is not
+controlled by`: `expected: "ConfigMap messaging/broker-config exists and is not owned by this
+Mosquitto"`, `actual  : "ConfigMap messaging/broker-config exists and is not controlled by this
+Mosquitto"`, and the same for the other three kinds
+([ADR 0010](0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md)).
+
+**Observed (2026-10-05).** The central claim — *the garbage collector actually removes these
+objects* — was first observed on a local Kind cluster (kind `v0.32.0`, `kindest/node:v1.36.1`,
+`make e2e-local KIND_WORKERS=0`): the E2E subtest
+`TestE2E_Mosquitto_ProvisionsAReachableBroker/deleting_the_CR_removes_everything_it_owns`
+passed. The CI run of the same leg is named in
+[ADR 0004](0004-two-e2e-legs-and-no-version-matrix.md)'s `Status`.
 
 ## Context
 
@@ -196,7 +215,7 @@ clusters.
 the resource is the status subresource, which has its own rule carrying `update` alone.
 
 **D9 — An update keeps the labels other writers added, and the annotations they added to the pod
-template.** *(Added 2026-10-05; decided, not built.)*
+template.** *(Added 2026-10-05; built 2026-10-05.)*
 The operator's own keys are merged into the labels already on the object — its value wins for
 every key it sets, the selector labels and the version label included — and every other key is
 left as it is, on the managed objects' labels and on the StatefulSet's pod-template labels alike.

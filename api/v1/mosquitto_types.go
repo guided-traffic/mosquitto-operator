@@ -48,10 +48,54 @@ const (
 	PhaseFailed = "Failed"
 )
 
+// ConsumableLabel is the label a Secret carries to consent to being named by a
+// Mosquitto while the operator runs with --secret-security=true (ADR 0014 D10).
+// Whoever can label a Secret can write it, so the label is the consent of the
+// Secret's owner. The value must be ConsumableLabelValue.
+const ConsumableLabel = "mko.gtrfc.com/consumable"
+
+// ConsumableLabelValue is the only value of ConsumableLabel that counts as
+// consent.
+const ConsumableLabelValue = "true"
+
+// Reasons of the Ready condition when --secret-security=true refuses the TLS
+// Secret a Mosquitto names. The StatefulSet is left as it is.
+const (
+	// ReasonSecretNotFound: the named Secret does not exist, so its label cannot
+	// be checked.
+	ReasonSecretNotFound = "SecretNotFound"
+	// ReasonSecretNotConsumable: the named Secret does not carry
+	// ConsumableLabel with ConsumableLabelValue.
+	ReasonSecretNotConsumable = "SecretNotConsumable"
+)
+
 // ConditionTypeReady is the data-plane verdict: every broker pod the spec asks
 // for is ready. It is recomputed on every pass that reaches the status update,
 // and it is present on every Mosquitto once one pass has completed.
 const ConditionTypeReady = "Ready"
+
+// ConditionTypeUsers says whom the broker accepts: True with the number of
+// MosquittoUser objects rendered into its credentials, False when that number
+// is zero - the broker requires a login and then accepts nobody (ADR 0008
+// D13). It never affects Ready: a user's failure is the user's (ADR 0012 D6).
+const ConditionTypeUsers = "Users"
+
+// Reasons of the Users condition.
+const (
+	ReasonUsersAccepted = "UsersAccepted"
+	ReasonNoUsers       = "NoUsers"
+)
+
+// Reasons of a Mosquitto's Ready condition that refuse the whole pass.
+const (
+	// ReasonConfigDirectiveRefused: a line of spec.config names a directive
+	// outside the allowlist (ADR 0008 D15). Nothing is written.
+	ReasonConfigDirectiveRefused = "ConfigDirectiveRefused"
+	// ReasonNamespaceNotGranted: the operator runs with --secret-namespaces and
+	// this namespace is not among them, so it can neither read the users'
+	// Secrets nor write the broker's (ADR 0014 D7). Nothing is written.
+	ReasonNamespaceNotGranted = "NamespaceNotGranted"
+)
 
 // MosquittoSpec defines the desired state of a Mosquitto broker.
 //
@@ -78,19 +122,23 @@ type MosquittoSpec struct {
 	Replicas int32 `json:"replicas,omitempty"`
 
 	// Image is the Mosquitto container image. Empty means the operator default
-	// (see internal/builder for the pinned default).
+	// (see internal/builder for the pinned default). The supported broker line is
+	// 2.1.x: the generated configuration uses what 2.1 accepts, and an init
+	// container runs the image's own --test-config against it before the broker
+	// starts, so an image that does not understand a directive stops there with
+	// the broker's message. Nothing here checks the tag.
 	// +optional
 	Image string `json:"image,omitempty"`
 
 	// Config is extra mosquitto.conf content appended to the generated base
 	// configuration. It is written into the ConfigMap verbatim.
 	//
-	// The broker reads it after everything the operator generates, so a global
-	// option repeated here wins over the generated one, and a listener line here
-	// adds a listener the operator neither models nor exposes as a container or
-	// Service port. Bridges and extra log destinations are equally possible.
-	// Nothing here is validated: the broker sees it first at startup, so a
-	// rejected file is a CrashLoopBackOff rather than a rejected resource.
+	// Every non-blank, non-comment line must start with a tuning directive of
+	// the operator's allowlist; a line that does not makes the resource Failed
+	// with reason ConfigDirectiveRefused and writes nothing. The broker reads it
+	// after everything the operator generates, so a directive repeated here wins
+	// over the generated one. Values are checked by the broker's own
+	// --test-config in an init container, before the broker starts.
 	// +optional
 	Config string `json:"config,omitempty"`
 
@@ -119,6 +167,37 @@ type MosquittoSpec struct {
 	// directory. Empty means emptyDir.
 	// +optional
 	Storage *MosquittoStorage `json:"storage,omitempty"`
+
+	// PodLabels are added to the labels of every broker pod, merged under the
+	// operator's own keys: a key the operator sets (the selector labels, the
+	// version label) always wins. A key removed from this map is removed from the
+	// pods. A change rolls the pods.
+	// +optional
+	PodLabels map[string]string `json:"podLabels,omitempty"`
+
+	// PodAnnotations are added to the annotations of every broker pod, merged
+	// under the operator's own keys: the two hash annotations under
+	// mko.gtrfc.com/ always win. A key removed from this map is removed from the
+	// pods. A change rolls the pods.
+	// +optional
+	PodAnnotations map[string]string `json:"podAnnotations,omitempty"`
+
+	// Metrics adds an exporter container to every broker pod that serves the
+	// broker's $SYS statistics for Prometheus. Absent or disabled, the pod has
+	// no exporter. Turning it on or off rolls the pods.
+	// +optional
+	Metrics *MosquittoMetrics `json:"metrics,omitempty"`
+}
+
+// MosquittoMetrics configures the broker metrics exporter (ADR 0002).
+type MosquittoMetrics struct {
+	// Enabled adds the exporter: a container running the operator image's
+	// exporter binary, logged in to its own broker over localhost as the
+	// reserved user mko-exporter with read access to $SYS/# only, and serving
+	// plain HTTP /metrics on port 9234 of the pod. The endpoint has no
+	// authentication: whatever can reach the pod IP can read it.
+	// +optional
+	Enabled bool `json:"enabled,omitempty"`
 }
 
 // MosquittoTLS points at the TLS material the broker listener serves.
@@ -132,10 +211,11 @@ type MosquittoTLS struct {
 	//     The administrator owns the Certificate object; this operator has no
 	//     cert-manager dependency and installs nothing.
 	//
-	// The operator does not watch this Secret. Renewing or replacing the
-	// certificate changes the Secret, but running broker pods keep serving the
-	// material they started with, so a rotation only takes effect once the pods
-	// restart (for example kubectl rollout restart statefulset/<name>).
+	// The operator does not watch this Secret or read its data. A renewed or
+	// replaced certificate reaches the running broker pods without a restart:
+	// the reloader sidecar checks that tls.crt and tls.key form a valid pair
+	// and signals the broker to reload them. An invalid pair is never loaded,
+	// and while it is mounted no reload happens at all.
 	// +kubebuilder:validation:MinLength=1
 	SecretName string `json:"secretName"`
 }
@@ -159,8 +239,13 @@ type MosquittoStatus struct {
 	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 	// ObservedGeneration is the .metadata.generation the operator last acted on.
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Users is how many MosquittoUser objects are rendered into the broker's
+	// credentials. Zero means the broker accepts nobody.
+	// +optional
+	Users int32 `json:"users"`
 	// Conditions follows the standard Kubernetes condition convention.
-	// Type "Ready" is always present once a pass completed.
+	// Type "Ready" is always present once a pass completed; type "Users" once a
+	// pass rendered the users.
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
@@ -173,6 +258,7 @@ type MosquittoStatus struct {
 // +kubebuilder:printcolumn:name="Replicas",type="integer",JSONPath=".spec.replicas",description="Desired number of broker pods"
 // +kubebuilder:printcolumn:name="Ready",type="integer",JSONPath=".status.readyReplicas",description="Number of ready broker pods"
 // +kubebuilder:printcolumn:name="Phase",type="string",JSONPath=".status.phase",description="Current phase"
+// +kubebuilder:printcolumn:name="Users",type="integer",JSONPath=".status.users",description="Users the broker accepts"
 // +kubebuilder:printcolumn:name="Age",type="date",JSONPath=".metadata.creationTimestamp"
 
 // Mosquitto is the Schema for the mosquittoes API.
@@ -213,6 +299,11 @@ func (m *Mosquitto) AntiAffinityMode() string {
 // produce a listener with no certificate to serve.
 func (m *Mosquitto) IsTLSEnabled() bool {
 	return m.Spec.TLS != nil && m.Spec.TLS.SecretName != ""
+}
+
+// IsMetricsEnabled reports whether the broker pods carry the metrics exporter.
+func (m *Mosquitto) IsMetricsEnabled() bool {
+	return m.Spec.Metrics != nil && m.Spec.Metrics.Enabled
 }
 
 // IsStorageEnabled reports whether the persistence directory is backed by a

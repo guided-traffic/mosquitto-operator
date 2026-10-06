@@ -1,0 +1,24 @@
+# Turns on secretSecurity for the kustomize install path (docs/adr/0014 D10): a
+# Mosquitto may name only a TLS Secret, and a MosquittoUser only a credentials
+# Secret, labelled mko.gtrfc.com/consumable=true. The Helm chart's equivalent is
+# the value secretSecurity: true, and test/rbacparity checks that both render
+# the same authority and the same flag. It needs no rule of its own: the label is
+# read with the get the Secret grant already holds.
+#
+# Use it from an overlay of your own:
+#
+#   resources:
+#     - <this repository>/config/default
+#   components:
+#     - <this repository>/config/components/secret-security
+apiVersion: kustomize.config.k8s.io/v1alpha1
+kind: Component
+patches:
+  # Appended after the --secret-security=false of config/manager/manager.yaml;
+  # Go's flag package keeps the last occurrence.
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --secret-security=true

@@ -16,6 +16,24 @@ there (D4); the jobs that mint it are the two D4 names; and D8's `persist-creden
 scripts. The key does not expire and can mint tokens for every repository of the org
 ([docs/security/ci-and-supply-chain.md](../security/ci-and-supply-chain.md#credentials-in-ci)).
 
+**Amended 2026-10-05 — three statements corrected to the tree, no decision changed.** The E2E
+jobs were commented out of `release.yml` from 2026-09-01 until the change that wrote this
+amendment, which restored them; for that time the file held 13 jobs, not 15, and `e2e-tests` held
+no credential. The count of 18 below is true again. D5 claimed `renovate.yml` runs on `push` to
+`main`; it runs on `schedule` and `workflow_dispatch` only (the comment in that file explains why
+not on push). D8 claimed `npm ci --ignore-scripts` keeps lifecycle scripts from running "while the
+token sits in the environment"; the app token is in the environment of the Release step only, so
+no install step ever had it — `--ignore-scripts` keeps install-time code off the runner, and the
+Release step executes the installed tree with the token regardless. Both are marked in place.
+
+**Amended 2026-10-05 — the pipeline gave back authority it did not use.** `semantic-release` holds
+`permissions: contents: read` and nothing more, because every write it makes goes through the app
+token (D6); [`build.yml`](../../.github/workflows/build.yml) carries a top-level
+`permissions: contents: read` floor, so D7's gap is closed; `build` runs `docker logout` right
+after the push; and every third-party action outside `actions/*`, `docker/*`, `azure/*` and
+`helm/*` is pinned to a commit. The security page carries what is left
+([ci-and-supply-chain.md](../security/ci-and-supply-chain.md#h-9)).
+
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the comment block above
 `on:`, the `on:` block itself, the `concurrency` block, the top-level `permissions:`, every
@@ -117,7 +135,10 @@ by two steps in [`.github/workflows/build.yml`](../../.github/workflows/build.ym
 Hub login and the `docker/scout-action@v1` scan). `secrets.BOT_PAT` is referenced by
 `semantic-release` in [`.github/workflows/release.yml`](../../.github/workflows/release.yml)
 (the checkout `token:` and the `GITHUB_TOKEN` env of the Release step) and by
-[`.github/workflows/renovate.yml`](../../.github/workflows/renovate.yml). **None of those values
+[`.github/workflows/renovate.yml`](../../.github/workflows/renovate.yml). *(Amended: since
+2026-09-25 `APP_CLIENT_ID` and `APP_PRIVATE_KEY` reach the first step of those same two jobs
+only, `actions/create-github-app-token@v3`, and the token it mints takes `BOT_PAT`'s two places
+in `semantic-release` and the `token:` input of the Renovate step.)* **None of those values
 reaches a fork run.** Any future statement of this risk states it the same way: the runner
 executes untrusted code; it does not hand out a token.
 
@@ -125,8 +146,9 @@ executes untrusted code; it does not hand out a token.
 from a fork pull request, and the job that holds `BOT_PAT` is unreachable twice over.**
 [`.github/workflows/build.yml`](../../.github/workflows/build.yml) triggers only on
 `release: types: [published]`;
-[`.github/workflows/renovate.yml`](../../.github/workflows/renovate.yml) only on `schedule`,
-`push` to `main` and `workflow_dispatch`. Neither has a `pull_request` trigger, so neither runs
+[`.github/workflows/renovate.yml`](../../.github/workflows/renovate.yml) only on `schedule` and
+`workflow_dispatch` *(amended 2026-10-05: this said "`schedule`, `push` to `main` and
+`workflow_dispatch`"; there is no push trigger)*. Neither has a `pull_request` trigger, so neither runs
 for a fork PR at all. Inside `release.yml`, `semantic-release` carries
 `if: github.event_name == 'push' && github.ref == 'refs/heads/main'`, so it does not run on any
 pull request — fork or not — independently of the secret rule. **New workflows keep this shape:
@@ -140,20 +162,22 @@ block with a comment saying why.**
 | Job | `permissions:` | Why, per the file |
 |---|---|---|
 | `coverage-report` | `contents: read`, `pull-requests: write` | "Needed to comment on PRs" — the `marocchino/sticky-pull-request-comment@v3` step; `contents` is re-stated as `read` with the note that `semantic-release` commits the badge |
-| `semantic-release` | `contents: write`, `issues: write`, `pull-requests: write`, `id-token: write` | tag, release, and the coverage badge commit |
+| `semantic-release` | ~~`contents: write`, `issues: write`, `pull-requests: write`, `id-token: write`~~ *(amended 2026-10-05:)* `contents: read` — it raises nothing | ~~tag, release, and the coverage badge commit~~ every write goes through the app token, so the job token is the read floor only |
 
 [`.github/workflows/renovate.yml`](../../.github/workflows/renovate.yml) sets top-level
 `permissions: contents: read` and its single job raises nothing — it authenticates through
 `secrets.BOT_PAT`, not through the job token, so the job token has nothing to do.
 
 **D7 — In [`.github/workflows/build.yml`](../../.github/workflows/build.yml) the permission is
-declared per job, and every job added there declares its own.** That file carries **no top-level
-`permissions:` block**; `build` and `release-helm-gh` each declare `permissions: contents:
+declared per job, and every job added there declares its own.** *(Amended 2026-10-05: the file
+now also carries a top-level `permissions: contents: read` floor, so a job that forgets its block
+inherits read, not the repository default.)* ~~That file carries **no top-level
+`permissions:` block**;~~ `build` and `release-helm-gh` each declare `permissions: contents:
 write`, with a comment naming the reason — the SBOM upload to the release, and the commit to the
 `gh-pages` branch respectively. Both comments also state what is deliberately *not* granted:
 `build` touches no Pages, attestations or OIDC token, and `release-helm-gh` needs no
 `pages: write` because it publishes by committing, never by calling the Pages deployment API.
-The missing top-level floor is a real gap, recorded in Residual risks rather than papered over.
+~~The missing top-level floor is a real gap, recorded in Residual risks rather than papered over.~~
 
 **D8 — A job token is never left in a working tree that becomes a build context, and the job
 that holds `BOT_PAT` does not execute dependency lifecycle scripts.**
@@ -165,8 +189,11 @@ third are the jobs whose `Containerfile` does `COPY . .`, where a persisted toke
 comments say plainly that both halves are kept because either one alone is a single point of
 failure. On `semantic-release` the reason is different and is stated in the file: the checkout
 would otherwise write `BOT_PAT` into `.git/config` as an `http.extraheader` readable by every
-later step, and `npm ci --ignore-scripts` in that same job exists so the install of the release
-toolchain cannot run arbitrary lifecycle scripts while `BOT_PAT` sits in the environment.
+later step, and `npm ci --ignore-scripts` in that same job keeps the install of the release
+toolchain from running lifecycle scripts on the runner. ~~…while `BOT_PAT` sits in the
+environment.~~ *(Amended 2026-10-05: no install step has the token in its environment — only the
+Release step does, and it executes the installed tree with it. The flag keeps install-time code off
+the runner; it does not protect the token.)*
 
 ## Consequences
 
@@ -263,14 +290,9 @@ entirely, and that last one is the previous alternative under another name.
   `sudo` without a password prompt and drives a Docker daemon. If the runner account really has
   passwordless `sudo`, fork-authored code runs as root on the host. The steps are written
   assuming it works; nothing here confirms it does.
-* **[`.github/workflows/build.yml`](../../.github/workflows/build.yml) has no top-level
-  `permissions:` floor (open).** Both of its current jobs declare their own, so the file is
-  correct as it stands — but a job added without a `permissions:` block inherits the
-  repository-wide default, which may be read/write on all scopes.
-  [`.github/workflows/release.yml`](../../.github/workflows/release.yml) and
-  [`.github/workflows/renovate.yml`](../../.github/workflows/renovate.yml) do not have this
-  problem, because their top-level `contents: read` applies to any job that forgets. Adding the
-  same floor to `build.yml` is a one-line hardening item that has not been done.
+* ~~**[`.github/workflows/build.yml`](../../.github/workflows/build.yml) has no top-level
+  `permissions:` floor (open).**~~ *(Closed 2026-10-05 by the floor of D7's amendment; all three
+  workflows now carry `contents: read` at the top.)*
 * **`coverage-report` writes to pull requests with the default token (accepted).** It is the one
   job in `release.yml` that holds `pull-requests: write` while running on a PR, and its message
   interpolates step outputs and `env.COVERAGE_SUMMARY`, which is built from

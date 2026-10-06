@@ -12,8 +12,9 @@ reasonable person would assume the other way, and the decisions in
 follow from them.
 
 **Rig.** Single-container docker 28.4.0 on arm64, the pinned image, configuration and credential
-files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M18 on 2026-10-05. **None of it
-ran on a cluster.** The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
+files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M29 on 2026-10-05. **None of it
+ran on a cluster**, except M22 and M23, which were measured on Kind, and where a section says it
+was observed on Kind as well. The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
 to the parked high-availability research in [docs/planning/](../planning/), not to anything the
 operator builds.
 
@@ -150,6 +151,22 @@ Error: `persistence true` cannot be used with a persistence plugin.       # pers
 
 So it catches typos in directives and not mistakes in plugin wiring. An initContainer running it
 is worth having and is not a correctness gate.
+
+*Added 2026-10-05:* it checks the **values** of the directives it knows as well, not only their
+names. One line appended to the generated configuration at a time:
+
+```
+max_keepalive notanumber  ->  Error: 'max_keepalive' value not a number.           rc=3
+max_qos 7                 ->  Error: 'max_qos' must be between 0 and 2 inclusive.
+max_keepalive 70000       ->  Error: Invalid 'max_keepalive' value (70000).
+log_type nonsense         ->  Error: Invalid 'log_type' value (nonsense).
+retain_available maybe    ->  Error: Invalid 'retain_available' value (maybe).
+autosave_interval -5      ->  Configuration file is OK.
+```
+
+each with `Error found at <file>:<line>.` So behind the `spec.config` allowlist, which refuses an
+unknown directive before anything is written (M26), the `config-check` init container is where a
+bad value of an allowed directive surfaces — not every bad value, as the last line shows.
 
 ## M9 — Dynsec bootstraps itself when its file is missing
 
@@ -312,9 +329,251 @@ broker can verify `$7$`; that it **cannot** verify `$argon2id$` is inferred from
 login-tested. A statement that 2.1 "understands `$argon2id$`" does not hold for this build. Not measured: whether the plugin honours an iteration count other than 1000 written into
 the `$7$<iterations>$` field.
 
+## M19 — `--test-config` saves an empty database on exit, and reads no TLS file
+
+*Measured 2026-10-05*, `eclipse-mosquitto:2.1.2-alpine`, run as `1883:1883`. A configuration with
+`persistence true`, `persistence_location /mosquitto/data/` and one listener. A broker run first
+stored one retained message (`mosquitto_pub -t keep/me -m retained-v1 -r -q 1`), leaving a
+162-byte `mosquitto.db`. Then, on the same data directory:
+
+```
+mosquitto -c p.conf --test-config            (data mounted read-write)
+  -> Configuration file is OK.
+     mosquitto version 2.1.2 terminating
+     Saving in-memory database to /mosquitto/data//mosquitto.db.        rc=0
+  -> mosquitto.db is now 47 bytes
+broker restarted on that directory, mosquitto_sub -t keep/me -C 1 -W 3
+  -> Timed out                                                          rc=27
+
+mosquitto -c p.conf --test-config            (data mounted read-only, read-only root fs)
+  -> Configuration file is OK.
+     ...
+     Error saving in-memory database, unable to remove stale tmp file
+     /mosquitto/data//mosquitto.db.new, error Read-only file system      rc=0
+```
+
+**`--test-config` does not load the database, and it saves its empty in-memory one on exit.** On
+the real data volume that replaces every retained message and every persistent session with
+nothing, on every pod start. So the `config-check` init container
+([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D10) never mounts the
+data volume: it sees a throwaway `emptyDir`, `config-check-scratch`, at the persistence path, where
+the save succeeds and is discarded (`buildConfigCheckContainer` in
+[`internal/builder/statefulset.go`](../../internal/builder/statefulset.go), asserted by
+`TestBuildStatefulSet_ConfigCheckInitContainer`). A read-only mount would also protect the data but
+prints an error line into every start's log.
+
+The same run with `listener 8883`, `certfile /nonexistent/tls.crt` and `keyfile
+/nonexistent/tls.key` prints `Configuration file is OK.` with `rc=0`: **`--test-config` opens no
+TLS file**, so the init container needs no TLS mount. A misspelled directive fails with the line,
+as M8 recorded: `Error: Unknown configuration variable 'max_queued_mesages'.`, `Error found at
+/c/typo.conf:4.`, `rc=3` — and on Kind, from the init container of a broker pod, with the path of
+the mounted file (`TestE2E_ConfigCheck_StopsATypoBeforeTheBroker`).
+
+## M20 — A `$7$` hash rendered in Go is accepted, and has `mosquitto_passwd`'s exact shape
+
+*Measured 2026-10-05*, `eclipse-mosquitto:2.1.2-alpine`. What `mosquitto_passwd -c -b p alice
+s3cret` writes, taken apart:
+
+```
+alice:$7$1000$MvLfuap+p7Ti…6MjAEOE/8YJdvPPrG+Cm0vNu4RHg==$dqyaHMER…mbLYbhC/68qeA==
+alg 7 · iterations 1000 · salt 88 chars = 64 bytes · key 88 chars = 64 bytes
+PBKDF2-HMAC-SHA512(password, base64-decoded salt, 1000, 64) == base64-decoded key   -> True
+```
+
+So the format is `$7$<iterations>$<base64 salt>$<base64 key>`, standard base64 **with padding**,
+the salt used as its decoded bytes. `auth.HashPassword` in
+[`internal/auth/hash.go`](../../internal/auth/hash.go) writes exactly that from a 64-byte random
+salt; a line it rendered, `probe:$7$1000$I2q6…$+Htf…`, loaded by the `password-file` plugin on
+a listener with `listener_allow_anonymous false`:
+
+```
+mosquitto_pub -u probe -P go-rendered-pw   -> rc=0, … (p4, c1, k60, u'probe')
+mosquitto_pub -u probe -P wrong            -> Connection Refused: not authorised   rc=5
+```
+
+`auth.VerifyPassword` accepts `mosquitto_passwd`'s own line for `s3cret` and nothing else
+(`TestVerifyPassword_AcceptsTheBrokersOwnHash`); `TestHashPassword_HasTheShapeMosquittoPasswdWrites`
+pins the shape `^\$7\$1000\$[A-Za-z0-9+/]{86}==\$[A-Za-z0-9+/]{86}==$`.
+
+## M21 — Usernames with `@`, `.`, `_` and `-` work in both files
+
+*Measured 2026-10-05*, same rig, both plugins, `listener_allow_anonymous false`. Users
+`ha@home.lan` (`readwrite homeassistant/#`), `z2m.bridge` (`readwrite zigbee2mqtt/#`) and
+`Zigbee_2MQTT-x` (`read zigbee2mqtt/#`), created with `mosquitto_passwd -b`:
+
+| Probe | Result |
+|---|---|
+| `ha@home.lan` round trip on `homeassistant/x` | delivered |
+| `z2m.bridge` round trip on `zigbee2mqtt/x` | delivered |
+| `Zigbee_2MQTT-x` reads what `z2m.bridge` publishes | delivered |
+| `ha@home.lan` subscribes `zigbee2mqtt/#`, `z2m.bridge` publishes | `Timed out` — not delivered |
+| `z2m.bridge` listens, `ha@home.lan` publishes to `zigbee2mqtt/w` | publish `rc=0`, not delivered |
+| `ha@home.lan` with a wrong password | `Connection Refused: not authorised`, `rc=5` |
+
+Both parsers take every character of the username allowlist of
+[ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D5
+that is not alphanumeric, and the ACL is enforced per user under those names. A publish the ACL
+denies is dropped silently: the client's `rc` is `0`.
+
+## M22 — A sidecar as uid `1883` without capabilities signals the broker under `restricted`
+
+*Measured 2026-10-05 on Kind* (`kindest/node:v1.36.1`), in a namespace labelled
+`pod-security.kubernetes.io/enforce=restricted`. One pod, `shareProcessNamespace: true`, pod
+`runAsUser: 1883`, every container `allowPrivilegeEscalation: false`, `readOnlyRootFilesystem`,
+`capabilities: drop: [ALL]`, seccomp `RuntimeDefault` — admitted. The broker container runs
+`/usr/sbin/mosquitto`; a second container of the same image:
+
+```
+id                                   -> uid=1883(mosquitto) gid=1883(mosquitto)
+grep ^Cap /proc/self/status          -> CapPrm/CapEff/CapBnd 0000000000000000
+ls /proc                             -> 1 pause, 7 mosquitto (/usr/sbin/mosquitto -c …), …
+kill -HUP 7                          -> rc=0;  broker log: Reloading config.
+```
+
+A third container with `runAsUser: 1000` and the same group: `kill -HUP 7` → `can't kill pid 7:
+Operation not permitted`, `rc=1`. No container restarted. So the signal needs the same uid and no
+capability, exactly as ADR 0014 D4 assumed; the broker is findable as the process whose
+`/proc/<pid>/comm` is `mosquitto`, and the pod's PID 1 is the `pause` container. (`pgrep -x
+mosquitto` from busybox returned nothing in a script that ran 8 s after start while `pgrep -l
+mosquitto` found PID 7 seconds later; the reloader is Go and reads `/proc` itself.)
+
+## M23 — The kubelet swaps a Secret volume in one step, about a minute after the change
+
+*Measured 2026-10-05 on Kind* (`kindest/node:v1.36.1`, kubelet defaults). A pod mounting a Secret
+with the keys `tls.crt` and `tls.key` printed both files and the target of `..data` whenever the
+triple changed, polling every 0.2 s. The Secret was replaced three times with both keys changed:
+
+| Update | Seen in the pod after |
+|---|---|
+| `v0` → `v1` | 75 s |
+| `v1` → `v2` | 84 s |
+| `v2` → `v3` | 69 s |
+
+Each change appeared as one line with **both** new values and a new `..data` target
+(`..2026_10_05_20_32_56.2733198498`, …) — never one file new and the other old. That is the
+kubelet's atomic writer: the files are symlinks through `..data`, which is swapped in one
+`rename`. A reader that reads the two files one after the other can still straddle a swap; reading
+both through one resolved `..data` target cannot. The latency is the kubelet's sync period plus
+its cache, not something the operator influences, and it is what revocation and a renewed
+certificate wait for (ADR 0014 D8). Measured on one idle node; a loaded kubelet is not measured.
+
+## M24 — A mismatched TLS pair at start stops the broker
+
+*Measured 2026-10-05*, `eclipse-mosquitto:2.1.2-alpine`, two self-signed RSA-2048 pairs `A` and
+`B` (`openssl req -x509 -newkey rsa:2048`). `listener 8883` with `certfile` from `A`:
+
+```
+keyfile from A  -> mosquitto version 2.1.2 running; mosquitto_pub over TLS rc=0
+keyfile from B  -> Error: Unable to load server key file "/tls/keyB.pem". Check keyfile.
+                   OpenSSL Error [0]: error:05800074:x509 certificate routines::key values mismatch
+                   mosquitto version 2.1.2 terminating                      exit 1
+```
+
+So at start a mismatched pair is fatal — a pod would crash-loop — while on a reload the process
+lives and the listener breaks (M12). `--test-config` does not open the files (M19), so the
+`config-check` init container does not catch it either. Only a check of the pair before the
+broker reads it — the reloader's, ADR 0001 D10, built as `checkTLS` in `internal/reloader` —
+protects a running broker; a pod that starts with a bad pair fails visibly.
+
+## M25 — A 2.0 image refuses the generated configuration at `--test-config`, with the line
+
+*Measured 2026-10-05*, the configuration the user phase generates — persistence, both
+`plugin_load` lines with their `plugin_opt_*`, `listener 1883`, `listener_allow_anonymous false`,
+`use_username_as_clientid true`, both `plugin_use` — through `--test-config`:
+
+```
+eclipse-mosquitto:2.0.22        -> Error: Unknown configuration variable "plugin_load".
+                                   Error found at /c/mosquitto.conf:4.                 rc=3
+eclipse-mosquitto:2.1.2-alpine  -> Configuration file is OK.                          rc=0
+```
+
+So a `spec.image` on the 2.0 line stops in the `config-check` init container with the broker's
+own message and the line, as ADR 0007 D10 expected. 2.0 quotes the directive with `"`, 2.1 with
+`'`.
+
+## M26 — The `spec.config` allowlist, from `mosquitto.conf(5)` of 2.1.2
+
+*Taken 2026-10-05* from `man/mosquitto.conf.5.xml` at the upstream tag `v2.1.2`
+(`gh api repos/eclipse-mosquitto/mosquitto/contents/man/mosquitto.conf.5.xml?ref=v2.1.2`). The
+page documents 130 directives: 46 general, 21 listener, 16 listener TLS, 1 PSK, 33 bridge and 13
+bridge TLS. `plugin_load` and `plugin_use` are not among them although the binary accepts them
+(M7). The allowlist of [ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+D15 takes the tuning directives only — limits, queues, keepalive, persistence intervals, log
+types:
+
+```
+autosave_interval  autosave_on_changes  connection_messages  global_max_clients
+global_max_connections  log_timestamp  log_timestamp_format  log_type  max_connections
+max_inflight_bytes  max_inflight_messages  max_keepalive  max_packet_size  max_qos
+max_queued_bytes  max_queued_messages  max_topic_alias  max_topic_alias_broker  memory_limit
+persistent_client_expiration  queue_qos0_messages  retain_available  retain_expiry_interval
+set_tcp_nodelay  sys_interval  upgrade_outgoing_qos
+```
+
+Each of the 26, appended with a plausible value after the generated listener block, passes
+`--test-config` of the pinned image with `Configuration file is OK.`. `max_connections`,
+`max_qos`, `max_topic_alias` and `max_topic_alias_broker` are listener options and therefore
+apply to the generated listener, because `spec.config` follows it. Left out on purpose:
+`message_size_limit` (the image answers ``Note: It is recommended to replace
+`message_size_limit` with `max_packet_size`.``), `allow_duplicate_messages` (deprecated), every
+file and path directive (`persistence*`, `pid_file`, `log_dest`, `log_facility`, `include_dir`,
+`http_dir`, `psk_file`, `user`), every listener, protocol, TLS and bridge directive, everything
+that touches authentication or client identity (`*allow_anonymous`, `password_file`,
+`acl_file`, `plugin*`, `global_plugin`, `per_listener_settings`, `use_*_as_*`,
+`auth_plugin_deny_special_chars`, `allow_zero_length_clientid`, `auto_id_prefix`,
+`clientid_prefixes`, `check_retain_source`, `enable_control_api`), and `mount_point`, which
+rewrites every topic of the listener under the ACLs.
+
+## M27 — An ACL topic may contain spaces; the rest of the line is the topic
+
+*Measured 2026-10-05*, same rig, both plugins. A user with the single entry
+`topic readwrite home/living room/#`:
+
+```
+subscribe "home/living room/#", publish "home/living room/lamp"  -> delivered
+subscribe "home/living", publish "home/living"                   -> Timed out
+```
+
+The `acl-file` parser takes everything after the access word as the topic, spaces included, and
+does not stop at the first space. So the renderer refuses only what changes the meaning of a line —
+a line break, any other control character, leading or trailing whitespace — and lets a topic with an
+inner space through (`auth.topicProblem` in [`internal/auth/render.go`](../../internal/auth/render.go)).
+
+## M28 — The `$SYS` topics the exporter maps, and what they carry
+
+*Measured 2026-10-05*, `eclipse-mosquitto:2.1.2-alpine`, docker 28.4.0, arm64, the three-line
+configuration of [ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) (`log_dest
+stdout`, `listener 1883`, `allow_anonymous true`), `mosquitto_sub -v -t '$SYS/#' -W 22` from the
+same container. 55 distinct topics, the same count ADR 0002 recorded; one name carries a space,
+`$SYS/broker/retained messages/count`. Payloads are decimal integers, except:
+
+```
+$SYS/broker/load/bytes/received/1min 19.35          # every load/… topic: a decimal fraction
+$SYS/broker/uptime 21 seconds                       # a number and a unit
+$SYS/broker/version mosquitto version 2.1.2         # a string
+```
+
+The 24 `load/…` topics are `{bytes,messages,publish}/{received,sent}`, `publish/dropped`,
+`connections` and `sockets`, each over `1min`, `5min` and `15min`. Every one of the 55 is
+retained: a subscriber started 12 seconds after the broker received all 55 within one second, and
+`mosquitto_sub --retained-only` the same 55. A new subscription therefore sees every value at once,
+without waiting for `sys_interval`. The exporter's mapping table
+is this set ([`internal/exporter/mapping.go`](../../internal/exporter/mapping.go)), plus
+`clients/maximum`, which ADR 0002 measured on 2.0.22 only.
+
+## M29 — `max_packet_size` defaults to 2,000,000 bytes, and a later line wins
+
+*Measured 2026-10-05*, same rig. With no `max_packet_size` line, a QoS 0 publish of a 1,999,000-byte
+payload is accepted and one of 2,000,100 bytes is refused — the broker logs `disconnected: oversize
+packet`, while `mosquitto_pub` still exits `0`. A file with `sys_interval 10` and
+`max_packet_size 2000000` early and `sys_interval 2` and `max_packet_size 3100000` after the
+listener: `$SYS/broker/uptime` arrives every 2 seconds and a 3,000,000-byte payload is accepted.
+So the generated file can state both defaults (ADR 0002 D7), and a `spec.config` line, appended
+after it, still overrides them.
+
 ## Not measured
 
-- Anything on a real cluster. All of the above is single-container docker.
+- Anything on a production cluster. M22 and M23 ran on Kind; the rest is single-container docker.
 - Bridge behaviour, loop handling, retained-message propagation across a bridge.
 - `persist-sqlite` under load or crash.
 - Whether SIGHUP reload is atomic with respect to a half-written file. The design avoids the

@@ -19,6 +19,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -48,6 +49,13 @@ func TestE2E_Mosquitto_ProvisionsAReachableBroker(t *testing.T) {
 
 	name := "broker"
 	image := testimages.Default()
+
+	// The broker requires a login (ADR 0008 D13). The user exists before the
+	// broker, so the first start of the pod already carries it and the probe
+	// below needs no wait for a reload.
+	tc.createCredentials(t, ns, "probe-mqtt", "probe", "probe-pw")
+	tc.createUser(t, ns, "probe", name, "probe-mqtt", acl("e2e/#", "readwrite"))
+
 	t.Logf("Creating a single-replica Mosquitto CR on %s", image)
 	tc.createMosquitto(t, ns, buildMosquittoObject(name, ns, map[string]interface{}{
 		"replicas": int64(1),
@@ -82,8 +90,7 @@ func TestE2E_Mosquitto_ProvisionsAReachableBroker(t *testing.T) {
 		assertLabelExists(t, sts.Labels, instanceLabel, name)
 		assertLabelExists(t, sts.Labels, managedByLabel, managedByLabelValue)
 
-		require.Len(t, sts.Spec.Template.Spec.Containers, 1, "the broker pod runs one container")
-		container := sts.Spec.Template.Spec.Containers[0]
+		container := brokerContainer(t, sts)
 		assert.Equal(t, image, container.Image)
 		require.Len(t, container.Ports, 1, "without TLS there is exactly one listener")
 		assert.Equal(t, "mqtt", container.Ports[0].Name)
@@ -96,6 +103,8 @@ func TestE2E_Mosquitto_ProvisionsAReachableBroker(t *testing.T) {
 		assert.Contains(t, conf, "listener 1883")
 		assert.Contains(t, conf, "persistence_location /mosquitto/data/")
 		assert.NotContains(t, conf, "certfile", "no TLS was requested")
+		assert.Contains(t, conf, "listener_allow_anonymous false")
+		assert.Contains(t, conf, "use_username_as_clientid true")
 	})
 
 	t.Run("both Services expose the broker", func(t *testing.T) {
@@ -120,11 +129,11 @@ func TestE2E_Mosquitto_ProvisionsAReachableBroker(t *testing.T) {
 		// need no overlap in time -- one kubectl exec each, no shell, no
 		// background job.
 		tc.podExec(t, ns, pod,
-			"mosquitto_pub", "-h", "127.0.0.1", "-p", "1883",
+			"mosquitto_pub", "-h", "127.0.0.1", "-p", "1883", "-u", "probe", "-P", "probe-pw",
 			"-q", "1", "-r", "-t", probeTopic, "-m", payload)
 
 		received := tc.podExec(t, ns, pod,
-			"mosquitto_sub", "-h", "127.0.0.1", "-p", "1883",
+			"mosquitto_sub", "-h", "127.0.0.1", "-p", "1883", "-u", "probe", "-P", "probe-pw",
 			"-q", "1", "-t", probeTopic, "-C", "1", "-W", "15")
 
 		assert.Equal(t, payload, received,
@@ -157,9 +166,25 @@ func (tc *testClients) waitForOwnedObjectsGone(t *testing.T, namespace, name str
 					return false, nil
 				}
 			}
+			if _, err := tc.kube.CoreV1().Secrets(namespace).Get(ctx, name+"-auth", metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+				return false, nil
+			}
 			_, err = tc.kube.CoreV1().ConfigMaps(namespace).Get(ctx, name+"-config", metav1.GetOptions{})
 			return apierrors.IsNotFound(err), nil
 		})
 	require.NoError(t, err,
 		"the objects owned by Mosquitto %s/%s were not garbage collected", namespace, name)
+}
+
+// brokerContainer returns the broker container of a broker StatefulSet's pod
+// template; the template also carries the reloader sidecar.
+func brokerContainer(t *testing.T, sts *appsv1.StatefulSet) corev1.Container {
+	t.Helper()
+	for _, c := range sts.Spec.Template.Spec.Containers {
+		if c.Name == "mosquitto" {
+			return c
+		}
+	}
+	require.Fail(t, "no broker container", "%s/%s", sts.Namespace, sts.Name)
+	return corev1.Container{}
 }

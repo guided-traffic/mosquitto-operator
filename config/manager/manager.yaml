@@ -42,6 +42,16 @@ spec:
             # without ever running the reconciler - it does not crash, so the
             # symptom is a Ready pod that reconciles nothing.
             - --leader-elect
+            # docs/adr/0014 D10: false lets a Mosquitto name any Secret of its
+            # namespace. config/components/secret-security appends
+            # --secret-security=true (the last occurrence wins) together with the
+            # get-on-secrets rule it needs.
+            - --secret-security=false
+            # auth-init and the reloader in every broker pod run this operator's
+            # own image (docs/adr/0014 D6). config/default copies the image of
+            # this container into the value after "=", so `kustomize edit set
+            # image` moves both; keep this entry at index 2 of args.
+            - --reloader-image=controller:latest
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true

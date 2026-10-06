@@ -5,6 +5,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"io"
 	"reflect"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -16,12 +17,9 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
-	ctrlbuilder "sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	ctrlcontroller "sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	mkov1 "github.com/guided-traffic/mosquitto-operator/api/v1"
 	"github.com/guided-traffic/mosquitto-operator/internal/builder"
@@ -44,6 +42,28 @@ type MosquittoReconciler struct {
 	// MaxConcurrentReconciles is how many Mosquitto resources are reconciled at
 	// the same time. Zero means DefaultMaxConcurrentReconciles.
 	MaxConcurrentReconciles int
+
+	// SecretSecurity is --secret-security: a TLS Secret is mounted only when it
+	// carries mkov1.ConsumableLabel (ADR 0014 D10).
+	SecretSecurity bool
+
+	// APIReader is the manager's uncached reader. Every read of Secret data goes
+	// through it: the manager caches Secrets with their data stripped
+	// (StripSecret), so the cache holds no credential, and a Secret's data is
+	// fetched only when a pass needs it. Nil falls back to Client.
+	APIReader client.Reader
+
+	// ReloaderImage is --reloader-image, the operator's own image, which runs
+	// auth-init and the reloader in every broker pod (ADR 0014 D6).
+	ReloaderImage string
+
+	// SecretNamespaces is --secret-namespaces: empty means the operator may read
+	// and write Secrets in every namespace; otherwise only in these, and a
+	// Mosquitto elsewhere is refused (ADR 0014 D7).
+	SecretNamespaces []string
+
+	// Random is the source of password salts; nil means crypto/rand.
+	Random io.Reader
 }
 
 // These markers are the only source of the ClusterRole, and the ClusterRole is
@@ -76,6 +96,18 @@ type MosquittoReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update
 // +kubebuilder:rbac:groups=apps,resources=statefulsets,verbs=get;list;watch;create;update
+// The users are read and get their status written; the reconciler never writes
+// a MosquittoUser's spec (ADR 0006 D9).
+// +kubebuilder:rbac:groups=mko.gtrfc.com,resources=mosquittousers,verbs=get;list;watch
+// +kubebuilder:rbac:groups=mko.gtrfc.com,resources=mosquittousers/status,verbs=update
+// Secrets: get, list and watch read the users' credentials Secrets and wake a
+// pass when one changes - the cache keeps their metadata only, the data is read
+// with get when a pass needs it; create and update write the one rendered
+// Secret <name>-auth per broker (ADR 0014 D2, D7). Still no delete and no patch:
+// <name>-auth is collected with its Mosquitto. With --secret-namespaces the
+// install path grants this rule per namespace instead, and the chart and the
+// kustomize component remove it from the ClusterRole.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update
 
 // Reconcile handles one reconciliation request for a Mosquitto resource.
 func (r *MosquittoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -85,7 +117,7 @@ func (r *MosquittoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	if err := r.Get(ctx, req.NamespacedName, m); err != nil {
 		if apierrors.IsNotFound(err) {
 			logger.Info("Mosquitto resource not found, probably deleted")
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, r.reportUsersOfMissingBroker(ctx, req.NamespacedName)
 		}
 		return ctrl.Result{}, err
 	}
@@ -98,7 +130,12 @@ func (r *MosquittoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileResources(ctx, m); err != nil {
+	refused, err := r.refusePass(ctx, m)
+	accepted := 0
+	if err == nil && !refused {
+		accepted, err = r.reconcileResources(ctx, m)
+	}
+	if err != nil {
 		// The failure is reported on the resource before it is returned, so a
 		// rejected write is visible with kubectl get instead of only in the
 		// operator log. The error is still returned so the work queue backs the
@@ -109,24 +146,41 @@ func (r *MosquittoReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		return ctrl.Result{}, err
 	}
+	if refused {
+		return ctrl.Result{}, r.persistStatus(ctx, m)
+	}
 
+	setUsersCondition(m, accepted)
 	return ctrl.Result{}, r.updateStatus(ctx, m)
 }
 
-// reconcileResources writes every object the Mosquitto owns, in dependency
-// order: the pods mount the ConfigMap and are addressed through the headless
-// Service, so both exist before the StatefulSet does.
-func (r *MosquittoReconciler) reconcileResources(ctx context.Context, m *mkov1.Mosquitto) error {
+// reconcileResources renders the users and writes every object the Mosquitto
+// owns, in dependency order: the pods mount <name>-auth and the ConfigMap and
+// are addressed through the headless Service, so all of those exist before the
+// StatefulSet does. The users' statuses are written once their credentials are,
+// so Ready on a user means it is in <name>-auth. It returns how many users the
+// broker accepts.
+func (r *MosquittoReconciler) reconcileResources(ctx context.Context, m *mkov1.Mosquitto) (int, error) {
+	pass, err := r.renderUsers(ctx, m)
+	if err != nil {
+		return 0, err
+	}
+	if err := r.reconcileAuthSecret(ctx, m, pass.data); err != nil {
+		return 0, err
+	}
+	if err := r.writeUserStatuses(ctx, pass); err != nil {
+		return 0, err
+	}
 	if err := r.reconcileConfigMap(ctx, m); err != nil {
-		return err
+		return 0, err
 	}
 	if err := r.reconcileService(ctx, m, builder.BuildHeadlessService(m)); err != nil {
-		return err
+		return 0, err
 	}
 	if err := r.reconcileService(ctx, m, builder.BuildClientService(m)); err != nil {
-		return err
+		return 0, err
 	}
-	return r.reconcileStatefulSet(ctx, m)
+	return pass.accepted, r.reconcileStatefulSet(ctx, m)
 }
 
 // reconcileConfigMap ensures the ConfigMap exists and carries the generated
@@ -159,7 +213,8 @@ func (r *MosquittoReconciler) reconcileConfigMap(ctx context.Context, m *mkov1.M
 
 	logger.Info("Updating ConfigMap", "name", desired.Name)
 	current.Data = desired.Data
-	current.Labels = desired.Labels
+	// Merged, not assigned: labels other writers added stay (ADR 0009 D9).
+	current.Labels = common.MergeLabels(current.Labels, desired.Labels)
 	return r.Update(ctx, current)
 }
 
@@ -199,20 +254,22 @@ func (r *MosquittoReconciler) reconcileService(ctx context.Context, m *mkov1.Mos
 	logger.Info("Updating Service", "name", desired.Name)
 	current.Spec.Ports = desired.Spec.Ports
 	current.Spec.Selector = desired.Spec.Selector
-	current.Labels = desired.Labels
+	// Merged, not assigned: labels other writers added stay (ADR 0009 D9).
+	current.Labels = common.MergeLabels(current.Labels, desired.Labels)
 	return r.Update(ctx, current)
 }
 
 // reconcileStatefulSet ensures the broker StatefulSet exists and matches the spec.
 //
-// Only the replica count, the pod template and the labels are written. The
+// Only the replica count, the pod template, the labels and the annotations are
+// written, merged rather than assigned (builder.MergeStatefulSet). The
 // volumeClaimTemplates are left alone on purpose: they are immutable, so writing
 // them back would either be a no-op or a rejected request, and a changed
 // spec.storage needs the StatefulSet recreated by hand.
 func (r *MosquittoReconciler) reconcileStatefulSet(ctx context.Context, m *mkov1.Mosquitto) error {
 	logger := log.FromContext(ctx)
 
-	desired, err := builder.BuildStatefulSet(m)
+	desired, err := builder.BuildStatefulSet(m, builder.PodOptions{ReloaderImage: r.ReloaderImage})
 	if err != nil {
 		return err
 	}
@@ -239,9 +296,7 @@ func (r *MosquittoReconciler) reconcileStatefulSet(ctx context.Context, m *mkov1
 	}
 
 	logger.Info("Updating StatefulSet", "name", desired.Name)
-	current.Spec.Replicas = desired.Spec.Replicas
-	current.Spec.Template = desired.Spec.Template
-	current.Labels = desired.Labels
+	builder.MergeStatefulSet(current, desired)
 	return r.Update(ctx, current)
 }
 
@@ -319,7 +374,27 @@ func statusUnchanged(prev, curr *mkov1.MosquittoStatus) bool {
 	return prev.Phase == curr.Phase &&
 		prev.ReadyReplicas == curr.ReadyReplicas &&
 		prev.ObservedGeneration == curr.ObservedGeneration &&
+		prev.Users == curr.Users &&
 		reflect.DeepEqual(prev.Conditions, curr.Conditions)
+}
+
+// setUsersCondition records how many users the broker accepts, and says so when
+// it accepts nobody (ADR 0008 D13). It never touches Ready (ADR 0012 D6).
+func setUsersCondition(m *mkov1.Mosquitto, accepted int) {
+	m.Status.Users = int32(accepted) // #nosec G115 -- bounded by the users of one namespace
+	condition := metav1.Condition{
+		Type:               mkov1.ConditionTypeUsers,
+		Status:             metav1.ConditionTrue,
+		ObservedGeneration: m.Generation,
+		Reason:             mkov1.ReasonUsersAccepted,
+		Message:            fmt.Sprintf("%d users accepted", accepted),
+	}
+	if accepted == 0 {
+		condition.Status = metav1.ConditionFalse
+		condition.Reason = mkov1.ReasonNoUsers
+		condition.Message = "the broker requires a login and accepts nobody: no MosquittoUser bound to it is accepted"
+	}
+	meta.SetStatusCondition(&m.Status.Conditions, condition)
 }
 
 // ensureOwned refuses to write an object this Mosquitto does not control.
@@ -333,31 +408,4 @@ func ensureOwned(obj metav1.Object, m *mkov1.Mosquitto, kind string) error {
 		return nil
 	}
 	return fmt.Errorf("%s %s/%s exists and is not owned by this Mosquitto", kind, obj.GetNamespace(), obj.GetName())
-}
-
-// SetupWithManager registers the controller with the manager.
-//
-// GenerationChangedPredicate keeps the operator's own status writes from waking
-// it again; changes to the managed objects still arrive through the Owns
-// watches, which is how a StatefulSet's readiness reaches status.
-func (r *MosquittoReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
-		WithOptions(ctrlcontroller.Options{
-			MaxConcurrentReconciles: maxConcurrentReconciles(r.MaxConcurrentReconciles),
-		}).
-		For(&mkov1.Mosquitto{}, ctrlbuilder.WithPredicates(predicate.GenerationChangedPredicate{})).
-		Owns(&appsv1.StatefulSet{}).
-		Owns(&corev1.ConfigMap{}).
-		Owns(&corev1.Service{}).
-		Complete(r)
-}
-
-// maxConcurrentReconciles resolves the configured worker count. A reconciler
-// built without the field — every test, and any caller that forgets it — would
-// otherwise inherit controller-runtime's single worker.
-func maxConcurrentReconciles(configured int) int {
-	if configured <= 0 {
-		return DefaultMaxConcurrentReconciles
-	}
-	return configured
 }

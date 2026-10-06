@@ -42,6 +42,12 @@ spec:
             - --metrics-bind-address={{ if .Values.metrics.enabled }}:8080{{ else }}0{{ end }}
             - --health-probe-bind-address=:8081
             - --max-concurrent-reconciles={{ .Values.maxConcurrentReconciles }}
+            - --secret-security={{ .Values.secretSecurity }}
+            # auth-init and the reloader in every broker pod run this very image.
+            - --reloader-image={{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}
+            {{- if eq .Values.secretAccess.mode "namespaces" }}
+            - --secret-namespaces={{ join "," .Values.secretAccess.namespaces }}
+            {{- end }}
             {{- if .Values.leaderElection.enabled }}
             - --leader-elect
             {{- end }}

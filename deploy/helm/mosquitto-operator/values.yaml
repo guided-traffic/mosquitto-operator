@@ -44,9 +44,43 @@ affinity: {}
 # queue never runs two passes for one key.
 maxConcurrentReconciles: 4
 
+# Where the operator may read and write Secrets (docs/adr/0014 D7). It reads the
+# credentials Secrets the MosquittoUser objects name and writes <name>-auth, one
+# rendered Secret per broker; it caches Secrets without their data.
+#
+# mode "all" (the default, accepted by the owner after the risk was stated):
+# get, list, watch, create and update on Secrets in EVERY namespace, through the
+# ClusterRole. A compromised operator can then read and overwrite every Secret of
+# the cluster, GitOps deploy keys and the SOPS key included; NOTES.txt prints
+# this after the install.
+#
+# mode "namespaces": the same verbs as a Role and RoleBinding in each namespace
+# listed below, and none in the ClusterRole. The operator caches Secrets in those
+# namespaces only and refuses a Mosquitto elsewhere (reason NamespaceNotGranted).
+secretAccess:
+  mode: all
+  namespaces: []
+
+# Which Secret a Mosquitto may name as spec.tls.secretName (docs/adr/0014 D10).
+#
+# false (the default): any Secret of the Mosquitto's namespace. The trust rule
+# that follows, stated plainly: whoever may create or update a Mosquitto in a
+# namespace may read every Secret of that namespace, because the author also
+# chooses the image that runs with the Secret mounted. Grant mosquittoes no more
+# widely than Secrets, or turn this on.
+#
+# true: only a Secret labelled mko.gtrfc.com/consumable=true; whoever may label
+# a Secret may write it, so the label is its owner's consent. A Mosquitto naming
+# another Secret reports Ready=False with reason SecretNotConsumable (or
+# SecretNotFound) and its StatefulSet is left as it is, and a MosquittoUser
+# naming one reports SecretNotConsumable. The operator never reads the TLS data,
+# and the data of a credentials Secret only after the label check.
+secretSecurity: false
+
 # Leader election ensures only one operator instance is active at a time. It is
-# also what the coordination.k8s.io/leases rule in the ClusterRole is for - that
-# rule is rendered only while this is true.
+# also what the coordination.k8s.io/leases rule is for, which lives in the
+# namespaced Role of templates/leader-election.yaml, not in the ClusterRole -
+# that Role and its binding are rendered only while this is true.
 leaderElection:
   enabled: true
 
@@ -78,10 +112,10 @@ metrics:
 #      administrator owns the Certificate object; this chart has no cert-manager
 #      dependency and installs nothing.
 #
-# Security note: the operator does not watch that Secret. Renewing or replacing
-# the certificate changes the Secret, but the running broker pods keep serving
-# the material they started with - a rotation only takes effect once the pods
-# restart (for example `kubectl rollout restart statefulset/<name>`).
+# The operator does not watch that Secret. A renewed or replaced certificate
+# reaches the running broker pods without a restart: the reloader sidecar checks
+# that tls.crt and tls.key form a valid pair and signals the broker. An invalid
+# pair is never loaded, and while it is mounted no reload happens at all.
 
 # Mosquitto resources support spec.antiAffinity (default: off - upgrades change
 # nothing). "soft" spreads the broker pods over kubernetes.io/hostname as a

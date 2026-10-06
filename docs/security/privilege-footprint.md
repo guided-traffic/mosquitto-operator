@@ -25,30 +25,42 @@ and writes [`config/rbac/role.yaml`](../../config/rbac/role.yaml). The chart's
 hand. `make verify-rbac-parity` renders both and compares them as
 `(kind, apiGroup, resource) → verb set`
 ([`test/rbacparity/rbac_parity_test.go`](../../test/rbacparity/rbac_parity_test.go)), and the
-`generated-manifests` job runs it on every push to `main` and every pull request. Run for this page
-on 2026-10-05 (helm v3.21.3 and kustomize v5.8.1 locally; CI installs helm v4.3.0): **PASS,
-"compared 8 grants across both install paths".**
+`generated-manifests` job runs it on every push to `main` and every pull request. It renders three
+settings — the defaults, `secretSecurity: true` with the component
+`config/components/secret-security`, and `secretAccess.mode: namespaces` with
+`config/components/secret-namespaces` — and also checks that `--secret-security`,
+`--secret-namespaces` and `--reloader-image` reach the manager with the same values on both paths.
+Run for this page on 2026-10-05: **PASS, "compared 11 grants" for each of the three.**
 
 | Object | Helm, release `mosquitto-operator` | kustomize, `config/default` |
 |---|---|---|
 | ServiceAccount | `mosquitto-operator` (release namespace) | `mosquitto-operator-mosquitto-operator` (`mosquitto-operator-system`) |
 | ClusterRole and ClusterRoleBinding | `mosquitto-operator` | `mosquitto-operator-mosquitto-operator-role`, `mosquitto-operator-mosquitto-operator` |
 | Role and RoleBinding (leader election) | `mosquitto-operator-leader-election`, only while `leaderElection.enabled` | `mosquitto-operator-mosquitto-operator-leader-election`, always |
+| Role and RoleBinding (Secret grant, mode `namespaces`) | `mosquitto-operator-secrets` in each listed namespace | `mosquitto-operator-secrets`, one copy per namespace of the component's `secret-role.yaml` |
 
 ## The grants and what each permits
 
-Eight grants, in seven rows, because `configmaps` and `services` carry an identical rule and
-controller-gen emits them as one:
+Eleven grants at the default, in eight rows of the generated ClusterRole, because controller-gen
+merges resources that carry an identical verb set into one rule:
 
 | Kind | API group | Resources | Verbs | What it permits |
 |---|---|---|---|---|
-| ClusterRole | `mko.gtrfc.com` | `mosquittoes` | get, list, watch | Read every `Mosquitto` in the cluster. **No `create`, `update` or `delete`** — the reconciler never writes a resource's spec ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D8) |
-| ClusterRole | `mko.gtrfc.com` | `mosquittoes/status` | update | Status authority. `update` alone, because `Status().Update()` is a PUT and nothing reads status on its own |
+| ClusterRole | `mko.gtrfc.com` | `mosquittoes`, `mosquittousers` | get, list, watch | Read every `Mosquitto` and `MosquittoUser` in the cluster. **No `create`, `update` or `delete`** — the reconciler never writes a resource's spec ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D8) |
+| ClusterRole | `mko.gtrfc.com` | `mosquittoes/status`, `mosquittousers/status` | update | Status authority. `update` alone, because `Status().Update()` is a PUT and nothing reads status on its own |
 | ClusterRole | `mko.gtrfc.com` | `mosquittoes/finalizers` | update | The owner references the reconciler writes carry `blockOwnerDeletion`, and the `OwnerReferencesPermissionEnforcement` admission plugin — off by default, on in some managed distributions — refuses such a reference unless the writer may update the owner's finalizers. Per the marker comment; not observed on such a cluster |
 | ClusterRole | `""` (core) | `configmaps`, `services` | create, get, list, update, watch | **Create or overwrite any ConfigMap or Service in any namespace.** Overwriting a Service's `spec.selector` redirects its traffic; overwriting a ConfigMap changes what its consumers read |
-| ClusterRole | `apps` | `statefulsets` | create, get, list, update, watch | **Create a StatefulSet, or replace the pod template of any existing one, in any namespace** — the image, the command, the volumes and the ServiceAccount its pods run as. The heaviest grant here ([H-5](#h-5)) |
+| ClusterRole, **`secretAccess.mode: all`** (the default) | `""` (core) | `secrets` | create, get, list, update, watch | **Read and overwrite any Secret in any namespace** — the users' credentials Secrets it renders, `<broker>-auth` it writes, and everything else: GitOps deploy keys, the SOPS key, ServiceAccount tokens ([H-17](#h-17)) |
+| Role per listed namespace, **`secretAccess.mode: namespaces`** | `""` (core) | `secrets` | create, get, list, update, watch | The same, in the listed namespaces only; the ClusterRole carries no `secrets` rule then |
+| ClusterRole | `apps` | `statefulsets` | create, get, list, update, watch | **Create a StatefulSet, or replace the pod template of any existing one, in any namespace** — the image, the command, the volumes and the ServiceAccount its pods run as. The heaviest grant here after `secrets` ([H-5](#h-5)) |
 | Role (operator namespace) | `coordination.k8s.io` | `leases` | create, delete, get, list, patch, update, watch | Leader election. Namespaced on purpose: the Lease `mosquitto-operator.mko.gtrfc.com` (`LeaderElectionID` in [`cmd/main.go`](../../cmd/main.go)) lives in the operator's own namespace |
 | Role (operator namespace) | `""` (core) | `events` | create, patch | client-go's `LeaseLock` records a `LeaderElection` Event when leadership changes. The reconciler records no Events |
+
+What the code does with the `secrets` grant is narrower than the grant: it caches Secrets with their
+data stripped, reads a credentials Secret's data with one uncached `get` when it renders that user,
+reads a TLS Secret's labels only, and writes nothing but `<broker>-auth`
+([credentials.md](credentials.md#what-the-operator-holds)). That is a property of the code, not of
+the grant.
 
 ## What is absent
 
@@ -63,31 +75,38 @@ Absent by decision rather than by oversight
   grants `delete` and `patch` on `coordination.k8s.io/leases` and `patch` on `events`. That is
   client-go's `LeaseLock` operating on the operator's own Lease in its own namespace, not the
   reconciler reaching a managed object. Both install paths render it identically at default values.
-- **No rule on `secrets`.** Not narrowed — absent, and the chart says so in a comment rather than
-  by omission. The kubelet mounts the TLS material; the operator never reads it
-  ([credentials.md](credentials.md#the-operator-holds-no-workload-credential)).
+- **No `delete` on Secrets either.** `<broker>-auth` is collected with its `Mosquitto` through its
+  owner reference; a user's credentials Secret is the user's.
 - **Nothing on `rbac.authorization.k8s.io`, no `escalate`, no `bind`, no `serviceaccounts`.** The
   operator creates no per-instance identity, so it needs no authority to grant one.
-- `list` and `watch` are informer verbs, not call sites: controller-runtime's cache needs them for
-  every kind the manager watches, and no line of the non-test tree calls `List`.
+- `list` and `watch` are informer verbs: controller-runtime's cache needs them for every kind the
+  manager watches. The `List` calls of the non-test tree — `listUsers` and `brokersForSecret` —
+  read the users and brokers of a namespace from that cache.
+- **The metrics exporter adds nothing.** It runs in the broker pod without a ServiceAccount token
+  and talks only to its own broker over `127.0.0.1`
+  ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) D4).
 
-**In one paragraph.** This is a workload manager with cluster-wide create and update on three
-kinds and read on its own CRD. Through the API it cannot read a Secret, cannot delete any object,
-and cannot write RBAC. That is not a bound on what its identity reaches: `statefulsets: create,
-update` in every namespace is the authority to run chosen code under any ServiceAccount, with any
-Secret of the namespace mounted, wherever the namespace's admission lets the pod in. Treat its
-ServiceAccount token and its image accordingly ([H-5](#h-5)).
+**In one paragraph.** This is a workload manager with cluster-wide create and update on four
+kinds — Secrets among them by default — and read on its own two CRDs. It cannot delete any object
+and cannot write RBAC. Its identity reads and writes every Secret of the cluster at the default
+([H-17](#h-17)), and `statefulsets: create, update` in every namespace is the authority to run
+chosen code under any ServiceAccount, wherever the namespace's admission lets the pod in. Treat its
+ServiceAccount token and its image as cluster-admin-adjacent ([H-5](#h-5)).
 
 ## What the parity test does not cover
 
-The test compares RBAC, at **chart default values**, over `config/default`:
+The test compares RBAC at **chart default values** over `config/default`, with
+`secretSecurity: true` over `config/default` plus its component, and with
+`secretAccess.mode: namespaces` (namespace `mosquitto`) over `config/default` plus the
+`secret-namespaces` component, and checks that `--secret-security`, `--secret-namespaces` and
+`--reloader-image` reach the manager with the same values:
 
 - **With `leaderElection.enabled=false` the chart renders no Role at all** and passes no
   `--leader-elect`, while `config/default` always includes
   [`config/rbac/leader_election_role.yaml`](../../config/rbac/leader_election_role.yaml) and
   [`config/manager/manager.yaml`](../../config/manager/manager.yaml) always passes `--leader-elect`.
   Rendered on 2026-10-05: zero Role documents. The parity statement is "the two paths agree at
-  default values", not "the chart cannot be configured into a different shape".
+  the settings the test renders", not "the chart cannot be configured into a different shape".
 - **The metrics port is switchable in one path only.** The chart renders
   `--metrics-bind-address=:8080`, or `=0` under `metrics.enabled=false` — `0` is the literal
   controller-runtime reads as "do not start the metrics server" (rendered on 2026-10-05).
@@ -145,8 +164,9 @@ and every workload identity of every namespace whose admission lets the pod it w
 cluster where some ServiceAccount holds `cluster-admin`, it is one pod away from it. Pod Security
 admission does not stand in the way: it judges a pod's security fields, not which ServiceAccount it
 runs as or which Secret it mounts.
-Through the API it cannot delete, cannot patch and cannot read a Secret; that limits a buggy
-reconciler, not a holder of the token. `ensureOwned` does not help here: it guards the reconcile
+Through the API it cannot delete and cannot patch, and with `secretAccess.mode: namespaces` it
+reads Secrets only in the listed namespaces; that limits a buggy reconciler, not a holder of the
+token. `ensureOwned` does not help here: it guards the reconcile
 path, and a stolen token is not subject to it ([tenancy.md](tenancy.md#what-holds)).
 
 Narrowing the ClusterRole to the namespaces actually served would cost the install-and-forget
@@ -157,3 +177,21 @@ image as cluster-admin-adjacent — restrict who may create pods in, exec into, 
 of the operator's namespace, and who may change the operator's image; an admission policy of the
 cluster's own that limits what this ServiceAccount may write is the only control that bounds the
 grant itself, and none ships here.
+
+<a id="h-17"></a>
+### H-17 — The operator's identity can read and overwrite Secrets cluster-wide
+
+Live at the default `secretAccess.mode: all`, accepted by the owner after the risk was stated
+([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
+D7). The ClusterRole carries `get`, `list`, `watch`, `create` and `update` on `secrets` in every
+namespace, because rendering a user means reading its Secret and writing `<broker>-auth`. Whoever
+controls the operator's ServiceAccount token, its image or its process can therefore list and read
+every Secret of the cluster — in a Flux cluster the deploy keys and the SOPS key, which are the
+cluster — and overwrite any of them. The code reads only what it renders and caches no Secret data,
+which bounds a bug, not a holder of the token. The README states the grant before the install
+command and the chart's `NOTES.txt` prints it after every install.
+
+What a cluster operator can do: install with `secretAccess.mode: namespaces` and list only the
+namespaces brokers live in — the grant then is one Role each, the operator caches Secrets there
+only and refuses a broker anywhere else — and keep the GitOps and SOPS keys in namespaces that list
+leaves out; protect the operator's namespace and image as [H-5](#h-5) asks.

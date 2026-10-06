@@ -138,6 +138,121 @@ func authority(t *testing.T, manifest string) map[grant][]string {
 	return out
 }
 
+// installSetting is one install-time setting both paths must render alike: the
+// Helm values that select it and the kustomize components that do.
+type installSetting struct {
+	name             string
+	helmSet          []string
+	components       []string
+	secretSecurity   string
+	secretNamespaces string
+}
+
+var installSettings = []installSetting{
+	{name: "defaults", secretSecurity: "false"},
+	{
+		// docs/adr/0014 D10: the switch changes the flag and nothing else.
+		name:           "secretSecurity",
+		helmSet:        []string{"secretSecurity=true"},
+		components:     []string{"config/components/secret-security"},
+		secretSecurity: "true",
+	},
+	{
+		// docs/adr/0014 D7, docs/adr/0006 D9: the Secret grant leaves the
+		// ClusterRole for a Role in each listed namespace. The kustomize
+		// component's placeholder namespace is "mosquitto".
+		name:             "secretNamespaces",
+		helmSet:          []string{"secretAccess.mode=namespaces", "secretAccess.namespaces={mosquitto}"},
+		components:       []string{"config/components/secret-namespaces"},
+		secretSecurity:   "false",
+		secretNamespaces: "mosquitto",
+	},
+}
+
+// kustomizeTarget returns the directory to build for a setting: config/default
+// itself, or an overlay of it with the setting's components, written under the
+// repository's tmp/ so its relative paths stay inside the repository.
+func kustomizeTarget(t *testing.T, root string, setting installSetting) string {
+	t.Helper()
+	if len(setting.components) == 0 {
+		return kustomizeDir
+	}
+	dir := filepath.Join("tmp", "rbacparity-"+setting.name)
+	require.NoError(t, os.MkdirAll(filepath.Join(root, dir), 0o750))
+	var b strings.Builder
+	b.WriteString("resources:\n  - ../../" + kustomizeDir + "\ncomponents:\n")
+	for _, component := range setting.components {
+		b.WriteString("  - ../../" + component + "\n")
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(root, dir, "kustomization.yaml"), []byte(b.String()), 0o600))
+	return dir
+}
+
+// effectiveFlag returns the value the manager container of a rendered manifest
+// passes for --<name>=, taking the last occurrence as Go's flag package does,
+// or "" when the flag is absent.
+func effectiveFlag(t *testing.T, manifest, name string) string {
+	t.Helper()
+	value := ""
+	for _, doc := range strings.Split(manifest, "\n---") {
+		var deployment struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name string   `json:"name"`
+							Args []string `json:"args"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if yaml.Unmarshal([]byte(doc), &deployment) != nil || deployment.Kind != "Deployment" {
+			continue
+		}
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			for _, arg := range container.Args {
+				if v, ok := strings.CutPrefix(arg, "--"+name+"="); ok && container.Name == "manager" {
+					value = v
+				}
+			}
+		}
+	}
+	return value
+}
+
+// managerImage returns the image of the manager container of a rendered
+// manifest.
+func managerImage(t *testing.T, manifest string) string {
+	t.Helper()
+	for _, doc := range strings.Split(manifest, "\n---") {
+		var deployment struct {
+			Kind string `json:"kind"`
+			Spec struct {
+				Template struct {
+					Spec struct {
+						Containers []struct {
+							Name  string `json:"name"`
+							Image string `json:"image"`
+						} `json:"containers"`
+					} `json:"spec"`
+				} `json:"template"`
+			} `json:"spec"`
+		}
+		if yaml.Unmarshal([]byte(doc), &deployment) != nil || deployment.Kind != "Deployment" {
+			continue
+		}
+		for _, container := range deployment.Spec.Template.Spec.Containers {
+			if container.Name == "manager" {
+				return container.Image
+			}
+		}
+	}
+	require.Fail(t, "no manager container in the rendered manifest")
+	return ""
+}
+
 func TestRBACParity_BothInstallPathsGrantTheSameAuthority(t *testing.T) {
 	root := repoRoot(t)
 
@@ -148,11 +263,34 @@ func TestRBACParity_BothInstallPathsGrantTheSameAuthority(t *testing.T) {
 		kustomize = resolved
 	}
 
-	helmOut := render(t, root, "helm", "template", "parity", chartDir, "--namespace", namespace)
-	kustomizeOut := render(t, root, kustomize, "build", kustomizeDir)
+	for _, setting := range installSettings {
+		t.Run(setting.name, func(t *testing.T) {
+			helmArgs := []string{"template", "parity", chartDir, "--namespace", namespace}
+			for _, set := range setting.helmSet {
+				helmArgs = append(helmArgs, "--set", set)
+			}
+			helmOut := render(t, root, "helm", helmArgs...)
+			kustomizeOut := render(t, root, kustomize, "build", kustomizeTarget(t, root, setting))
 
-	helm := authority(t, helmOut)
-	kust := authority(t, kustomizeOut)
+			compareAuthority(t, authority(t, helmOut), authority(t, kustomizeOut))
+
+			// The rule is only half of a setting: the flag that makes the operator
+			// use it has to reach the manager on both paths as well.
+			for path, out := range map[string]string{"the chart": helmOut, "kustomize": kustomizeOut} {
+				require.Equal(t, setting.secretSecurity, effectiveFlag(t, out, "secret-security"),
+					"%s passes the wrong --secret-security", path)
+				require.Equal(t, setting.secretNamespaces, effectiveFlag(t, out, "secret-namespaces"),
+					"%s passes the wrong --secret-namespaces", path)
+				require.Equal(t, managerImage(t, out), effectiveFlag(t, out, "reloader-image"),
+					"%s: auth-init and the reloader must run the operator's own image (docs/adr/0014 D6)", path)
+			}
+		})
+	}
+}
+
+// compareAuthority fails on every grant the two install paths render differently.
+func compareAuthority(t *testing.T, helm, kust map[grant][]string) {
+	t.Helper()
 
 	// A decoder that silently reads nothing would make this test pass forever.
 	// Both paths are known to define RBAC, so an empty side is a broken test, not
@@ -175,7 +313,8 @@ func TestRBACParity_BothInstallPathsGrantTheSameAuthority(t *testing.T) {
 
 	const hint = "config/rbac/role.yaml is generated from the kubebuilder markers by " +
 		"`make generate-all`; deploy/helm/mosquitto-operator/templates/clusterrole.yaml is " +
-		"written by hand. After changing a marker, mirror it into the chart."
+		"written by hand, and a conditional rule lives in a chart value and in a component " +
+		"under config/components/. After changing a marker or a setting, mirror it."
 
 	for _, key := range ordered {
 		h, inHelm := helm[key]

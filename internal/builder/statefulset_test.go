@@ -14,12 +14,27 @@ import (
 	"github.com/guided-traffic/mosquitto-operator/internal/common"
 )
 
+// testOptions are the pod options every builder test uses.
+var testOptions = PodOptions{ReloaderImage: "guidedtraffic/mosquitto-operator:test"}
+
 // mustBuild builds the StatefulSet and fails the test if the spec is unbuildable.
 func mustBuild(t *testing.T, m *mkov1.Mosquitto) *appsv1.StatefulSet {
 	t.Helper()
-	sts, err := BuildStatefulSet(m)
+	sts, err := BuildStatefulSet(m, testOptions)
 	require.NoError(t, err)
 	return sts
+}
+
+// initContainer returns the init container with the given name, or fails.
+func initContainer(t *testing.T, spec corev1.PodSpec, name string) corev1.Container {
+	t.Helper()
+	for _, c := range spec.InitContainers {
+		if c.Name == name {
+			return c
+		}
+	}
+	require.Failf(t, "no such init container", "%s", name)
+	return corev1.Container{}
 }
 
 // containerVolumeMount returns the mount with the given name, or nil.
@@ -212,6 +227,8 @@ func TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard(t *testing.T) {
 		{"TLS secret mounted", []func(*mkov1.Mosquitto){withTLS("broker-tls")}},
 		{"PVC-backed persistence", []func(*mkov1.Mosquitto){withStorage("1Gi")}},
 		{"TLS and storage together", []func(*mkov1.Mosquitto){withTLS("broker-tls"), withStorage("1Gi")}},
+		{"metrics exporter", []func(*mkov1.Mosquitto){withMetrics()}},
+		{"metrics exporter with TLS", []func(*mkov1.Mosquitto){withMetrics(), withTLS("broker-tls")}},
 		{"hard anti-affinity", []func(*mkov1.Mosquitto){func(m *mkov1.Mosquitto) {
 			m.Spec.AntiAffinity = mkov1.AntiAffinityModeHard
 		}}},
@@ -241,6 +258,7 @@ func TestBuildStatefulSet_TLSOff(t *testing.T) {
 	assert.Nil(t, podVolume(spec, TLSVolumeName))
 	assert.Nil(t, containerVolumeMount(spec.Containers[0], TLSVolumeName))
 	assert.Equal(t, MQTTPort, spec.Containers[0].Ports[0].ContainerPort)
+	assert.NotContains(t, containerNamed(t, spec, ReloaderContainerName).Args, "--tls-dir")
 }
 
 func TestBuildStatefulSet_TLSOn(t *testing.T) {
@@ -262,6 +280,17 @@ func TestBuildStatefulSet_TLSOn(t *testing.T) {
 	assert.Equal(t, MQTTSPort, spec.Containers[0].Ports[0].ContainerPort)
 	assert.Equal(t, MQTTSPortName, spec.Containers[0].Ports[0].Name)
 	assert.Equal(t, MQTTSPort, spec.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal)
+
+	// A SIGHUP reloads the certificate too, so the reloader reads the same
+	// mount and checks the pair before it signals (ADR 0001 D10, M12).
+	reloader := containerNamed(t, spec, ReloaderContainerName)
+	assert.Equal(t, []string{"reload", "--source", "/mosquitto/auth-secret", "--target", "/mosquitto/auth", "--tls-dir", TLSMountPath}, reloader.Args)
+	reloaderMount := containerVolumeMount(reloader, TLSVolumeName)
+	require.NotNil(t, reloaderMount, "the reloader sees the pair the broker would load")
+	assert.Equal(t, TLSMountPath, reloaderMount.MountPath)
+	assert.True(t, reloaderMount.ReadOnly)
+	assert.Nil(t, containerVolumeMount(initContainer(t, spec, AuthInitContainerName), TLSVolumeName),
+		"auth-init copies credentials only")
 }
 
 func TestBuildStatefulSet_ConfigMountIsAlwaysReadOnly(t *testing.T) {
@@ -331,7 +360,7 @@ func TestBuildStatefulSet_StorageClassName(t *testing.T) {
 // substituting a default would silently give the user a volume they did not ask
 // for.
 func TestBuildStatefulSet_UnparsableStorageSizeFails(t *testing.T) {
-	sts, err := BuildStatefulSet(newMosquitto(withStorage("5 gigabytes")))
+	sts, err := BuildStatefulSet(newMosquitto(withStorage("5 gigabytes")), testOptions)
 
 	require.Error(t, err)
 	assert.Nil(t, sts)
@@ -380,6 +409,10 @@ func TestPodTemplateHashesChangeWithTheThingTheyDigest(t *testing.T) {
 		{"tls changes both the listener and the mounts", withTLS("broker-tls"), true, true},
 		{"anti-affinity", withAntiAffinity(mkov1.AntiAffinityModeHard), true, false},
 		{"storage swaps the emptyDir for a claim", withStorage("1Gi"), true, false},
+		{"pod labels and annotations roll through the template, not a hash", func(m *mkov1.Mosquitto) {
+			m.Spec.PodLabels = map[string]string{"team": "iot"}
+			m.Spec.PodAnnotations = map[string]string{"example.com/note": "x"}
+		}, false, false},
 	}
 
 	for _, tt := range tests {
@@ -429,6 +462,9 @@ func TestStatefulSetHasChanged(t *testing.T) {
 		{"an annotation kubectl rollout restart added", func(s *appsv1.StatefulSet) {
 			s.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = "2026-01-01T00:00:00Z"
 		}, false, "only the two operator annotations decide whether the template drifted"},
+		{"a pod annotation added by somebody else", func(s *appsv1.StatefulSet) {
+			s.Spec.Template.Annotations["example.com/injected"] = "yes"
+		}, false, "keys only the live template carries are not the operator's to compare"},
 		{"a defaulted pod field the operator never writes", func(s *appsv1.StatefulSet) {
 			s.Spec.Template.Spec.DNSPolicy = corev1.DNSClusterFirst
 			s.Spec.Template.Spec.SchedulerName = "default-scheduler"
@@ -456,4 +492,260 @@ func TestStatefulSetHasChanged_NilReplicasIsNotDrift(t *testing.T) {
 
 	assert.False(t, StatefulSetHasChanged(desired, current),
 		"a nil replica count carries no information to compare against")
+}
+
+func withPodMetadata(labels, annotations map[string]string) func(*mkov1.Mosquitto) {
+	return func(m *mkov1.Mosquitto) {
+		m.Spec.PodLabels = labels
+		m.Spec.PodAnnotations = annotations
+	}
+}
+
+// TestBuildStatefulSet_PodMetadataLosesToTheOperator is ADR 0012 D5: the user's
+// keys reach the pods, and a key the operator sets always wins, so a pod label
+// cannot detach a Service from its pods and a pod annotation cannot forge a hash.
+func TestBuildStatefulSet_PodMetadataLosesToTheOperator(t *testing.T) {
+	m := newMosquitto(withPodMetadata(
+		map[string]string{common.LabelInstance: "hijacked", "team": "iot"},
+		map[string]string{AnnotationConfigHash: "forged", "prometheus.io/scrape": "true"},
+	))
+	sts := mustBuild(t, m)
+	plain := mustBuild(t, newMosquitto())
+
+	assert.Equal(t, "broker", sts.Spec.Template.Labels[common.LabelInstance])
+	assert.Equal(t, "iot", sts.Spec.Template.Labels["team"])
+	assert.Equal(t, plain.Spec.Template.Annotations[AnnotationConfigHash], sts.Spec.Template.Annotations[AnnotationConfigHash])
+	assert.Equal(t, "true", sts.Spec.Template.Annotations["prometheus.io/scrape"])
+
+	assert.Equal(t, common.SelectorLabels(m), sts.Spec.Selector.MatchLabels, "the selector never takes a user key")
+	assert.NotContains(t, sts.Labels, "team", "pod labels reach the pods, not the StatefulSet object")
+	assert.Equal(t, common.LabelInstance+",team", sts.Annotations[AnnotationAppliedPodLabels])
+	assert.Equal(t, AnnotationConfigHash+",prometheus.io/scrape", sts.Annotations[AnnotationAppliedPodAnnotations])
+}
+
+func TestStatefulSetHasChanged_PodMetadata(t *testing.T) {
+	labelled := withPodMetadata(map[string]string{"team": "iot"}, map[string]string{"example.com/note": "x"})
+
+	tests := []struct {
+		name             string
+		desired, current []func(*mkov1.Mosquitto)
+		want             bool
+	}{
+		{"a pod label added to the spec", []func(*mkov1.Mosquitto){labelled}, nil, true},
+		{"a pod label removed from the spec", nil, []func(*mkov1.Mosquitto){labelled}, true},
+		{"a pod label value changed", []func(*mkov1.Mosquitto){
+			withPodMetadata(map[string]string{"team": "home"}, map[string]string{"example.com/note": "x"}),
+		}, []func(*mkov1.Mosquitto){labelled}, true},
+		{"unchanged pod metadata", []func(*mkov1.Mosquitto){labelled}, []func(*mkov1.Mosquitto){labelled}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			desired := mustBuild(t, newMosquitto(tt.desired...))
+			current := mustBuild(t, newMosquitto(tt.current...))
+			assert.Equal(t, tt.want, StatefulSetHasChanged(desired, current))
+		})
+	}
+}
+
+// TestMergeStatefulSet is ADR 0009 D9 on the one kind with a pod template: the
+// operator's keys win, every other key stays, and only a key that left
+// spec.podLabels or spec.podAnnotations is removed.
+func TestMergeStatefulSet(t *testing.T) {
+	current := mustBuild(t, newMosquitto(withPodMetadata(
+		map[string]string{"team": "iot", "zone": "a"},
+		map[string]string{"example.com/note": "x"},
+	)))
+	current.Labels["example.com/owner"] = "platform"
+	current.Labels[common.LabelInstance] = "drifted"
+	current.Annotations["example.com/backup"] = "daily"
+	current.Spec.Template.Labels["policy.example.com/scanned"] = "true"
+	current.Spec.Template.Annotations["kubectl.kubernetes.io/restartedAt"] = "2026-10-05T00:00:00Z"
+	current.Spec.Template.Annotations[AnnotationPodSpecHash] = "deadbeef"
+
+	desired := mustBuild(t, newMosquitto(
+		func(m *mkov1.Mosquitto) { m.Spec.Replicas = 3 },
+		withPodMetadata(map[string]string{"team": "home"}, nil),
+	))
+
+	MergeStatefulSet(current, desired)
+
+	assert.Equal(t, int32(3), *current.Spec.Replicas)
+	assert.Equal(t, "platform", current.Labels["example.com/owner"], "a foreign object label stays")
+	assert.Equal(t, "broker", current.Labels[common.LabelInstance], "an operator key wins")
+	assert.Equal(t, "daily", current.Annotations["example.com/backup"], "a foreign object annotation stays")
+	assert.Equal(t, "team", current.Annotations[AnnotationAppliedPodLabels])
+
+	tl, ta := current.Spec.Template.Labels, current.Spec.Template.Annotations
+	assert.Equal(t, "true", tl["policy.example.com/scanned"], "a foreign template label stays")
+	assert.Equal(t, "home", tl["team"], "a changed pod label takes the new value")
+	assert.NotContains(t, tl, "zone", "a pod label removed from the spec leaves the pods")
+	assert.Equal(t, "2026-10-05T00:00:00Z", ta["kubectl.kubernetes.io/restartedAt"],
+		"a rollout restart must survive an unrelated write, or every pod rolls a second time")
+	assert.NotContains(t, ta, "example.com/note", "a pod annotation removed from the spec leaves the pods")
+	assert.Equal(t, desired.Spec.Template.Annotations[AnnotationPodSpecHash], ta[AnnotationPodSpecHash])
+	assert.False(t, StatefulSetHasChanged(desired, current), "after the merge the next pass writes nothing")
+}
+
+// TestBuildStatefulSet_ConfigCheckInitContainer is ADR 0007 D10: the pod's own
+// image checks the generated file before the broker starts, with the broker
+// container's security context, and without ever seeing the data volume.
+func TestBuildStatefulSet_ConfigCheckInitContainer(t *testing.T) {
+	for _, mutators := range [][]func(*mkov1.Mosquitto){nil, {withStorage("1Gi")}, {withTLS("broker-tls")}} {
+		m := newMosquitto(append(mutators, func(m *mkov1.Mosquitto) { m.Spec.Image = "eclipse-mosquitto:2.1.1-alpine" })...)
+		spec := mustBuild(t, m).Spec.Template.Spec
+
+		check := initContainer(t, spec, ConfigCheckContainerName)
+		assert.Equal(t, ConfigCheckContainerName, check.Name)
+		assert.Equal(t, "eclipse-mosquitto:2.1.1-alpine", check.Image, "the check runs the image the broker runs")
+		assert.Equal(t, []string{"/usr/sbin/mosquitto", "-c", "/mosquitto/config/mosquitto.conf", "--test-config"}, check.Command)
+		assert.Equal(t, spec.Containers[0].SecurityContext, check.SecurityContext)
+
+		config := containerVolumeMount(check, ConfigVolumeName)
+		require.NotNil(t, config)
+		assert.True(t, config.ReadOnly)
+		assert.Nil(t, containerVolumeMount(check, DataVolumeName),
+			"--test-config saves an empty database on exit; on the data volume that erases every retained message (M19)")
+		scratch := containerVolumeMount(check, ConfigCheckScratchVolumeName)
+		require.NotNil(t, scratch)
+		assert.Equal(t, DataMountPath, scratch.MountPath)
+		require.NotNil(t, podVolume(spec, ConfigCheckScratchVolumeName))
+		assert.NotNil(t, podVolume(spec, ConfigCheckScratchVolumeName).EmptyDir)
+	}
+}
+
+// containerNamed returns the container with the given name, or fails.
+func containerNamed(t *testing.T, spec corev1.PodSpec, name string) corev1.Container {
+	t.Helper()
+	for _, c := range spec.Containers {
+		if c.Name == name {
+			return c
+		}
+	}
+	require.Failf(t, "no such container", "%s", name)
+	return corev1.Container{}
+}
+
+// TestBuildStatefulSet_TheCredentialsPath is ADR 0014 D4-D6 in the pod spec:
+// the rendered Secret mounted whole, copied into an emptyDir by auth-init on
+// every start and by the reloader on every change, both from the operator's own
+// image, signalling across a shared process namespace.
+func TestBuildStatefulSet_TheCredentialsPath(t *testing.T) {
+	m := newMosquitto()
+	spec := mustBuild(t, m).Spec.Template.Spec
+
+	require.NotNil(t, spec.ShareProcessNamespace)
+	assert.True(t, *spec.ShareProcessNamespace, "the reloader signals the broker across the pod's process namespace")
+
+	secretVolume := podVolume(spec, AuthSecretVolumeName)
+	require.NotNil(t, secretVolume)
+	require.NotNil(t, secretVolume.Secret)
+	assert.Equal(t, "broker-auth", secretVolume.Secret.SecretName)
+	assert.Equal(t, ptr.To(int32(0o440)), secretVolume.Secret.DefaultMode)
+	require.NotNil(t, podVolume(spec, AuthVolumeName))
+	assert.NotNil(t, podVolume(spec, AuthVolumeName).EmptyDir)
+
+	assert.Equal(t, []string{AuthInitContainerName, ConfigCheckContainerName}, []string{spec.InitContainers[0].Name, spec.InitContainers[1].Name},
+		"the copy exists before anything reads the configuration")
+	for name, wantArgs := range map[string][]string{
+		AuthInitContainerName: {"reload", "--source", "/mosquitto/auth-secret", "--target", "/mosquitto/auth", "--once"},
+		ReloaderContainerName: {"reload", "--source", "/mosquitto/auth-secret", "--target", "/mosquitto/auth"},
+	} {
+		var c corev1.Container
+		if name == AuthInitContainerName {
+			c = initContainer(t, spec, name)
+		} else {
+			c = containerNamed(t, spec, name)
+		}
+		assert.Equal(t, testOptions.ReloaderImage, c.Image, "%s runs the operator's own image (D6)", name)
+		assert.Equal(t, []string{"/app/manager"}, c.Command)
+		assert.Equal(t, wantArgs, c.Args)
+		assert.Equal(t, containerSecurityContext(), c.SecurityContext, "%s", name)
+		require.NotNil(t, containerVolumeMount(c, AuthSecretVolumeName))
+		assert.True(t, containerVolumeMount(c, AuthSecretVolumeName).ReadOnly)
+		require.NotNil(t, containerVolumeMount(c, AuthVolumeName))
+		assert.False(t, containerVolumeMount(c, AuthVolumeName).ReadOnly, "%s writes the copy", name)
+		assert.NotEmpty(t, c.Resources.Requests)
+	}
+
+	broker := containerNamed(t, spec, BrokerContainerName)
+	auth := containerVolumeMount(broker, AuthVolumeName)
+	require.NotNil(t, auth)
+	assert.Equal(t, "/mosquitto/auth", auth.MountPath)
+	assert.True(t, auth.ReadOnly, "the broker reads the copy; only the reloader writes it")
+	assert.Nil(t, containerVolumeMount(broker, AuthSecretVolumeName), "the broker never reads the Secret mount itself")
+}
+
+func TestBuildStatefulSet_TheReloaderImageRollsThePods(t *testing.T) {
+	m := newMosquitto()
+	before, err := BuildStatefulSet(m, PodOptions{ReloaderImage: "guidedtraffic/mosquitto-operator:0.2.0"})
+	require.NoError(t, err)
+	after, err := BuildStatefulSet(m, PodOptions{ReloaderImage: "guidedtraffic/mosquitto-operator:0.2.1"})
+	require.NoError(t, err)
+
+	assert.NotEqual(t, before.Spec.Template.Annotations[AnnotationPodSpecHash], after.Spec.Template.Annotations[AnnotationPodSpecHash],
+		"every operator release rolls every broker, the cost ADR 0014 D6 accepted")
+
+	_, err = BuildStatefulSet(m, PodOptions{})
+	assert.ErrorContains(t, err, "--reloader-image")
+}
+
+func TestBuildAuthSecret(t *testing.T) {
+	m := newMosquitto()
+	data := map[string][]byte{"passwd": []byte("a:$7$x\n"), "acl": []byte("user a\n")}
+	secret := BuildAuthSecret(m, data)
+
+	assert.Equal(t, "broker-auth", secret.Name)
+	assert.Equal(t, "messaging", secret.Namespace)
+	assert.Equal(t, common.BaseLabels(m, DefaultImage), secret.Labels)
+	assert.Equal(t, corev1.SecretTypeOpaque, secret.Type)
+	assert.Equal(t, data, secret.Data)
+}
+
+// TestBuildStatefulSet_TheExporter is ADR 0002 D2-D6 in the pod spec.
+func TestBuildStatefulSet_TheExporter(t *testing.T) {
+	without := mustBuild(t, newMosquitto()).Spec.Template.Spec
+	for _, c := range without.Containers {
+		assert.NotEqual(t, ExporterContainerName, c.Name, "no broker pod grows a container it did not ask for (D6)")
+	}
+	assert.Nil(t, podVolume(without, ExporterSecretVolumeName))
+
+	spec := mustBuild(t, newMosquitto(withMetrics())).Spec.Template.Spec
+	exporter := containerNamed(t, spec, ExporterContainerName)
+	assert.Equal(t, testOptions.ReloaderImage, exporter.Image, "the operator image, a second binary (D2)")
+	assert.Equal(t, []string{"/app/exporter"}, exporter.Command)
+	assert.Equal(t, []string{"--broker", "tcp://127.0.0.1:1883", "--password-file", "/mosquitto/exporter/password", "--listen", ":9234"}, exporter.Args,
+		"over localhost, never across the pod network (D3)")
+	assert.Equal(t, []corev1.ContainerPort{{Name: "metrics", ContainerPort: 9234, Protocol: corev1.ProtocolTCP}}, exporter.Ports)
+	assert.Nil(t, exporter.ReadinessProbe, "a monitoring failure must not take the broker out of its Services (D5)")
+	assert.Nil(t, exporter.LivenessProbe)
+	assert.Equal(t, containerSecurityContext(), exporter.SecurityContext)
+	assert.NotEmpty(t, exporter.Resources.Requests)
+
+	volume := podVolume(spec, ExporterSecretVolumeName)
+	require.NotNil(t, volume)
+	require.NotNil(t, volume.Secret)
+	assert.Equal(t, "broker-auth", volume.Secret.SecretName)
+	assert.Equal(t, []corev1.KeyToPath{{Key: "exporter-password", Path: "password"}}, volume.Secret.Items,
+		"the exporter sees its password and none of the hashes")
+	mount := containerVolumeMount(exporter, ExporterSecretVolumeName)
+	require.NotNil(t, mount)
+	assert.True(t, mount.ReadOnly)
+	assert.Nil(t, containerVolumeMount(exporter, AuthSecretVolumeName))
+
+	authVolume := podVolume(spec, AuthSecretVolumeName)
+	require.NotNil(t, authVolume)
+	assert.Equal(t, []corev1.KeyToPath{{Key: "acl", Path: "acl"}, {Key: "passwd", Path: "passwd"}}, authVolume.Secret.Items,
+		"auth-init and the reloader see the two files, not the exporter's password")
+
+	tlsSpec := mustBuild(t, newMosquitto(withMetrics(), withTLS("broker-tls"))).Spec.Template.Spec
+	tlsExporter := containerNamed(t, tlsSpec, ExporterContainerName)
+	assert.Equal(t, []string{"--broker", "ssl://127.0.0.1:8883", "--password-file", "/mosquitto/exporter/password", "--listen", ":9234",
+		"--tls-cert", "/mosquitto/tls/tls.crt"}, tlsExporter.Args, "under TLS the one listener is 8883, and the mounted certificate is pinned")
+	require.NotNil(t, containerVolumeMount(tlsExporter, TLSVolumeName))
+	assert.True(t, containerVolumeMount(tlsExporter, TLSVolumeName).ReadOnly)
+
+	assert.NotEqual(t, mustBuild(t, newMosquitto()).Spec.Template.Annotations[AnnotationPodSpecHash],
+		mustBuild(t, newMosquitto(withMetrics())).Spec.Template.Annotations[AnnotationPodSpecHash],
+		"turning metrics on rolls the pods")
 }

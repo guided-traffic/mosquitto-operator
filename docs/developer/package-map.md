@@ -6,11 +6,15 @@ runtime is [architecture.md](architecture.md).
 
 | Package | Responsibility | Key symbols |
 |---|---|---|
-| [`api/v1`](../../api/v1) | The published contract: the `Mosquitto` kind of `mko.gtrfc.com/v1`, its markers, its helpers | `Mosquitto`, `MosquittoSpec`, `MosquittoStatus`, `GroupVersion`, `AddToScheme` |
-| [`internal/common`](../../internal/common) | The shared vocabulary: label keys and sets, the StatefulSet and Service names, the label diff | `BaseLabels`, `SelectorLabels`, `ExtractVersionFromImage`, `MapEntriesMissing` |
-| [`internal/builder`](../../internal/builder) | CR in, objects out. Pure functions — no client, no context, no I/O | `BuildConfigMap`, `BuildHeadlessService`, `BuildClientService`, `BuildStatefulSet`, `StatefulSetHasChanged`, `DefaultImage` |
+| [`api/v1`](../../api/v1) | The published contract: the kinds `Mosquitto` and `MosquittoUser` of `mko.gtrfc.com/v1`, their markers, their helpers | `Mosquitto`, `MosquittoSpec`, `MosquittoStatus`, `MosquittoUser`, `GroupVersion`, `AddToScheme` |
+| [`internal/common`](../../internal/common) | The shared vocabulary: label keys and sets, the StatefulSet and Service names, the label diff and merge | `BaseLabels`, `SelectorLabels`, `ExtractVersionFromImage`, `MapEntriesMissing`, `MergeLabels` |
+| [`internal/builder`](../../internal/builder) | CR in, objects out, and how an update merges them. Pure functions — no client, no context, no I/O | `BuildConfigMap`, `BuildHeadlessService`, `BuildClientService`, `BuildStatefulSet`, `StatefulSetHasChanged`, `MergeStatefulSet`, `DefaultImage` |
 | [`internal/controller`](../../internal/controller) | The reconcile loop, the only code that talks to the API server, and the RBAC markers | `MosquittoReconciler`, `Reconcile`, `ensureOwned`, `SetupWithManager` |
-| [`cmd`](../../cmd) | The one binary: flags, manager, wiring, health checks | `bindOperatorFlags`, `bindZapFlags`, `managerOptions`, `newReconciler`, `main` |
+| [`internal/auth`](../../internal/auth) | The users of a broker turned into what the file plugins read: the checks, the collisions, the `$7$` hashes, the files. Pure functions | `Render`, `Payload`, `FilePayload`, `HashPassword`, `VerifyPassword` |
+| [`internal/reloader`](../../internal/reloader) | The second entry point of the binary, `manager reload`: `auth-init` and the `reloader` sidecar in every broker pod | `Main`, `Run`, `Sync`, `FindProcess` |
+| [`internal/exporter`](../../internal/exporter) | The broker metrics exporter: an MQTT session with the pod's own broker as `mko-exporter`, `$SYS` mapped to Prometheus series, `/metrics` | `Main`, `Run`, `Collector`, `Handler`, `parse` |
+| [`cmd`](../../cmd) | The manager binary: flags, manager, wiring, health checks | `bindOperatorFlags`, `bindZapFlags`, `managerOptions`, `newReconciler`, `main` |
+| [`cmd/exporter`](../../cmd/exporter) | The image's second binary, `/app/exporter` (ADR 0002 D2) | `main` → `exporter.Main` |
 | [`test/*`](../../test) | One tier per question, separated by build tag ([testing.md](testing.md)) | `testimages.MosquittoImage`, `testimages.Default` |
 | [`hack/`](../../hack) | The guards that are not Go tests, and the release-notes config | — |
 | [`config/`](../../config), [`deploy/helm/`](../../deploy/helm/mosquitto-operator) | The two install paths, which must grant the same authority | — |
@@ -19,7 +23,8 @@ runtime is [architecture.md](architecture.md).
 
 | File | Responsibility |
 |---|---|
-| [`mosquitto_types.go`](../../api/v1/mosquitto_types.go) | `MosquittoSpec` (`replicas`, `image`, `config`, `antiAffinity`, `tls`, `resources`, `storage`), `MosquittoTLS`, `MosquittoStorage`, `MosquittoStatus`, the `Phase*` and `AntiAffinityMode*` constants, `AntiAffinityWeight` (`100`) and `AntiAffinityTopologyKey` (`kubernetes.io/hostname`), `ConditionTypeReady`, and the three helpers `AntiAffinityMode()`, `IsTLSEnabled()`, `IsStorageEnabled()`. The kubebuilder markers here are the only source of the CRD and its print columns. |
+| [`mosquitto_types.go`](../../api/v1/mosquitto_types.go) | `MosquittoSpec` (`replicas`, `image`, `config`, `antiAffinity`, `tls`, `resources`, `storage`, `podLabels`, `podAnnotations`, `metrics`), `MosquittoTLS`, `MosquittoStorage`, `MosquittoMetrics`, `MosquittoStatus`, the `Phase*`, `Reason*` and `AntiAffinityMode*` constants, `AntiAffinityWeight` (`100`) and `AntiAffinityTopologyKey` (`kubernetes.io/hostname`), `ConditionTypeReady` and `ConditionTypeUsers`, the consent label `ConsumableLabel`, and the helpers `AntiAffinityMode()`, `IsTLSEnabled()`, `IsStorageEnabled()`, `IsMetricsEnabled()`. The kubebuilder markers here are the only source of the CRD and its print columns. |
+| [`mosquittouser_types.go`](../../api/v1/mosquittouser_types.go) | `MosquittoUserSpec` (`brokerRef`, `credentialsSecret`, `acls`), the CEL rules on a topic, `MosquittoUserStatus`, the `Access*` constants and the user's `Reason*` values. |
 | [`groupversion_info.go`](../../api/v1/groupversion_info.go) | `GroupVersion{Group: "mko.gtrfc.com", Version: "v1"}`, `SchemeBuilder`, `AddToScheme`. |
 | `zz_generated.deepcopy.go` | Generated by `make generate`, carrying the header from [`hack/boilerplate.go.txt`](../../hack/boilerplate.go.txt). Never edited. |
 
@@ -40,6 +45,8 @@ validation ever be bypassed, cannot produce a listener with no certificate to se
 | `SelectorLabels(m)` | The first three only. The version label is excluded on purpose: a selector carrying it would stop matching the running pods the moment the image changes, which is exactly when the Service has to keep routing. |
 | `ExtractVersionFromImage` | The version label value, and its contract is that it is **always a valid label value**: a digest reference becomes its first 12 hex characters (algorithm and colon dropped), a tag is sanitised to `[A-Za-z0-9._-]`, truncated to 63 bytes and trimmed to alphanumeric ends; a reference without tag or digest gives `latest`, a value with nothing usable left gives `unknown`. Handles a registry port. Asserted against apimachinery's `validation.IsValidLabelValue` in `TestExtractVersionFromImage_AlwaysProducesAValidLabel` and `TestBaseLabels_AreAllValid` ([`labels_test.go`](../../internal/common/labels_test.go)), not against expected strings. |
 | `MapEntriesMissing(desired, current)` | The label comparison every diff uses: true when `current` lacks a desired key or disagrees on its value. Extra keys in `current` do not count as drift. |
+| `MergeLabels(base, overlay)` | The label write every update uses: a new map, `overlay` written over `base`, so the operator's keys win and every other key stays ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D9). Neither argument is modified. |
+| `JoinKeys(m)`, `RemovedKeys(previous, current)` | The applied-keys record: a map's keys sorted and comma-joined, and the keys one such value lists that a later one does not. |
 
 ## internal/builder
 
@@ -49,7 +56,7 @@ without a control plane.
 | File | Responsibility |
 |---|---|
 | [`configmap.go`](../../internal/builder/configmap.go) | `MQTTPort`/`MQTTSPort` (`1883`/`8883`) and their names `mqtt`/`mqtts`, `ConfigKey` (`mosquitto.conf`), the three mount paths (`/mosquitto/config`, `/mosquitto/tls`, `/mosquitto/data`), the two TLS secret keys (`tls.crt`, `tls.key`), `ConfigMapName`, `BrokerPort`/`BrokerPortName`, `GenerateMosquittoConf`, `BuildConfigMap`. |
-| [`statefulset.go`](../../internal/builder/statefulset.go) | `DefaultImage` (`eclipse-mosquitto:2.1.2-alpine`, with its `// renovate:` comment), `ResolveImage`, the container and volume names, the two annotation keys `mko.gtrfc.com/pod-spec-hash` and `mko.gtrfc.com/config-hash`, `BuildStatefulSet`, `buildPodSpec`, `buildBrokerContainer`, `buildVolumeClaimTemplates`, `hashOf` (FNV-32a over the JSON encoding, change detection only) and `StatefulSetHasChanged`. |
+| [`statefulset.go`](../../internal/builder/statefulset.go) | `DefaultImage` (`eclipse-mosquitto:2.1.2-alpine`, with its `// renovate:` comment), `ResolveImage`, the container and volume names, the annotation keys `mko.gtrfc.com/pod-spec-hash`, `mko.gtrfc.com/config-hash`, `mko.gtrfc.com/applied-pod-labels` and `mko.gtrfc.com/applied-pod-annotations`, `BuildStatefulSet`, `buildPodSpec`, `containerSecurityContext` (the one security context every container gets), `buildConfigCheckContainer`, `buildBrokerContainer`, `buildVolumeClaimTemplates`, `hashOf` (FNV-32a over the JSON encoding, change detection only), `StatefulSetHasChanged` and `MergeStatefulSet`. |
 | [`service.go`](../../internal/builder/service.go) | `BuildHeadlessService` (`ClusterIP: None`, `PublishNotReadyAddresses: true`) and `BuildClientService` (ClusterIP). Both expose exactly one port, targeted by name. |
 | [`affinity.go`](../../internal/builder/affinity.go) | `BuildPodAntiAffinity` — `nil` for `off`, one weighted preference for `soft`, one required term for `hard`, both over `kubernetes.io/hostname` and both selecting only this Mosquitto's own pods through `SelectorLabels`. |
 
@@ -62,24 +69,60 @@ wrong quantity is worth a visible reconcile failure rather than a silently subst
 | Symbol | Responsibility |
 |---|---|
 | `DefaultMaxConcurrentReconciles` | `4`. Why not controller-runtime's `1` is in the constant's comment and in [architecture.md](architecture.md#watches-and-concurrency). |
-| `MosquittoReconciler` | Embeds the client; holds the scheme and `MaxConcurrentReconciles` (zero means the default). |
-| `Reconcile` | One pass: fetch, skip on deletion, write the objects, then update status. On a failed write it records `Failed` on the resource *and* returns the error, so the failure is visible to `kubectl get` and the work queue still backs off. |
+| `MosquittoReconciler` | Embeds the client; holds the scheme, `MaxConcurrentReconciles` (zero means the default), `SecretSecurity`, the uncached `APIReader` every read of Secret data goes through (nil falls back to the client), `ReloaderImage`, `SecretNamespaces` and `Random` (nil means `crypto/rand`). |
+| `Reconcile` | One pass: fetch (a missing broker's users get `BrokerNotFound`), skip on deletion, `refusePass`, render the users and write the objects, then update status. On a failed write it records `Failed` on the resource *and* returns the error, so the failure is visible to `kubectl get` and the work queue still backs off. |
+| `refusePass`, `namespaceGranted`, `refuseTLSSecret` ([`refusals.go`](../../internal/controller/refusals.go)) | The checks before any write: the namespace against `--secret-namespaces`, `spec.config` against the allowlist, and with `--secret-security` a metadata-only `get` of the TLS Secret ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7, D10). |
+| `renderUsers`, `readCredentials`, `currentAuthData`, `reconcileAuthSecret`, `writeUserStatuses`, `persistUserStatus`, `reportUsers`, `reportUsersOfMissingBroker` ([`users.go`](../../internal/controller/users.go)) | The users: list them by index, read each Secret (cached metadata, then one uncached `get` of the data), render, write `<name>-auth` only on a difference, write each user's status only on a difference. |
 | `reconcileResources` | The dependency order: ConfigMap, headless Service, client Service, StatefulSet. Stops at the first error. |
-| `reconcileConfigMap`, `reconcileService`, `reconcileStatefulSet` | Build, `SetControllerReference`, `Get`, `Create` on NotFound, else `ensureOwned`, a semantic diff and `Update` ([architecture.md](architecture.md#what-each-write-compares)). |
+| `reconcileConfigMap`, `reconcileService`, `reconcileStatefulSet` | Build, `SetControllerReference`, `Get`, `Create` on NotFound, else `ensureOwned`, a semantic diff and an `Update` that merges labels and annotations rather than assigning them ([architecture.md](architecture.md#what-each-write-compares)). |
 | `updateStatus`, `setPhase`, `persistStatus`, `statusUnchanged` | The whole status path. `setPhase` writes phase, `observedGeneration` and the `Ready` condition together; `persistStatus` re-reads the object and writes only on a difference. |
 | `ensureOwned` | `metav1.IsControlledBy` or an error naming the object. See [ADR 0009](../adr/0009-delete-only-through-owner-references.md). |
-| `SetupWithManager`, `maxConcurrentReconciles` | `For(&Mosquitto{})` with `GenerationChangedPredicate`, `Owns` on StatefulSet, ConfigMap and Service, and the worker count. |
+| `SetupWithManager`, `indexFields`, `userBrokers`, `brokersForSecret`, `StripSecret`, `maxConcurrentReconciles` ([`watches.go`](../../internal/controller/watches.go)) | The three field indexes; `For(&Mosquitto{})` and the user watch with `GenerationChangedPredicate`; `Owns` on StatefulSet, ConfigMap, Service and Secret; the Secret watch; the cache transform that strips Secret data; the worker count ([architecture.md](architecture.md#watches-and-concurrency)). |
 | The `+kubebuilder:rbac` markers | The only source of [`config/rbac/role.yaml`](../../config/rbac/role.yaml). The comment above them justifies every verb, because the role is cluster-wide and an unused cluster-wide verb is blast radius nobody chose. |
+
+## internal/auth
+
+| Symbol | Responsibility |
+|---|---|
+| `Render(payload, inputs, previous, random)` | One broker's users in, its credentials and one `Verdict` per user out: the username allowlist and the reserved `mko-` prefix, the empty password, every ACL topic and access mode, collisions by age, kept or new hashes, and the accepted users sorted by username before `payload.Render` ([architecture.md](architecture.md#the-renderer)). Deterministic for equal logins |
+| `Input`, `Accepted`, `Verdict`, `Result` | What the reconciler hands over per user (object name, creation time, username, password, ACLs), what the payload gets, what a user's status gets, and the Secret data with the verdicts |
+| `Payload`, `FilePayload`, `PasswdKey`, `ACLKey` | The mode-specific half ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D9): `Hashes` reads the hashes out of a previous rendering, `Render` writes the new one. `FilePayload` writes `passwd` and `acl` |
+| `ReservedPrefix` | `mko-`, kept for principals the operator renders itself |
+| `HashPassword(password, random)` | The `$7$<iterations>$<base64 salt>$<base64 key>` line the `password-file` plugin verifies: PBKDF2-HMAC-SHA512 at `HashIterations` (1000), a 64-byte salt read from `random`, a 64-byte key, padded standard base64 — `mosquitto_passwd`'s exact shape ([broker-behaviour.md](broker-behaviour.md) M20, [ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D3). The reader is a parameter so a test can pin the salt. |
+| `VerifyPassword(encoded, password)` | Whether a plaintext still verifies against a `$7$` hash, with the hash's own iteration count and salt, compared in constant time; anything that does not parse never verifies. It is what lets a renderer keep an existing hash instead of writing a new salt on every pass. |
+
+## internal/reloader
+
+| Symbol | Responsibility |
+|---|---|
+| `Main(args, stderr)` | Parses `--source`, `--target`, `--files`, `--process`, `--once`, `--interval`, `--tls-dir`. With `--once` it copies and exits — `auth-init`; without, it runs `Run` until SIGTERM — `reloader` |
+| `Sync(cfg)` | Reads every file of the Secret mount through one resolved `..data` link, and replaces each copy whose bytes differ through a temporary file and a rename, mode `0600`. Reports whether anything changed |
+| `Run(ctx, cfg, interval, logger)` | Polls `Sync` and, with `Config.TLSDir`, `checkTLS`; after a change signals the broker; a signal that failed — no broker process yet — stays pending for the next round; while the mounted TLS pair is invalid nothing is signalled |
+| `checkTLS(dir, state)` ([`tls.go`](../../internal/reloader/tls.go)) | Reads `tls.crt` and `tls.key` through one resolved `..data`, reports a change against the last pair seen and checks a changed pair with `crypto/tls.X509KeyPair`; an invalid pair is reported once. The first pair is the one the broker started with |
+| `FindProcess(procRoot, name)` | The pid whose `/proc/<pid>/comm` is `name` (`mosquitto`) |
+| `Config.Signal` | How the signal is sent; nil means `syscall.Kill(pid, SIGHUP)`. Tests inject a recorder |
+
+## internal/exporter
+
+| Symbol | Responsibility |
+|---|---|
+| `Main(args, stderr)` | Parses `--broker`, `--username`, `--password-file`, `--tls-cert`, `--listen`, listens, and runs `Run` until SIGTERM |
+| `Run(ctx, cfg, listener, logger)` | Starts the MQTT client and serves `Handler` on the listener until ctx ends |
+| `newClient` | The paho client: client ID = username, the password re-read on every attempt, retry and reconnect on their own; on connect it subscribes to `$SYS/broker/#` and marks the collector connected, on a lost connection it calls `Collector.Lost` |
+| `pinnedTLS(path)` | Under TLS: no chain or host-name check, and `VerifyConnection` accepts exactly the certificate in `path`, re-read on every handshake |
+| `parse(topic, payload)` ([`mapping.go`](../../internal/exporter/mapping.go)) | One `$SYS` message to one sample: the `table` of measured topics (M28), the load averages with a `window` label, the version as a label; anything else is skipped |
+| `Collector` ([`collector.go`](../../internal/exporter/collector.go)) | The last value per series; `Lost` drops them all, so a scrape without a session serves `mosquitto_exporter_connected 0` and nothing else. An unchecked collector: its series follow what the broker publishes |
+| `Handler(collector)` | `/metrics` from a registry holding only the collector |
 
 ## cmd
 
 | Symbol | Responsibility |
 |---|---|
 | `init` | Registers client-go's scheme and `mkov1` into the package-level `scheme`. |
-| `bindOperatorFlags` | `--metrics-bind-address` (`:8080`), `--health-probe-bind-address` (`:8081`), `--leader-elect` (`false`), `--max-concurrent-reconciles` (`controller.DefaultMaxConcurrentReconciles`). |
+| `bindOperatorFlags` | `--metrics-bind-address` (`:8080`), `--health-probe-bind-address` (`:8081`), `--leader-elect` (`false`), `--max-concurrent-reconciles` (`controller.DefaultMaxConcurrentReconciles`), `--secret-security` (`false`), `--reloader-image` (`guidedtraffic/mosquitto-operator:<version>`), `--secret-namespaces` (empty). |
 | `bindZapFlags` | Registers controller-runtime's zap flags through `zap.Options.BindFlags`, with `Development: true` as the base, so `--zap-log-level` and its siblings are accepted. |
 | `managerOptions` | Scheme, metrics bind address, probe bind address, leader election with `LeaderElectionID = "mosquitto-operator.mko.gtrfc.com"`. No `LeaderElectionNamespace`, so the Lease lands in the operator's own namespace — which is why the leader-election RBAC is a namespaced `Role`. |
-| `newReconciler`, `main` | Wiring, the `healthz`/`readyz` checks (both `healthz.Ping`), `mgr.Start` ([architecture.md](architecture.md#operator-startup)). |
+| `newReconciler`, `main` | Wiring — the reconciler gets `mgr.GetAPIReader()` for the uncached Secret check — the `healthz`/`readyz` checks (both `healthz.Ping`), `mgr.Start` ([architecture.md](architecture.md#operator-startup)). |
 | `version`, `commit`, `buildTime` | `dev`/`unknown`/`unknown` unless set through `-ldflags` from the `BUILD_NUMBER`, `GIT_COMMIT` and `BUILD_TIME` build args of the [`Containerfile`](../../Containerfile); logged once at startup. |
 
 `main()` itself is untestable — it calls `ctrl.GetConfigOrDie` and `os.Exit` — so everything
@@ -89,22 +132,24 @@ decidable was moved into the small helpers above, which
 
 **Which flags a deployed operator gets.** The chart passes `--metrics-bind-address` (`:8080`, or
 `0` with `metrics.enabled: false`), `--health-probe-bind-address=:8081`,
-`--max-concurrent-reconciles` and, under `leaderElection.enabled`, `--leader-elect`
+`--max-concurrent-reconciles`, `--secret-security` and, under `leaderElection.enabled`,
+`--leader-elect`, `--reloader-image` and, in mode `namespaces`, `--secret-namespaces`
 ([`deployment.yaml`](../../deploy/helm/mosquitto-operator/templates/deployment.yaml));
-[`config/manager/manager.yaml`](../../config/manager/manager.yaml) passes only `--leader-elect`.
-Neither passes a `--zap-*` flag, so a deployed operator logs at the zap defaults with
-`Development: true`; the flags are exercised by `make run`, which passes `--zap-log-level=debug`.
-(The comment on `bindZapFlags` says the deployment passes `--zap-log-level`; it does not.)
+[`config/manager/manager.yaml`](../../config/manager/manager.yaml) passes `--leader-elect`,
+`--secret-security=false` and `--reloader-image`, whose value `config/default` replaces with the
+manager's image; the components append `--secret-security=true` and `--secret-namespaces=…`. Neither passes a `--zap-*` flag, so a deployed operator logs at the zap
+defaults with `Development: true`; the flags are exercised by `make run`, which passes
+`--zap-log-level=debug`.
 
 ## test
 
 | Package | Build tag | Needs | The question only this tier answers |
 |---|---|---|---|
 | `internal/...`, `api/v1`, `cmd`, `test/testimages` | none | nothing | Does the code compute the right thing? |
-| [`test/integration`](../../test/integration) | `integration` | the envtest binaries | Does a real API server accept what the builder produces, and do the CRD markers default and validate as claimed? |
+| [`test/integration`](../../test/integration) | `integration` | the envtest binaries | Does a real API server accept what the builder produces — its PodSecurity admission at `restricted` included — and do the CRD markers default and validate as claimed? |
 | [`test/e2e`](../../test/e2e) | `e2e` | a cluster with the operator installed, `kubectl` | Does a broker come up and speak MQTT, does TLS serve MQTTS, does hard anti-affinity spread, does deleting the CR collect everything? |
 | [`test/imagetools`](../../test/imagetools) | `imagetools` | Docker | Does the pinned broker image still contain the binaries this repository executes inside it? |
-| [`test/rbacparity`](../../test/rbacparity) | `rbacparity` | `helm`, `kustomize` (`bin/kustomize`, else `PATH`), `git` | Do both install paths grant the same authority? |
+| [`test/rbacparity`](../../test/rbacparity) | `rbacparity` | `helm`, `kustomize` (`bin/kustomize`, else `PATH`), `git` | Do both install paths grant the same authority and pass the same switch flags, at every install-time setting? |
 
 The tiers state their own blind spots in their package comments, and those comments are the
 contract between them: `test/integration` says envtest runs no kube-controller-manager and no

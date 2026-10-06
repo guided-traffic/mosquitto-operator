@@ -92,6 +92,9 @@ func TestE2E_TLS_CertManagerIssuedSecretServesMQTTS(t *testing.T) {
 			"cert-manager wrote no %s into %s; the secret carries %v", key, secretName, presentKeys)
 	}
 
+	tc.createCredentials(t, ns, "probe-mqtt", "probe", "probe-pw")
+	tc.createUser(t, ns, "probe", name, "probe-mqtt", acl("e2e/#", "readwrite"))
+
 	t.Log("Creating a Mosquitto CR that references the issued secret")
 	tc.createMosquitto(t, ns, buildMosquittoObject(name, ns, map[string]interface{}{
 		"replicas": int64(1),
@@ -116,8 +119,7 @@ func TestE2E_TLS_CertManagerIssuedSecretServesMQTTS(t *testing.T) {
 		}
 		assert.True(t, mounted, "the referenced secret is not a volume of the broker pod")
 
-		require.Len(t, sts.Spec.Template.Spec.Containers, 1)
-		container := sts.Spec.Template.Spec.Containers[0]
+		container := brokerContainer(t, sts)
 
 		var mountPath string
 		for _, mount := range container.VolumeMounts {
@@ -161,10 +163,12 @@ func TestE2E_TLS_CertManagerIssuedSecretServesMQTTS(t *testing.T) {
 		// by a hostname the client verifies.
 		tc.podExec(t, ns, pod,
 			"mosquitto_pub", "-h", podDNS, "-p", "8883", "--cafile", caCertPath,
+			"-u", "probe", "-P", "probe-pw",
 			"-q", "1", "-r", "-t", probeTopic, "-m", payload)
 
 		received := tc.podExec(t, ns, pod,
 			"mosquitto_sub", "-h", podDNS, "-p", "8883", "--cafile", caCertPath,
+			"-u", "probe", "-P", "probe-pw",
 			"-q", "1", "-t", probeTopic, "-C", "1", "-W", "15")
 
 		assert.Equal(t, payload, received,

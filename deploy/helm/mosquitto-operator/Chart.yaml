@@ -1,6 +1,6 @@
 apiVersion: v2
 name: mosquitto-operator
-description: A Kubernetes operator for provisioning highly available Mosquitto MQTT brokers
+description: A Kubernetes operator that turns one Mosquitto custom resource into an Eclipse Mosquitto deployment
 type: application
 version: 0.1.0
 appVersion: "0.1.0"

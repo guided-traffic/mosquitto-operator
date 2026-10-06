@@ -4,6 +4,35 @@
 
 Accepted. Date: 2026-09-01.
 
+**Amended 2026-10-05 — the tier was out of CI for five weeks, and is back.** From 2026-09-01 until
+the change that wrote this amendment, `e2e-tests` and `e2e-gate` were commented out of
+[`release.yml`](../../.github/workflows/release.yml) and `e2e-tests` was missing from
+`semantic-release`'s `needs:`. The trigger was a multi-node leg that died after ten minutes inside
+`sudo apt-get install build-essential`, before it reached a test — an ephemeral ARC runner pod
+losing its network, not a defect of this repository; the single-node leg ran the same step in the
+same workflow and passed. The jobs were commented out rather than skipped with `if: false`,
+because a skipped matrix fails the gate's `[ "$result" = "success" ]` and GitHub skips every job
+whose `needs` were skipped, so `semantic-release` would have stopped as well. None of D1–D9 was in
+force during that time, and releases `v0.1.1` to `v0.1.8` were cut without an E2E run.
+
+**Observed, 2026-10-05, before restoring them**, locally (darwin/arm64, Docker Desktop, kind
+`v0.32.0`, `kindest/node:v1.36.1`, the operator image built from the tree):
+
+| Invocation | Result |
+|---|---|
+| `make e2e-local KIND_WORKERS=0` | `PASS`: `TestE2E_Mosquitto_ProvisionsAReachableBroker`, `TestE2E_TLS_CertManagerIssuedSecretServesMQTTS`, `TestE2E_AntiAffinity_OffByDefault`, `TestE2E_AntiAffinity_SoftWhenRequested`; `SKIP`: `TestE2E_AntiAffinity_HardSpreadsAcrossNodes`, as D6 intends on one node |
+| `E2E_REQUIRE_MULTI_NODE=true make e2e-local KIND_WORKERS=3 KIND_CLUSTER=mosquitto-operator-test-multinode E2E_RUN=TestE2E_AntiAffinity` | `PASS` for all three anti-affinity tests; `grep -c -- '--- PASS: TestE2E_AntiAffinity_HardSpreadsAcrossNodes'` over the log counts `1`, the unindented top-level line D5's guard matches |
+
+The multi-node run also settles D3's assumption in the direction that matters: three replicas
+spread hard over three workers next to a control-plane node, so the control-plane took no broker
+pod.
+
+**Observed in CI, 2026-10-05:** the first run with the jobs restored — `Test and Release` run
+`37367556237`, on pull request #46 — passed both legs on `kindest/node:v1.33.4`, and `E2E Tests`,
+the gate, passed. The multi-node log carries `--- PASS: TestE2E_AntiAffinity_HardSpreadsAcrossNodes`
+unindented and the guard step passed after it; the single-node leg passed every test but the hard
+spread, which it skipped.
+
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) (the `on:` block, the
 `e2e-tests` job with its `strategy.matrix.include`, the Kind config heredoc, the
@@ -27,14 +56,12 @@ while an environment variable reaches the recipe shell — which is what makes
 `E2E_REQUIRE_MULTI_NODE=true make e2e-local KIND_WORKERS=3 …` work through `e2e-local`, whose
 recipe runs `$(MAKE) test-e2e` and then tears the cluster down with `$(MAKE) kind-delete`.
 
-**Not verified.** Nothing in this repository has ever run against a real cluster, in CI or
-locally: there is no workflow run, no Kind cluster and no recorded E2E result behind any
-statement here. Every claim below is a claim about what the files say, never about what a run
-did. In particular, three things are recorded rationale rather than measurement: that kind keeps
-the `NoSchedule` taint on the control-plane node of a multi-node cluster and drops it on a
-single-node one; that `grep -q -- "--- PASS: …"` matches the `go test -v` output the suite will
-actually emit for a top-level parallel test; and that GitHub counts a skipped required check as
-satisfied, which is the reason `e2e-gate` carries `if: always()`.
+**Not verified.** ~~Nothing in this repository has ever run against a real cluster…~~ *(Amended
+2026-10-05: both legs ran locally, see above.)* Of the three things this record held as rationale
+rather than measurement, the guard grep's match on `go test -v` output is now observed, and the
+control-plane taint is observed indirectly (the hard spread landed on the three workers). Still
+rationale: that GitHub counts a skipped required check as satisfied, which is the reason
+`e2e-gate` carries `if: always()`.
 
 Implemented: the two legs, the gate job, the node-count assertion, the guard grep, the
 `E2E_REQUIRE_MULTI_NODE` escalation and the `KIND_WORKERS` variable all exist in the tree today.
@@ -262,16 +289,15 @@ invocation for each leg.
 
 ## Residual risks
 
-* **Nothing here has been observed running.** The legs, the gate, the node-count assertion and
-  the guard grep have never executed against a cluster or on a runner. Every claim in this ADR
-  is about the content of files. The first real run is where the shape of `go test -v` output,
-  the kind taint behaviour and the DinD preparation stop being reasoning and start being facts.
+* **The DinD preparation is observed only on the runners.** The local runs above used plain
+  `kind create cluster` on Docker Desktop: no kernel modules, no `native` snapshotter, no `ctr`
+  import. The node-count assertion and the gate run only in CI.
 * **The guard grep depends on the exact output format of `go test -v`.** It matches
   `--- PASS: TestE2E_AntiAffinity_HardSpreadsAcrossNodes` in a log that also contains `=== RUN`,
-  `=== PAUSE` and `=== CONT` lines, because the test calls `t.Parallel()`. Top-level results are
-  expected to be unindented and subtests indented, which is why the pattern carries no leading
-  whitespace. Not verified against real output.
-* **The control-plane taint claim is recorded, not measured.** D3 and the comments in
+  `=== PAUSE` and `=== CONT` lines, because the test calls `t.Parallel()`. Observed on
+  2026-10-05 with Go `1.27.1`: the top-level result is unindented. A future Go release that
+  changes the format breaks the guard loudly (the leg fails), not silently.
+* **The control-plane taint claim is observed only indirectly.** D3 and the comments in
   [`test/e2e/affinity_test.go`](../../test/e2e/affinity_test.go) and the
   [`Makefile`](../../Makefile) all rest on kind keeping the `NoSchedule` taint on the
   control-plane node of a multi-node cluster and dropping it on a single-node one. The code

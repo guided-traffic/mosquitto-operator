@@ -301,8 +301,9 @@ sync-helm-crd: ## Sync generated CRDs into Helm chart (single source of truth: c
 ##@ Build
 
 .PHONY: build
-build: fmt vet ## Build manager binary.
+build: fmt vet ## Build the manager and exporter binaries.
 	go build -o bin/manager cmd/main.go
+	go build -o bin/exporter ./cmd/exporter
 
 .PHONY: run
 run: fmt vet ## Run a controller from your host.

@@ -7,13 +7,14 @@ metadata:
 {{/*
 The rules below mirror the kubebuilder RBAC markers on the reconciler in
 internal/controller/mosquitto_controller.go, which is what config/rbac/role.yaml
-is generated from. Nothing regenerates this template and nothing compares it
-against config/rbac/role.yaml, so a new marker has to be added here by hand -
-anything the reconciler writes without a rule here fails 403 on every pass.
+is generated from. Nothing regenerates this template, so a new marker has to be
+added here by hand - anything the reconciler writes without a rule here fails
+403 on every pass. test/rbacparity (make verify-rbac-parity) renders this chart
+and config/default and fails when the two grant different authority.
 
-The leases rule below is the one intended difference from config/rbac/role.yaml:
-leader election belongs to the manager, not to the reconciler, so no kubebuilder
-marker produces it.
+This ClusterRole holds no leases rule: leader election belongs to the manager,
+not to the reconciler, and its rule lives in the namespaced Role of
+leader-election.yaml, mirroring config/rbac/leader_election_role.yaml.
 */}}
 rules:
   # The Mosquitto resources themselves, their status subresource and their
@@ -49,6 +50,22 @@ rules:
       - mosquittoes/finalizers
     verbs:
       - update
+  # The users of the brokers: read, and their status written. The reconciler
+  # never writes a MosquittoUser's spec (docs/adr/0006 D9).
+  - apiGroups:
+      - mko.gtrfc.com
+    resources:
+      - mosquittousers
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - mko.gtrfc.com
+    resources:
+      - mosquittousers/status
+    verbs:
+      - update
   # The ConfigMap holding mosquitto.conf, plus the headless and the client
   # Service, written for every Mosquitto resource. No delete: the objects are
   # owned by the Mosquitto resource, so garbage collection removes them.
@@ -75,8 +92,26 @@ rules:
       - list
       - update
       - watch
-  # No rule for secrets: spec.tls.secretName is mounted into the broker pods by
-  # the kubelet, so the operator never reads the TLS material itself.
+  # Secrets, with secretAccess.mode "all" (the default, accepted by the owner
+  # after the risk was stated - docs/adr/0014 D7): get, list and watch read the
+  # users' credentials Secrets and wake a pass when one changes (the operator
+  # caches them without their data); create and update write <name>-auth, the
+  # one rendered Secret per broker. In every namespace of the cluster - which
+  # makes a compromised operator a reader and writer of every Secret there,
+  # GitOps deploy keys and the SOPS key included. With mode "namespaces" this
+  # rule is absent and secret-roles.yaml grants the same verbs per namespace.
+  {{- if eq .Values.secretAccess.mode "all" }}
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - create
+      - get
+      - list
+      - update
+      - watch
+  {{- end }}
   # No leader-election rule here on purpose. The Lease lives in the operator's
   # own namespace, so cluster-wide access to every Lease in the cluster is more
   # than the manager needs; leader-election.yaml grants it as a namespaced Role

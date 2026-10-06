@@ -2,19 +2,21 @@
 
 Repo: https://github.com/guided-traffic/mosquitto-operator
 Module `github.com/guided-traffic/mosquitto-operator` · API group `mko.gtrfc.com`, version `v1` ·
-Kind `Mosquitto`, resource `mosquittoes`, short name `mq`.
-**Status: `v0.1.x` is released — one `Mosquitto` renders four objects and every broker is
-anonymous. The next release is decided and not built: one broker run from Git through Flux, with
-`MosquittoUser` objects, credentials in the users' own Secrets and changes that apply themselves
+Kinds `Mosquitto` (resource `mosquittoes`, short name `mq`) and `MosquittoUser` (`mosquittousers`,
+`mqu`).
+**Status: `v0.1.x` is released, with anonymous brokers. The tree has built the core of the next
+release: one broker run from Git through Flux, every broker requiring a login, `MosquittoUser`
+objects with their credentials in their own Secrets, and changes that reach the running broker
+without a restart
 ([ADR 0012](docs/adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
 High availability comes last, after every other phase.** The work list is
 [the project plan](docs/planning/project-plan.md).
 
-**Nothing in this repository has ever been observed running against a real cluster.** Every
-statement here is read out of the tree. The E2E suite exists, but its CI jobs in
-[`release.yml`](.github/workflows/release.yml) have been commented out since 2026-09-01, and
-`semantic-release` no longer waits for them; no run of the suite has been seen. Where that
-matters, the ADRs say so in their own `Status` sections.
+**Kind is the only cluster this operator has been observed on.** The E2E suite runs on a Kind
+cluster per leg on every pull request, and `semantic-release` waits for it
+([`release.yml`](.github/workflows/release.yml)); it was commented out from 2026-09-01 to
+2026-10-05 and first observed passing on 2026-10-05. Nothing has run on a production cluster.
+Where that matters, the ADRs say so in their own `Status` sections.
 
 ## Language policy
 
@@ -72,9 +74,18 @@ on an unanswered question.
 
 ## What this operator does — and what it is not
 
-One `Mosquitto` produces exactly four objects today: a ConfigMap holding the generated
-`mosquitto.conf`, a headless Service, a ClusterIP client Service and a StatefulSet of broker pods
-(`reconcileResources` in [`internal/controller/mosquitto_controller.go`](internal/controller/mosquitto_controller.go)).
+One `Mosquitto` produces exactly five objects: the Secret `<name>-auth` holding its rendered users,
+a ConfigMap holding the generated `mosquitto.conf`, a headless Service, a ClusterIP client Service
+and a StatefulSet of broker pods, each pod with the broker, a `reloader` sidecar, the `exporter`
+when `spec.metrics.enabled` is set, and the init containers `auth-init` and `config-check`
+(`reconcileResources` in
+[`internal/controller/mosquitto_controller.go`](internal/controller/mosquitto_controller.go)). Every
+`MosquittoUser` naming the broker is rendered into `<name>-auth`
+([`internal/controller/users.go`](internal/controller/users.go),
+[`internal/auth`](internal/auth)); the reloader, the binary's second entry point `manager reload`,
+copies a change in and signals the broker ([`internal/reloader`](internal/reloader)); the
+exporter, the image's second binary, serves the broker's `$SYS` tree for Prometheus
+([`internal/exporter`](internal/exporter), ADR 0002).
 The fields, the names it derives and the generated file are in the [README](README.md)
 reference.
 
@@ -85,11 +96,9 @@ published through another. High availability is parked
 ([docs/planning/ha-research.md](docs/planning/ha-research.md)); do not write a comment, doc line
 or commit message that implies otherwise, and build nothing on `replicas > 1`.
 
-**Not in the tree, and not to be documented as if it were:** `MosquittoUser`, authentication,
-ACLs, the reload sidecar, the `secrets` grant (all decided in ADR 0013, ADR 0014 and ADR 0008
-Group C, none built), the metrics exporter (ADR 0002, nothing built), PodDisruptionBudgets,
-NetworkPolicies (deliberately never shipped, ADR 0008 D16), admission webhooks, ServiceMonitor,
-PrometheusRule, and any cert-manager dependency at any layer.
+**Not in the tree, and not to be documented as if it were:** roles or groups of users, the dynamic-security mode, PodDisruptionBudgets, NetworkPolicies (deliberately
+never shipped, ADR 0008 D16), admission webhooks, ServiceMonitor, PrometheusRule, and any
+cert-manager dependency at any layer.
 
 ## Reconcile rules that are easy to break
 
@@ -97,15 +106,25 @@ PrometheusRule, and any cert-manager dependency at any layer.
   label is not a proof. The refusal is a reconcile failure (`phase: Failed`, `Ready=False`, reason
   `ReconcileFailed`). A new managed kind inherits this, not an exemption
   ([ADR 0009](docs/adr/0009-delete-only-through-owner-references.md)).
+- **Secret data never enters the cache**: Secrets are cached through `controller.StripSecret`, and
+  every read of Secret data goes through the uncached `APIReader`. The TLS Secret's data is never
+  read at all.
 - **No `delete` and no `patch` in the ClusterRole**, and identical authority on both install
   paths ([ADR 0006](docs/adr/0006-both-install-paths-grant-the-same-authority.md)). A
   `Mosquitto` carrying a `DeletionTimestamp` gets no writes at all; teardown is the garbage
   collector's. **A new RBAC marker updates the chart's hand-written `clusterrole.yaml` in the same
   change**; `make verify-rbac-parity` catches the drift.
-- **`StatefulSetHasChanged` compares replicas, object labels, template labels and the two hash
-  annotations — never the pod spec structurally**, because the API server defaults pod fields and
-  a structural comparison loops forever. A new field outside the pod template is not picked up by
-  the hash.
+- **`StatefulSetHasChanged` compares replicas and the operator's own keys among the object's and
+  the pod template's labels and annotations — the two hashes and `spec.podLabels` /
+  `spec.podAnnotations` included — never the pod spec structurally**, because the API server
+  defaults pod fields and a structural comparison loops forever. A new field outside the pod
+  template is not picked up by the hash.
+- **Updates merge labels and annotations, never assign them** (`common.MergeLabels`,
+  `builder.MergeStatefulSet`; ADR 0009 D9): the operator's keys win, every other key stays. The
+  one removal is a `spec.podLabels`/`spec.podAnnotations` key that left the spec, tracked by the
+  applied-keys annotations on the StatefulSet.
+- **The `config-check` init container never mounts the data volume**: `--test-config` saves an
+  empty database on exit (broker-behaviour.md M19).
 - **`volumeClaimTemplates` are written on create and never updated.**
 - **Config changes need the config hash.** Mosquitto reads its file once at start; a ConfigMap
   update restarts nothing, so `mko.gtrfc.com/config-hash` carries a config change into a roll.

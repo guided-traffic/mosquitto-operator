@@ -17,8 +17,8 @@ target list.
 | Go | `1.27.1` | `go 1.27.1` in [`go.mod`](../../go.mod), `golang:1.27.1-alpine` in the [`Containerfile`](../../Containerfile), `GO_VERSION: '1.27.1'` in [`release.yml`](../../.github/workflows/release.yml) and [`build.yml`](../../.github/workflows/build.yml), and `go-1.27` (major.minor) in the badge of [`.github/release-template.hbs`](../../.github/release-template.hbs) | everything |
 | make + bash | any recent | `SHELL = /usr/bin/env bash -o pipefail`, `.SHELLFLAGS = -ec` | everything |
 | Docker | not pinned | — | `test-image-tools`, `docker-build`, `docker-buildx`, `kind-load`, `e2e-local` |
-| kubectl | not pinned for local use | `KUBERNETES_VERSION: '1.33.4'` in `release.yml`, used only by the commented-out E2E job | `install`, `uninstall`, `deploy`, `undeploy`, `cert-manager-install`, `e2e-local`, and `test-e2e` (the suite runs `kubectl exec`) |
-| kind | not pinned for local use | `v0.30.0` through `helm/kind-action@v1.14.0`, in the commented-out E2E job | `kind-create`, `kind-delete`, `kind-load`, `e2e-local` |
+| kubectl | not pinned for local use | `KUBERNETES_VERSION: '1.33.4'` in `release.yml`, used only by the E2E job | `install`, `uninstall`, `deploy`, `undeploy`, `cert-manager-install`, `e2e-local`, and `test-e2e` (the suite runs `kubectl exec`) |
+| kind | not pinned for local use | `v0.30.0` through `helm/kind-action@v1.14.0`, in the E2E job | `kind-create`, `kind-delete`, `kind-load`, `e2e-local` |
 | helm | not pinned for local use; CI `v4.3.0` | `azure/setup-helm@v5` in the `generated-manifests` job and in `build.yml` | `verify-rbac-parity`, `e2e-local` |
 | node + npm | CI `lts/*` | `actions/setup-node@v7` in `release.yml` | `test-release-tooling` (`npm ci`), `verify-ci-references` (node only, no install) |
 | git | any | — | `verify-rbac-parity` (the test finds the repository root with `git rev-parse --show-toplevel`) |
@@ -85,7 +85,7 @@ make generate-all     # then check that `git status` is clean
 | `verify-ci-references` | node, no `npm install` | Every Renovate customManager still matches a real file and line. |
 | `test-release-tooling` | node + npm | `npm ci --no-audit --no-fund`, then `node hack/verify-release-tooling.mjs`. |
 | `generate-all` | nothing (installs `controller-gen`) | `manifests` + `generate` + `sync-helm-crd` ([below](#generated-code)). Follow it with `git status`. |
-| `build` | nothing | `bin/manager`, after `fmt` and `vet` — and `fmt` rewrites files in place. |
+| `build` | nothing | `bin/manager` and `bin/exporter`, after `fmt` and `vet` — and `fmt` rewrites files in place. |
 | `run` | a kubeconfig | `go run ./cmd/main.go --zap-log-level=debug` against your current cluster, after `fmt` and `vet`. |
 | `docker-build` | Docker | The operator image `IMG`. Depends on `generate-all`, so it regenerates first. |
 | `kind-create` / `kind-delete` | kind, Docker | A cluster named `KIND_CLUSTER` with one control-plane node and `KIND_WORKERS` workers; the config goes to `tmp/kind-config.yaml`. |
@@ -195,7 +195,7 @@ clone pays for the tool downloads, the envtest assets and the image pull on top.
 | `make verify-ci-references` | `OK: all 6 Renovate customManagers reference real files and lines` | 0.4 s |
 | `make test-release-tooling` | `OK: release tooling renders release notes` — `analyzeCommits -> major`, `generateNotes -> 1450 chars, all sections present` | 2.9 s |
 | `make generate-all` | no change to the working tree | 4.1 s |
-| `make build` | `bin/manager` written | 2.4 s |
+| `make build` | `bin/manager` written (measured before `bin/exporter` was added) | 2.4 s |
 | `make docker-build IMG=mosquitto-operator:doccheck` | image built (and removed again afterwards) | 5.5 s, layers cached |
 
 Not run, and therefore not claimed to work: `test`, `test-coverage`, `coverage`, `coverage-ci`,

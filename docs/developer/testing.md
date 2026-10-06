@@ -5,10 +5,10 @@ E2E legs, and the environment variables the suites read. The Make targets themse
 [build-test-lint.md](build-test-lint.md); the CI jobs are [ci-and-release.md](ci-and-release.md).
 Read against the tree on 2026-10-05.
 
-**Nothing in this repository has been observed running against a real cluster.** The E2E tier
-exists and can be run locally, but its CI jobs are commented out
-([ci-and-release.md](ci-and-release.md#the-e2e-jobs-are-commented-out)); everything this page says
-about E2E behaviour is read from the code.
+**The only cluster this operator runs on is Kind.** The E2E tier runs on every pull request and
+before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)) and was first observed
+passing on 2026-10-05, locally with `make e2e-local` on both legs; nothing has been observed on a
+production cluster.
 
 ## The tiers
 
@@ -18,7 +18,7 @@ the cheapest tier that can actually answer its question — never in one that ca
 | Tier | Command | Build tag | Needs | What only it can answer |
 |---|---|---|---|---|
 | Unit | `make test-unit` | none | nothing | Builder output and reconcile logic, against controller-runtime's fake client. No control plane is started anywhere in this tier. |
-| Integration | `make test-integration` | `integration` | the envtest binaries (`make envtest` and the `ENVTEST_K8S_VERSION` assets, both fetched by the target) | What a **real API server** decides: CRD defaulting and validation, whether the built objects are accepted, whether the owner references are accepted as written, whether the `Owns` watch carries a StatefulSet's readiness into status. envtest runs no kubelet and no kube-controller-manager, so **no pod starts and no garbage collection happens here**. |
+| Integration | `make test-integration` | `integration` | the envtest binaries (`make envtest` and the `ENVTEST_K8S_VERSION` assets, both fetched by the target) | What a **real API server** decides: CRD defaulting and validation, whether the built objects are accepted, whether the owner references are accepted as written, whether the `Owns` watch carries a StatefulSet's readiness into status, and whether PodSecurity admission at `restricted` admits the broker pod. envtest runs no kubelet and no kube-controller-manager, so **no pod starts and no garbage collection happens here**. |
 | E2E | `make test-e2e` against a cluster, or `make e2e-local` | `e2e` | a cluster with the operator installed from the chart, a kubeconfig, `kubectl`; cert-manager and the issuer for the TLS test; three schedulable nodes for the hard spread | A running broker: that the listener speaks MQTT and not merely TCP, that a cert-manager-issued Secret serves MQTTS, that hard anti-affinity really spreads, that deleting the CR really collects the owned objects. |
 | Image tools | `make test-image-tools` | `imagetools` | Docker, no cluster | Whether the pinned broker image still contains the binaries this repository executes inside it. |
 | RBAC parity | `make verify-rbac-parity` | `rbacparity` | helm, kustomize, git, no cluster | Whether the Helm and the kustomize install path grant the same authority. |
@@ -58,8 +58,27 @@ Tests that hold an invariant a reader might otherwise break:
 | `TestPodTemplateHashesChangeWithTheThingTheyDigest` | a change only the operator computes still changes the template |
 | `TestReplicaChangeDoesNotRollThePods` | scaling rewrites a number; it does not touch the template |
 | `TestStatefulSetHasChanged`, `TestStatefulSetHasChanged_NilReplicasIsNotDrift` | the drift decision ([architecture.md](architecture.md#what-each-write-compares)) |
-| `TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard` | the broker pod admits into a namespace enforcing the restricted Pod Security Standard |
-| `TestReconcile_RefusesForeignObjects`, `TestEnsureOwned` | an object this CR does not control is refused, not adopted |
+| `TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard` | the broker pod admits into a namespace enforcing the restricted Pod Security Standard, spelled out by hand — the integration test below asks an API server |
+| `TestBuildStatefulSet_PodMetadataLosesToTheOperator`, `TestStatefulSetHasChanged_PodMetadata`, `TestMergeStatefulSet` | `spec.podLabels`/`spec.podAnnotations` reach the template under the operator's keys, roll the pods, and a removed key leaves; foreign keys and `kubectl.kubernetes.io/restartedAt` stay ([ADR 0009](../adr/0009-delete-only-through-owner-references.md) D9) |
+| `TestBuildStatefulSet_ConfigCheckInitContainer` | the `config-check` init container runs the pod's own image with the broker's security context and never mounts the data volume ([broker-behaviour.md](broker-behaviour.md) M19) |
+| `TestReconcile_UpdatesKeepForeignLabels`, `TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded`, `TestReconcile_PodLabelsReachAndLeaveTheTemplate` | the same merge through the reconciler, on all four objects |
+| `TestReconcile_SecretSecurity`, `TestReconcile_SecretSecurityLeavesARunningBrokerAlone` | `--secret-security=true` refuses an unlabelled or missing TLS Secret before any write, with the reason, and polls nothing |
+| `TestRender_IsDeterministic` | equal logins render equal bytes whatever the order, names and creation times of the users ([ADR 0013](../adr/0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) D8); observed failing without the final sort |
+| `TestRender_KeepsAHashWhileItsPasswordVerifies`, `TestReconcile_AnUnchangedPassWritesNothing` | an unchanged password keeps its hash and an unchanged pass writes nothing ([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D3) |
+| `TestRender_Refusals`, `TestRender_AcceptsWhatTheAllowlistAllows`, `TestRender_TheOldestUserKeepsTheUsername` | every render-time refusal, the username allowlist, and the collision rule |
+| `TestVerifyPassword_AcceptsTheBrokersOwnHash`, `TestHashPassword_HasTheShapeMosquittoPasswdWrites` | the `$7$` format against a line `mosquitto_passwd` of the pinned image wrote (M20) |
+| `TestReconcile_RendersTheUsersIntoTheAuthSecret`, `TestReconcile_ABrokerWithoutUsersAcceptsNobodyAndSaysSo`, `TestReconcile_EveryUserReason`, `TestReconcile_AUserOfAMissingBroker` | the users through the reconciler: `<name>-auth`, the statuses, every reason, and that a user's failure fails neither the broker nor another user |
+| `TestReconcile_ARefusedConfigWritesNothing`, `TestValidateSpecConfig` | the `spec.config` allowlist; observed failing with `listener` allowed |
+| `TestReconcile_ANamespaceOutsideTheGrant` | `--secret-namespaces` refuses a broker elsewhere and its users |
+| `TestGenerateMosquittoConf_RequiresALogin` | both plugins, `listener_allow_anonymous false`, `use_username_as_clientid true`, one listener, in each shape |
+| `TestBuildStatefulSet_TheCredentialsPath`, `TestBuildStatefulSet_TheReloaderImageRollsThePods` | `auth-init`, `reloader`, the two auth volumes and `shareProcessNamespace` in the pod; a new operator image rolls every broker |
+| `TestStripSecret`, `TestManagerOptions_SecretCache` | the Secret cache holds no data, and only the granted namespaces |
+| `TestBrokersForSecret`, `TestUserBrokers_AMoveWakesBothBrokers` | the Secret and user watches map to the right brokers |
+| `TestSync_*`, `TestFindProcess`, `TestRun_SignalsOnChangeAndRetriesUntilTheBrokerIsThere`, `TestMain_Once` ([`internal/reloader`](../../internal/reloader/reloader_test.go)) | the copy through one resolved `..data`, mode `0600`, no temporary file left, a broken Secret changing nothing, one signal per change and a pending one retried; observed failing with the retry removed |
+| `TestCheckTLS`, `TestRound_ARenewedCertificateIsSignalled`, `TestRound_AnInvalidPairBlocksEverySignal` ([`tls_test.go`](../../internal/reloader/tls_test.go)) | a renewed pair is signalled once; a certificate with another pair's key is never signalled, and while it is mounted a credential change is copied but not signalled until a valid pair arrives. Observed failing with the pair check, the block and the pending signal each removed |
+| `TestParse`, `TestParse_SkipsWhatItCannotMap`, `TestTable_CoversTheMeasuredTopics`, `TestCollector_ServesWhatItHoldsAndDropsItOnALostSession` ([`internal/exporter`](../../internal/exporter/exporter_test.go)) | every measured `$SYS` topic (M28) maps to one series, counters end in `_total`, an unknown topic or an unreadable payload is skipped, and a lost session leaves no stale value — observed failing with `Lost` keeping the values. Assertions match whole lines of the scrape: the HELP text of `mosquitto_exporter_connected` once contained a sample line |
+| `TestRender_TheExporterPrincipal`, `TestReconcile_TheExporterPrincipal`, `TestBuildStatefulSet_TheExporter`, `TestGenerateMosquittoConf_StatesTwoDefaults` | `mko-exporter` rendered with `$SYS/#` only and never counted as a user, its generated password kept across passes, the container and its projected password only with `spec.metrics`, `sys_interval` and `max_packet_size` stated before `spec.config` ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md)). Observed failing with the prefix check, the metrics gate and the kept password each removed |
+| `TestReconcile_RefusesForeignObjects`, `TestEnsureOwned` | an object this CR does not control is refused, not adopted, with the exact message of [ADR 0009](../adr/0009-delete-only-through-owner-references.md) D5 |
 | `TestReconcile_DeletionIsLeftToGarbageCollection` | a CR with a `DeletionTimestamp` gets no writes |
 | `TestReconcile_UnbuildableSpecFailsVisibly` | the one builder error surfaces as `Failed` |
 | `TestReconcile_StatusPhases`, `TestObservedGenerationFollowsTheSpec`, `TestStatusUnchanged` | the status table and its no-op write |
@@ -103,6 +122,8 @@ never pulled, deliberately not the pin.
 | [`crd_validation_test.go`](../../test/integration/crd_validation_test.go) | An empty spec defaults to one replica and `antiAffinity: off`; ten replicas, an unknown anti-affinity mode, an empty TLS secret name and an empty storage size are rejected |
 | [`affinity_test.go`](../../test/integration/affinity_test.go) | `off` renders no affinity block, `soft` one preference, `hard` one requirement, each repelling only its own brokers |
 | [`tls_test.go`](../../test/integration/tls_test.go) | The secret is mounted and the listener moves to 8883; the operator writes the StatefulSet whether or not the Secret exists, and never creates it |
+| [`users_test.go`](../../test/integration/users_test.go) | A user applied before its broker and its Secret reports `BrokerNotFound`, then `SecretNotFound`, then becomes `Accepted` with nobody reconciling by hand — the watches carry each arrival; a deleted user leaves `<broker>-auth`. Observed failing with the Secret watch removed |
+| [`pod_security_test.go`](../../test/integration/pod_security_test.go) | envtest's API server enforces PodSecurity — the control pod with `allowPrivilegeEscalation: true` is refused — and admits the pod of every shape the builder renders into a namespace labelled `enforce=restricted`, as a dry run ([ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) D4). A claim template becomes a PVC volume; the default ServiceAccount is created by the test because envtest runs no controller that would |
 
 ## E2E tests
 
@@ -116,11 +137,17 @@ graph.
 
 | Scenario | File | What only a cluster can show |
 |---|---|---|
-| `TestE2E_Mosquitto_ProvisionsAReachableBroker` | [`mosquitto_test.go`](../../test/e2e/mosquitto_test.go) | Status mirrors the StatefulSet with `Ready=True`; one port `mqtt`/1883; the generated config; both Services with endpoints; a retained publish with `mosquitto_pub` read back with `mosquitto_sub` inside the pod; deleting the CR collects the StatefulSet, both Services and the ConfigMap (`waitForOwnedObjectsGone`, within 2 minutes) |
+| `TestE2E_Mosquitto_ProvisionsAReachableBroker` | [`mosquitto_test.go`](../../test/e2e/mosquitto_test.go) | Status mirrors the StatefulSet with `Ready=True`; one port `mqtt`/1883; the generated config with `listener_allow_anonymous false`; both Services with endpoints; a retained publish with `mosquitto_pub` read back with `mosquitto_sub` inside the pod, as a `MosquittoUser` created before the broker so its first start carries it; deleting the CR collects the StatefulSet, both Services, the ConfigMap and `<name>-auth` (`waitForOwnedObjectsGone`, within 2 minutes) |
 | `TestE2E_TLS_CertManagerIssuedSecretServesMQTTS` | [`tls_test.go`](../../test/e2e/tls_test.go) | A `Certificate` from the ClusterIssuer `e2e-ca-issuer` yields `tls.crt`, `tls.key`, `ca.crt`; the broker mounts it read-only at `/mosquitto/tls`, serves `mqtts`/8883 only, completes a publish/subscribe round trip verified against `ca.crt` by the pod's DNS name; the operator creates no `Certificate` of its own |
+| `TestE2E_TLS_ACertManagerRenewalIsReloaded` | [`tls_renewal_test.go`](../../test/e2e/tls_renewal_test.go) | A renewal triggered as `cmctl renew` does reaches a fresh handshake — read through `kubectl port-forward` with Go's TLS client, the image has no `openssl` — as the new serial; the broker container did not restart; a TLS subscriber connected before the renewal still receives after it |
+| `TestE2E_TLS_AMismatchedPairIsNeverLoaded` | `tls_renewal_test.go` | A hand-written TLS Secret edited to a certificate with another pair's key: the `reloader` logs `the TLS pair is not valid`, a fresh handshake still gets the previous certificate, nothing restarted; the next valid pair is served |
+| `TestE2E_Metrics_TheExporterServesTheBrokersSysTree` | [`metrics_test.go`](../../test/e2e/metrics_test.go) | A broker with a plain listener and one under TLS each serve `mosquitto_exporter_connected 1`, the version and the client count through a port-forward to `9234`; a `MosquittoUser` claiming `mko-exporter` reports `UsernameReserved` and its password does not log in. Observed failing against an image without the certificate pin |
 | `TestE2E_AntiAffinity_OffByDefault` | [`affinity_test.go`](../../test/e2e/affinity_test.go) | No affinity block without an opt-in |
 | `TestE2E_AntiAffinity_SoftWhenRequested` | `affinity_test.go` | Three replicas become ready even where the spread cannot be satisfied; one preferred term at weight 100 |
 | `TestE2E_AntiAffinity_HardSpreadsAcrossNodes` | `affinity_test.go` | Three replicas on three distinct nodes. Skips below three schedulable nodes (Ready, not cordoned, no `NoSchedule`/`NoExecute` taint) unless `E2E_REQUIRE_MULTI_NODE=true` |
+| `TestE2E_Users_TheBrokerFollowsItsUsers` | [`users_test.go`](../../test/e2e/users_test.go) | On one running broker: an anonymous client is refused; a user created later can publish and nothing restarted; a client is refused outside its ACL; another user's client ID takes over no session; a changed password locks out the old one and admits the new one with no CR edited; a deleted user's open connection is dropped; a `spec.config` with a second listener is refused while the broker keeps serving; `<name>-auth` holds hashes only and is collected with the broker. Each change waits up to `reloadTimeout` (4 minutes) for the kubelet's refresh |
+| `TestE2E_PodMetadata_ReachesAndLeavesThePods` | [`pod_metadata_test.go`](../../test/e2e/pod_metadata_test.go) | A label and an annotation of the CR are on the running pod; replacing them rolls the pod, the new key arrives and the removed one is gone |
+| `TestE2E_ConfigCheck_StopsATypoBeforeTheBroker` | [`config_check_test.go`](../../test/e2e/config_check_test.go) | A misspelled `spec.config` directive fails the `config-check` init container, the broker container never runs, and the init container's log carries `Error: Unknown configuration variable '…'.` and `Error found at /mosquitto/config/mosquitto.conf:<line>.`, the line read back from the ConfigMap |
 
 Why the reachability check exists: the readiness probe is a TCP connect, so a broker that accepts
 connections and rejects every CONNECT still reports Ready. Only a real MQTT session says otherwise.
@@ -135,6 +162,11 @@ connections and rejects every CONNECT still reports Ready. Only a real MQTT sess
 | `tc.podExec(t, ns, pod, cmd…)` | `e2e_test.go` | `kubectl exec`, stdout only, 5 attempts with growing backoff, 30 s each |
 | `tc.requireThreeSchedulableNodes(t)` | `affinity_test.go` | The node-count guard |
 | `tc.createCertificate`, `tc.waitForCertificateReady`, `tc.waitForSecret`, `tc.getSecret` | `tls_test.go` | The cert-manager side, as an administrator would own it |
+| `portForward`, `tc.eventuallyScraped`, `tc.waitForUserReason` | `tls_renewal_test.go`, `metrics_test.go`, `users_test.go` | A `kubectl port-forward` to any pod port; a scrape until one whole line matches; a user's `Ready=False` reason |
+| `tc.servedSerial`, `tc.eventuallyServed`, `tc.renewCertificate`, `tc.setTLSPair`, `tc.waitForReloaderLog`, `newTestCA` | `tls_renewal_test.go` | One verified handshake through `kubectl port-forward` and the serial it served; a renewal as `cmctl renew` triggers it; a hand-written pair; the reloader's log as the proof the kubelet published an edit |
+| `tc.updateMosquittoSpec(t, ns, name, fields)`, `tc.waitForBrokerPod(t, ns, name, what, accept)` | `pod_metadata_test.go` | A spec update that retries on the conflict the operator's status writes cause; a wait for a ready pod whose labels and annotations satisfy a predicate |
+| `tc.createCredentials`, `tc.setPassword`, `tc.createUser`, `tc.waitForUserReady`, `acl(topic, access)` | `users_test.go` | A basic-auth Secret, a password change, a `MosquittoUser` through the dynamic client |
+| `tc.mqtt`, `tc.publish`, `tc.receive`, `tc.eventuallyAccepted`, `tc.eventuallyRefused`, `tc.startSubscriber`, `tc.startClient`, `tc.brokerPodIdentity` | `users_test.go` | One MQTT client run in the broker container, without retries — a refusal is an answer; polls until a login is accepted or refused (`not authorised`, exit 5); a long-running subscriber; the pod's UID and the broker's restart count, to prove nothing restarted |
 
 **Never assert on `secret.Data`.** A testify failure prints the value it was given, the E2E log is
 tee'd into the job output, and one red run would publish a private key. The TLS test asserts on the
@@ -167,8 +199,8 @@ E2E_REQUIRE_MULTI_NODE=true make e2e-local KIND_WORKERS=3 \
 `e2e-local` builds the image with `docker build` directly (not `make docker-build`), installs the
 chart with [`test/e2e/helm-values.yaml`](../../test/e2e/helm-values.yaml) — image
 `mosquitto-operator:test` with `pullPolicy: Never`, leader election off — and does **not** preload
-the broker image into the nodes, so the kubelet pulls `eclipse-mosquitto` anonymously. The
-commented-out CI job does preload it, reading the tag out of `test/testimages/images.go`.
+the broker image into the nodes, so the kubelet pulls `eclipse-mosquitto` anonymously. The CI
+job does preload it, reading the tag out of `test/testimages/images.go`.
 
 ## Image-tools tests
 
@@ -183,23 +215,48 @@ commented-out CI job does preload it, reading the tag out of `test/testimages/im
 - `TestPinnedImageIsTheOperatorDefault` asserts `builder.DefaultImage == testimages.MosquittoImage`,
   because otherwise this tier would check an image no broker runs
   ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)).
+- `TestImageProvidesTheFilePlugins` asks for `/usr/lib/mosquitto_password_file.so` and
+  `/usr/lib/mosquitto_acl_file.so`, the paths the generated configuration loads.
+- `TestImageAcceptsTheGeneratedConfiguration`
+  ([`generated_config_test.go`](../../test/imagetools/generated_config_test.go)) runs the pinned
+  image's `--test-config` over the generated file, plain and with TLS, with every allowed
+  `spec.config` directive appended at a sample value — `allowlistSamples` must cover the allowlist
+  exactly. Observed failing on a generated typo: `Error: Unknown configuration variable
+  'use_username_as_client_id'.`
+- `TestImageGrantsTheExporterItsSysTreeAndNothingElse` renders `mko-exporter` next to a user
+  granted `#` and asks the pinned image: the exporter reads `$SYS/broker/version` and not a
+  retained application message, the user no `$SYS` topic. Observed failing with the exporter's ACL
+  widened to `#`: `exporter-sys=` empty.
+- `TestImageAcceptsTheHashTheOperatorRenders` and `TestOperatorVerifiesTheImagesHash`
+  ([`password_hash_test.go`](../../test/imagetools/password_hash_test.go)) repeat
+  [broker-behaviour.md](broker-behaviour.md) M20 on every pull request: inside one container run
+  as `1883:1883`, a `$7$` line from `auth.HashPassword` loads into the `password-file` plugin and
+  logs a client in with its password (`right=0`) and not with another (`wrong=5`); and a line the
+  image's `mosquitto_passwd` writes verifies with `auth.VerifyPassword`. Observed failing with the
+  key derived at 999 iterations under a `1000` label: `"right=5\nwrong=5" does not contain
+  "right=0"`. `runInImageAs` is `runInImage` with `--user`.
 
 A cold pull plus the probe is bounded by 5 minutes.
 
 ## RBAC-parity test
 
 [`test/rbacparity/rbac_parity_test.go`](../../test/rbacparity/rbac_parity_test.go), build tag
-`rbacparity`. It finds the repository root with `git rev-parse --show-toplevel`, renders
-`helm template parity deploy/helm/mosquitto-operator --namespace mosquitto-operator-system` (chart
-defaults, so leader election on) and `kustomize build config/default` (`bin/kustomize`, else one
-on `PATH`), decodes every `ClusterRole` and `Role` into `rbacv1` types, and compares
-`(kind, apiGroup, resource) -> sorted verbs`. Rule order, grouping and name prefixes wash out; a
+`rbacparity`. It finds the repository root with `git rev-parse --show-toplevel` and renders each
+entry of `installSettings` on both paths: `helm template parity deploy/helm/mosquitto-operator
+--namespace mosquitto-operator-system` with the setting's `--set` values (none for the defaults,
+so leader election on), and `kustomize build` of `config/default` — or, for a setting with
+components, of an overlay of it the test writes to `tmp/rbacparity-<setting>/` (`bin/kustomize`,
+else one on `PATH`). Two settings today: the defaults, and `secretSecurity` with
+`config/components/secret-security`. It decodes every `ClusterRole` and `Role` into `rbacv1` types
+and compares `(kind, apiGroup, resource) -> sorted verbs`, and it checks that the manager
+container of both renders passes the same effective `--secret-security` (the last occurrence wins,
+as in Go's flag package). Rule order, grouping and name prefixes wash out; a
 namespaced `Role` and a `ClusterRole` with the same verbs are correctly *not* the same grant. An
 empty parse on either side fails the test, so a decoder that reads nothing cannot pass. It logs
 `compared N grants across both install paths`; the authority it compares is D6 of
 [ADR 0006](../adr/0006-both-install-paths-grant-the-same-authority.md). It compares authority
-only — `make install`'s un-overlaid rendering and the leader-election flag difference between the
-two Deployments are checked by nothing.
+and that one flag — `make install`'s un-overlaid rendering and the leader-election flag difference
+between the two Deployments are checked by nothing.
 
 ## Environment variables the suites read
 

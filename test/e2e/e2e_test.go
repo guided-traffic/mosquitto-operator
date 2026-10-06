@@ -353,7 +353,7 @@ func (tc *testClients) podExecOnce(namespace, podName string, command ...string)
 	ctx, cancel := context.WithTimeout(context.Background(), execTimeout)
 	defer cancel()
 
-	args := append([]string{"exec", podName, "-n", namespace, "--"}, command...)
+	args := append([]string{"exec", podName, "-n", namespace, "-c", "mosquitto", "--"}, command...)
 	cmd := exec.CommandContext(ctx, "kubectl", args...)
 
 	var stdout, stderr bytes.Buffer

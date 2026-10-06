@@ -31,6 +31,9 @@ and their Leases do not exclude each other.
 | The namespace | Any name. Use `--create-namespace` or an existing namespace | Fixed to `mosquitto-operator-system` by the overlay, and not rendered. Create it first |
 | ClusterRole and ClusterRoleBinding | Rendered | Rendered |
 | Leader-election Role and RoleBinding, and `--leader-elect` | Only while `leaderElection.enabled` is `true` (the default). The value switches the flag and the Role together | Always: [`config/manager/manager.yaml`](../../config/manager/manager.yaml) passes `--leader-elect` unconditionally |
+| The Secret grant | `secretAccess.mode` switches the ClusterRole rule against one Role per namespace, and `--secret-namespaces` ([below](#which-secrets-the-operator-may-touch)) | `config/default` grants every namespace; the component [`config/components/secret-namespaces`](../../config/components/secret-namespaces/kustomization.yaml) moves the grant into Roles |
+| `--secret-security` | The value `secretSecurity` (default `false`, [below](#which-secret-a-mosquitto-or-a-mosquittouser-may-name)) | `--secret-security=false` in [`config/manager/manager.yaml`](../../config/manager/manager.yaml); the component [`config/components/secret-security`](../../config/components/secret-security/kustomization.yaml) appends `--secret-security=true` |
+| `--reloader-image`, the image of `auth-init` and `reloader` in every broker pod | `image.repository:image.tag`, the operator's own | `config/default` copies the manager's image into it ([below](#the-reloader-image-on-the-kustomize-path)) |
 | The metrics server on `:8080` | Only while `metrics.enabled` is `true` (the default). `false` passes `--metrics-bind-address=0`, which starts no server | Always on. No flag is passed, so the binary's default `:8080` applies |
 | A Service in front of the metrics port | `<fullname>-metrics`, while `metrics.enabled` | None |
 | The operator image | `image.repository`, with `image.tag` defaulting to the chart's `appVersion` ([below](#install-with-helm)) | `controller:latest`, a placeholder you replace before applying ([below](#install-with-kustomize)) |
@@ -62,12 +65,15 @@ that ServiceAccount can therefore run any workload anywhere in the cluster
 ([privilege-footprint.md](../security/privilege-footprint.md)).
 
 **Pod Security.** The operator pod is hardened as described above, so its namespace can carry
-`pod-security.kubernetes.io/enforce=restricted`. Broker pods are built to the restricted standard
-in every shape the builder can produce: plain, TLS, storage, both together, and hard
-anti-affinity. A unit test asserts this
-(`TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard` in
-[`internal/builder/statefulset_test.go`](../../internal/builder/statefulset_test.go)). So the
-namespaces that hold `Mosquitto` resources can enforce `restricted` too. If a broker pod is
+`pod-security.kubernetes.io/enforce=restricted`. Broker pods — the broker container and the
+`config-check` init container — are built to the restricted standard in every shape the builder
+can produce: plain, TLS, storage, both together, and hard anti-affinity. An API server's own
+PodSecurity admission at `enforce=restricted` judges each of those pods in the integration tier
+(`TestIntegration_PodSecurity_RestrictedAdmitsEveryShape` in
+[`test/integration/pod_security_test.go`](../../test/integration/pod_security_test.go), against
+envtest `1.29.0`), next to a unit test that spells the rules out
+(`TestBuildStatefulSet_SatisfiesRestrictedPodSecurityStandard`). So the namespaces that hold
+`Mosquitto` resources can enforce `restricted` too. If a broker pod is
 rejected at admission, the StatefulSet is still created but no pods appear, and the resource stays
 `Pending` ([runtime.md, status](runtime.md#status)).
 
@@ -159,7 +165,41 @@ kubectl -n mosquitto-operator-system rollout status deploy/mosquitto-operator-mo
 
 There is no value file on this path. Leader election, the metrics port and the resources are
 whatever [`config/manager/manager.yaml`](../../config/manager/manager.yaml) says. To change one,
-edit the manifest or add a patch to your own overlay.
+edit the manifest or add a patch to your own overlay. The two security switches are shipped as
+components, because each has to change the flag and, for the Secret grant, the RBAC together:
+
+```yaml
+# your overlay's kustomization.yaml
+resources:
+  - <this repository>/config/default
+components:
+  - <this repository>/config/components/secret-security     # secretSecurity: true
+  - <this repository>/config/components/secret-namespaces   # secretAccess.mode: namespaces
+```
+
+`secret-namespaces` grants the placeholder namespace `mosquitto`: copy its `secret-role.yaml` once
+per namespace your brokers live in, and patch `--secret-namespaces=` to the same comma-separated
+list. `test/rbacparity` renders both components against the chart's equivalent values.
+
+### The reloader image on the kustomize path
+
+`auth-init` and `reloader` run the operator's own image, passed as `--reloader-image`.
+`config/default` copies the manager container's image into that flag with a `replacements` entry,
+so `make deploy IMG=…` or `kustomize edit set image controller=…` in `config/manager` moves both
+(verified with `kustomize build`). **An `images:` entry in your own overlay does not**: it runs after
+`config/default` was built, so the manager gets your image and the flag keeps
+`controller:latest`, and every broker pod then fails to pull its sidecar. If you set the image in
+your overlay, patch the flag to the same value:
+
+```yaml
+patches:
+  - target:
+      kind: Deployment
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/args/2
+        value: --reloader-image=registry.example.com/mosquitto-operator:0.2.0   # example
+```
 
 ## Leader election on the two paths
 
@@ -191,12 +231,56 @@ The E2E suite installs the chart with `leaderElection.enabled: false`
 ([`test/e2e/helm-values.yaml`](../../test/e2e/helm-values.yaml)). So the default, with leader
 election on, is a configuration that no test in this repository installs.
 
+## Which Secrets the operator may touch
+
+The operator reads the credentials Secrets the `MosquittoUser` objects name and writes
+`<broker>-auth`, one rendered Secret per broker. Where it may do that is `secretAccess.mode`
+([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7,
+[ADR 0006](../adr/0006-both-install-paths-grant-the-same-authority.md) D9):
+
+| Mode | Helm | kustomize | Grant |
+|---|---|---|---|
+| `all` (default) | `secretAccess.mode: all` | `config/default` as it is | `get`, `list`, `watch`, `create`, `update` on `secrets` in the ClusterRole: **every namespace of the cluster** |
+| `namespaces` | `secretAccess.mode: namespaces` and `secretAccess.namespaces: [home, ...]` | the component [`config/components/secret-namespaces`](../../config/components/secret-namespaces/kustomization.yaml), with one copy of its `secret-role.yaml` per namespace and the same list in its `--secret-namespaces` patch | the same verbs in a Role and RoleBinding `…-secrets` per listed namespace; none in the ClusterRole |
+
+**Choose before you install, because the default is wide.** With `all`, whoever controls the
+operator's ServiceAccount token, its image or its process can read and overwrite every Secret of
+the cluster, GitOps deploy keys and the SOPS key included; that default was accepted by the owner
+after the risk was stated, and the chart prints the grant after every install or upgrade. With
+`namespaces`, the operator also caches Secrets in those namespaces only, and a `Mosquitto` in any
+other namespace is `Failed` with reason `NamespaceNotGranted`, as are its users, with nothing
+written. The operator cannot create the Roles itself: RBAC would require it to hold the grant
+already. Either way the operator caches Secrets **without their data** and reads a credentials
+Secret's data with one direct request when it renders that user.
+
+## Which Secret a `Mosquitto` or a `MosquittoUser` may name
+
+`spec.tls.secretName` names a Secret of the `Mosquitto`'s namespace, which the broker pod mounts,
+and `spec.credentialsSecret.name` a Secret of the `MosquittoUser`'s namespace, which the operator
+reads. The author of a `Mosquitto` also chooses `spec.image`, the code that runs with that Secret
+mounted. The install-time switch `secretSecurity` decides what that means (ADR 0014 D10):
+
+| `secretSecurity` | Which Secret may be named | What it costs |
+|---|---|---|
+| `false` (default) | any Secret of the namespace | **`create` or `update` on `mosquittoes` in a namespace is reading every Secret of that namespace**, and on `mosquittousers` it makes the operator read and hash one. Grant both kinds no more widely than Secrets |
+| `true` | only a Secret labelled `mko.gtrfc.com/consumable=true` | label every TLS and credentials Secret a broker uses, `kubectl label secret <name> mko.gtrfc.com/consumable=true` |
+
+Whoever may label a Secret may write it, so the label is the Secret owner's consent. With `true`, a
+`Mosquitto` naming an unlabelled or missing TLS Secret is `Failed` with reason
+`SecretNotConsumable` or `SecretNotFound` and nothing is written; a `MosquittoUser` naming an
+unlabelled credentials Secret reports `SecretNotConsumable` and is left out of its broker — the
+label is checked on the cached metadata before the data is read. A label added later wakes the
+broker through the Secret watch. Turning the switch on for a cluster whose Secrets are not labelled
+yet stops every TLS broker from being updated and drops every user whose Secret is unlabelled at
+the next reload; label first, then switch.
+
 ## TLS for the brokers
 
 A broker serves MQTTS from a Secret that `spec.tls.secretName` names. The Secret must be in the
 `Mosquitto`'s own namespace and must carry `tls.crt` and `tls.key`. **The operator never creates,
-renews, reads or watches that Secret**, and it has no RBAC rule on `secrets` at all
-([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)). The kubelet
+renews, reads or watches that Secret's data**; with `secretSecurity: true` it reads the Secret's
+labels and nothing else ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md),
+[above](#which-secret-a-mosquitto-or-a-mosquittouser-may-name)). The kubelet
 mounts the Secret. Two ways of filling it are first class, and neither involves this project.
 
 **By hand:**
@@ -241,20 +325,23 @@ name missing from the SAN list fails the handshake with an error that looks like
 - The single listener moves from `1883` to `8883`, on the container and on both Services. Clients
   have to change their port and scheme with it.
 
-**What it checks:** nothing. If the Secret is missing, the StatefulSet is written anyway
-(`TestIntegration_TLS_DoesNotWaitForTheSecret`). The pod then waits on the kubelet's volume mount,
-and the resource stays `Pending` instead of turning `Failed`. A certificate and key that do not
-match are read only by the broker at startup. Neither case has been observed on a cluster. In both,
-look at the pod's events: `kubectl -n <ns> describe pod <name>-0`.
+**What it checks:** with `secretSecurity: false`, nothing. If the Secret is missing, the
+StatefulSet is written anyway (`TestIntegration_TLS_DoesNotWaitForTheSecret`). The pod then waits
+on the kubelet's volume mount, and the resource stays `Pending` instead of turning `Failed`; look
+at the pod's events: `kubectl -n <ns> describe pod <name>-0`. With `secretSecurity: true` a missing
+or unlabelled Secret makes the resource `Failed` ([above](#which-secret-a-mosquitto-or-a-mosquittouser-may-name)).
+A certificate and key that do not match stop the broker at startup (M24 in
+[broker-behaviour.md](../developer/broker-behaviour.md)); in a running pod the `reloader`
+refuses to load them ([runtime.md, a renewed certificate](runtime.md#a-renewed-certificate)).
 
 **What TLS gives you:** an encrypted connection and a broker that proves its identity to clients.
-It authenticates no client. The generated broker accepts anonymous clients with or without TLS
-([README.md, Two modes](../../README.md#two-modes-and-what-each-one-protects),
-[ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md),
+It authenticates no client: a client logs in with the username and password of a `MosquittoUser`,
+with or without TLS ([users.md](users.md),
+[README.md, Two modes](../../README.md#two-modes-and-what-each-one-protects),
 [trust-boundaries.md](../security/trust-boundaries.md)).
 
-**A renewed certificate does not reach a running broker.** [runtime.md, a renewed
-certificate](runtime.md#a-renewed-certificate) explains what to do.
+**A renewed certificate is loaded without a restart**, after the `reloader` checked the pair:
+[runtime.md, a renewed certificate](runtime.md#a-renewed-certificate).
 
 ## Storage
 
@@ -311,11 +398,14 @@ leaves the CRD and the ClusterRole behind and is not a supported upgrade.
 **kustomize.** Repeat the install: apply the CRD file of the new tree, set the new image, and apply
 `config/default`.
 
-**What an upgrade does to running brokers.** The broker pods contain no operator image and no
-sidecar, so a new operator version restarts nothing just by running. When it starts, though, it
-gives every `Mosquitto` in the cluster a pass ([runtime.md](runtime.md#at-start)). That pass rolls
-a broker's pods whenever the new version renders a different pod spec or a different
-`mosquitto.conf` for it than the version before, because both are hashed onto the pod template.
+**What an upgrade does to running brokers: every broker rolls.** Every broker pod runs the
+operator's own image in `auth-init` and `reloader`, and that image is part of the pod spec, so a
+new operator version changes every pod spec and rolls every broker on its first pass after the
+upgrade, all at about the same time — seconds of MQTT outage per broker; sessions on a PVC survive
+([ADR 0014](../adr/0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md)
+D6, accepted). Beyond that, a pass rolls a broker's pods whenever the new version renders a
+different pod spec or a different `mosquitto.conf` for it, because both are hashed onto the pod
+template ([runtime.md](runtime.md#at-start)).
 
 The case to watch is the default broker image. A `Mosquitto` that names no `spec.image` runs the
 operator's pin, `builder.DefaultImage`, which Renovate moves within the 2.x line
@@ -323,6 +413,25 @@ operator's pin, `builder.DefaultImage`, which Renovate moves within the 2.x line
 the pin rolls every such broker in the cluster on its first pass after the upgrade, all at about
 the same time. **To decide when a broker restarts, set `spec.image` explicitly.** It then moves
 only when you change it.
+
+### Upgrading from 0.1.x
+
+The release that introduced `MosquittoUser` changes what a broker is, and the upgrade is where you
+meet it:
+
+- **Every broker requires a login from its first pass.** Anonymous clients are refused. Create a
+  `MosquittoUser` and its Secret for every client **before** upgrading, so the broker's first start
+  on the new version already carries them ([users.md](users.md)). A broker without users accepts
+  nobody and says so with `Users=False`.
+- **`spec.config` takes only the allowlist of tuning directives**
+  ([README](../../README.md#specconfig-the-allowlist)). A broker whose `spec.config` carries
+  anything else — an `allow_anonymous`, a `password_file`, a listener, a plugin — is `Failed` with
+  reason `ConfigDirectiveRefused` and gets **no** update at all, the new pod spec included, until
+  the line is removed; its running pods keep their old configuration. Check before upgrading:
+  `kubectl get mq -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}: {.spec.config}{"\n"}{end}'`.
+- **The operator gains its Secret grant** (`secretAccess.mode`, [above](#which-secrets-the-operator-may-touch)):
+  decide the mode before the upgrade, not after.
+- **Every broker rolls once**, onto a pod with `auth-init`, `config-check` and `reloader`.
 
 **Rollback.**
 

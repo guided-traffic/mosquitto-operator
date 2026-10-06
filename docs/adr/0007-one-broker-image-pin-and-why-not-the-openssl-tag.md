@@ -2,8 +2,16 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. **Amended 2026-10-05 (decided, not built):** D9 states what
-`spec.image` supports, and D10 adds a `--test-config` init container to every broker pod. Checked
+Accepted. Date: 2026-09-01. **Amended 2026-10-05:** D9 states what `spec.image` supports, and D10
+adds a `--test-config` init container to every broker pod. **Both built 2026-10-05**: the `image`
+field description and the README name 2.1.x; `buildConfigCheckContainer` renders the init
+container `config-check`, and `TestE2E_ConfigCheck_StopsATypoBeforeTheBroker` observed it on Kind
+stopping a misspelled directive with the broker's message, file and line; against the operator of
+`main` before this change the same test failed with `the config-check init container never failed
+for e2e-config-check/typo-0`. Building D10 measured
+something this record did not foresee (M19): `--test-config` saves its empty in-memory database to
+`persistence_location` on exit, so the init container must never see the data volume — it gets a
+throwaway `emptyDir` at that path. D10 is unchanged; that is how it is built. Checked
 the same day against Docker Hub and the upstream repository: the newest line is 2.1 (`2.1.0`
 2026-01-30, `2.1.1` 2026-02-05, `2.1.2` 2026-09-18); the pin `2.1.2-alpine` has the same digest as
 `latest`, `alpine` and `2.1-alpine` (`sha256:38c0da4f2ef8…`); 2.0 (to `2.0.22`) and 1.6 are still
@@ -34,7 +42,9 @@ and the rendered CRD [`config/crd/bases/mko.gtrfc.com_mosquittoes.yaml`](../../c
 `test/testimages/images.go`; and `docker manifest inspect` plus `docker run` against the upstream
 images (see Context for the numbers, and Residual risks for what the numbers do and do not mean).
 
-**Not verified:** no broker has been observed running on a real cluster from this repository. The
+**Not verified:** no broker has been observed running on a production cluster from this
+repository; the E2E suite runs the pinned image on Kind (first observed 2026-10-05,
+[ADR 0004](0004-two-e2e-legs-and-no-version-matrix.md) `Status`). The
 image evidence below says what is *in* the image; it says nothing about how `mosquitto 2.1.2`
 behaves under load, and the 2.1 deprecation and `max_packet_size` claims come from upstream
 release notes, not from anything measured here.
@@ -124,7 +134,12 @@ The `customManagers` entry in [`renovate.json`](../../renovate.json) whose descr
 `managerFilePatterns`, with `versioningTemplate: "docker"` and a single `matchStrings` regex that
 anchors on the `renovate:` comment line. Both copies therefore land in one pull request. That
 matters because of D3: a manager that moved only one would open a pull request that is red by
-construction.
+construction. *(Amended 2026-10-05:)* A **minor** update of the pin waits for a human: a
+packageRule after the general `custom.regex` automerge rule matches `eclipse-mosquitto` with
+`matchUpdateTypes: ["minor"]`, sets `automerge: false` and the label `broker-image`, because the
+operator ships `DefaultImage` as the broker of every `Mosquitto` that names no image — a new minor
+reaches every installation with the next operator release. Patch and digest updates stay
+automerged.
 
 **D5 — An inert regex is a CI failure, not a silent stall.**
 [`hack/verify-ci-references.mjs`](../../hack/verify-ci-references.mjs) walks every
@@ -165,10 +180,12 @@ so it is in front of whoever adds the field.
 follows a change to that command instead of probing a path that is no longer used. The image also
 contains `mosquitto_passwd` and `mosquitto_ctrl` (Context), and the check deliberately does not
 assert them: nothing here runs them, and an assertion on an unused binary is a false constraint on
-the upstream image.
+the upstream image. *(Amended 2026-10-05: `test/imagetools` itself now runs `mosquitto_passwd`, to
+check that the operator verifies the image's own hash — a missing binary fails that test by name;
+the operator still runs no client tool.)*
 
 **D9 — `spec.image` stays free, and what it supports is stated, not enforced.** *(Added
-2026-10-05; decided, not built.)* The supported broker line is 2.1.x, written in the README and
+2026-10-05; built 2026-10-05 — the field description and the README state 2.1.x.)* The supported broker line is 2.1.x, written in the README and
 the CRD field description. The operator does not parse the tag and keeps no map from versions to
 images: a tag check fails exactly where it would be needed — a digest pin or a mirrored image —
 and a version map takes away mirroring. **Nor does the operator constrain which image may run**:
@@ -182,14 +199,20 @@ digest and does not fit the tag pin of D1. The configuration the operator genera
 image exists; D6's `<3` cap is the guard until then.
 
 **D10 — Every broker pod first runs `mosquitto --test-config` on the generated file.** *(Added
-2026-10-05; decided, not built.)* An init container from the broker image itself runs the
+2026-10-05; built 2026-10-05.)* An init container from the broker image itself runs the
 broker binary in test mode against the mounted configuration, with the broker container's
 security context. A typo in `spec.config` or an image that does not know a generated directive —
-a 2.0 image refusing `plugin_load` is the expected case, not measured against a 2.0 image — then
+a 2.0 image refusing `plugin_load` is the expected case, *(measured 2026-10-05, M25:
+`eclipse-mosquitto:2.0.22` answers `Error: Unknown configuration variable "plugin_load".` with the
+line, `rc=3`)* — then
 fails with the broker's own message, file and line, instead of a crash loop. It is a syntax gate,
 not a correctness gate: `--test-config` validates directive names and nothing a plugin decides
 ([broker-behaviour.md](../developer/broker-behaviour.md#m8----test-config-is-a-syntax-gate-not-a-correctness-gate)).
 Because the init container executes the broker binary, D8's list of executed tools does not grow.
+The init container sees the configuration and a throwaway `emptyDir` at the persistence path, never
+the data volume: `--test-config` saves an empty database on exit and would erase every retained
+message and session on each start
+([broker-behaviour.md](../developer/broker-behaviour.md#m19----test-config-saves-an-empty-database-on-exit-and-reads-no-tls-file)).
 
 ## Consequences
 

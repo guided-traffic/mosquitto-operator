@@ -9,12 +9,58 @@ Secret per user password, once when the owner allowed the operator to read Secre
 step rests on measurements against the pinned image, recorded in
 [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md).
 
-**Not built.** The operator holds no `secrets` rule today and renders one container per broker
-pod. Before the code that depends on them is written, these are measured: a `$7$` line rendered in
-Go is accepted by the broker, byte format identical to `mosquitto_passwd`; a sidecar as uid `1883`
-without capabilities can signal the broker across `shareProcessNamespace` under PodSecurity
-`restricted`; how long the kubelet takes to refresh a changed Secret volume, and whether it swaps
-`tls.crt` and `tls.key` together; what the broker does with a mismatched TLS pair at start.
+**Built 2026-10-05:** D1–D8 and D10 — everything but D9, the later dynamic-security mode. Where the build differs from the text, it says so below.
+
+- D1, D2: the generated configuration loads the file plugins; `<name>-auth` (keys `passwd`, `acl`)
+  is written after `ensureOwned`, only on a difference, from `auth.Render` and `auth.FilePayload`.
+- D3: `auth.HashPassword` / `auth.VerifyPassword`, 1000 iterations, 64-byte salt; a hash is kept
+  while its password verifies (`TestRender_KeepsAHashWhileItsPasswordVerifies`). The image accepts
+  the operator's hash and the operator the image's, on every pull request (`test/imagetools`).
+- D4, D6: `auth-init` and `reloader` run `/app/manager reload` from the operator's image
+  (`internal/reloader`), the pod shares its process namespace, the copy is `0600` through a
+  temporary file and a rename, read through one resolved `..data`. The image reaches the pod as
+  `--reloader-image`: the chart passes its own image; `config/default` copies the manager's image
+  into the flag with a `replacements` entry, which works for an image set in `config/manager`
+  (`make deploy`, `kustomize edit set image`) — **not** for an `images:` entry in a user's own
+  overlay, which runs after `config/default` was built; the installation docs show the patch.
+- D7: the markers, the chart's `secretAccess` and the component `secret-namespaces`
+  ([ADR 0006](0006-both-install-paths-grant-the-same-authority.md) D9). **Built differently from
+  the text in one point, on the recommended answer of an open question in
+  [the project plan](../planning/project-plan.md):** the operator caches Secrets with their data,
+  annotations and managed fields stripped (`controller.StripSecret`) and reads a credentials
+  Secret's data with one uncached `get` — so no Secret data is held in the cache at all — instead of
+  D10's "the operator's Secret cache is restricted to labelled Secrets".
+- D8: observed on Kind — a new user publishes 67 s after it was created, a changed password locks
+  the old one out within 45 s, a deleted user's connection drops within 72 s, nothing restarted
+  (`TestE2E_Users_TheBrokerFollowsItsUsers`, run 2026-10-05 against `kind-mko-dev`).
+- D5: the `reloader` gets the TLS volume and `--tls-dir` whenever `spec.tls` is set, checks the
+  mounted pair with `crypto/tls.X509KeyPair` and signals a changed, valid pair
+  (`internal/reloader/tls.go`). **Built more strictly than the text in one point:** while the
+  mounted pair is invalid the sidecar sends no signal at all, not for a credential change either,
+  because the one SIGHUP reloads both and an invalid pair takes the listener down (M12). Observed
+  on Kind: `TestE2E_TLS_ACertManagerRenewalIsReloaded`, `TestE2E_TLS_AMismatchedPairIsNeverLoaded`
+  ([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10).
+- D10 for `credentialsSecret`: the label is checked on the cached metadata before the data is
+  read (`TestReconcile_EveryUserReason`, observed failing with the check removed).
+
+D10 for the TLS Secret *(built 2026-10-05, first)*: `--secret-security`, the chart
+value `secretSecurity` and the component `config/components/secret-security`, default `false` on
+both paths; with `true` the label is `mko.gtrfc.com/consumable=true`, a refusal is `Ready=False`
+with reason `SecretNotConsumable` (or `SecretNotFound`), and the only grant added is `get` on
+`secrets`, because the read is a metadata-only `get` through the uncached reader rather than a
+cached informer — so D10's "the operator's Secret cache is restricted to labelled Secrets" does not
+apply yet: there is no Secret cache. `TestReconcile_SecretSecurity` was observed failing with the
+check removed; `test/rbacparity` renders both settings and was observed failing on a component
+without the rule (`ClusterRole core/secrets: granted by the chart (get) but not by kustomize`) and on
+a chart without the flag (`expected: "false"`, `actual  : ""`). Phase 4 superseded that conditional
+`get` rule: the Secret grant of D7 carries `get` already, so `secretSecurity` now changes the flag
+and nothing else. The four measurements the code depends on were taken on 2026-10-05 and hold the record as
+written ([broker-behaviour.md](../developer/broker-behaviour.md)): a `$7$` line rendered in Go is
+accepted by the broker, in `mosquitto_passwd`'s exact format (M20); a sidecar as uid `1883`
+without capabilities signals the broker across `shareProcessNamespace` under PodSecurity
+`restricted`, and another uid cannot (M22, on Kind); the kubelet swaps a changed Secret volume in
+one step, `tls.crt` and `tls.key` together, 69 to 84 seconds after the change on an idle Kind node
+(M23); and a mismatched TLS pair at start stops the broker with `key values mismatch`, exit 1 (M24).
 
 ## Context
 
@@ -47,7 +93,9 @@ D14. The operator is the only writer of the files' content; reconciliation is re
 holds the `passwd` content (hashes only) and the `acl` content for every `MosquittoUser` bound to
 the broker ([ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md)),
 plus, later, keys the operator needs for itself
-([ADR 0002](0002-the-metrics-exporter-is-written-here.md) D4). There is no Secret per user
+([ADR 0002](0002-the-metrics-exporter-is-written-here.md) D4) — *built 2026-10-05:*
+`exporter-password`, projected into the exporter alone; the `auth-secret` mount of `auth-init`
+and `reloader` became an `items` projection of `passwd` and `acl`. There is no Secret per user
 password. It is written only after `ensureOwned`, owned through a controller reference, and
 collected with its `Mosquitto` ([ADR 0009](0009-delete-only-through-owner-references.md)). Because
 it lies in the same namespace as the plaintext Secrets it is rendered from — no reference crosses a
@@ -103,7 +151,8 @@ The operator still never reads the TLS Secret.
 
 **D8 — Revocation is the reload.** A removed user and a changed password are disconnected on the
 reload that carries the change; a narrowed ACL applies at once (M14). The latency is the kubelet's
-Secret propagation plus the sidecar — not measured, documented once it is.
+Secret propagation plus the sidecar — *(measured 2026-10-05, M23:)* the kubelet's part was 69 to 84
+seconds on an idle Kind node with default settings; the sidecar's part is not measured yet.
 
 **D9 — Dynamic security is a later, opt-in broker mode, and the first release is built so that it
 stays cheap.** `spec.auth.mode: files | dynsec`, default `files`, is added only when needed;
@@ -126,7 +175,8 @@ its hash fields, whether `kickClient` ends a live session, whether `setClientPas
 existing connections.
 
 **D10 — Which Secret a `Mosquitto` or a `MosquittoUser` may name is an install-time switch,
-`secretSecurity`, default `false`.** *(Added 2026-10-05; decided, not built.)* With `true`, the
+`secretSecurity`, default `false`.** *(Added 2026-10-05; built 2026-10-05 for both halves; the
+cache restriction below built as a cache without Secret data, pending the answer in the plan.)* With `true`, the
 operator mounts a TLS Secret and reads a `credentialsSecret` only when the Secret carries an opt-in
 label under `mko.gtrfc.com/` (the key is fixed when built); whoever can label a Secret is whoever
 can write it, so the label is the Secret owner's consent. A resource naming an unlabelled Secret
@@ -186,8 +236,8 @@ Secret in a namespace the grant does not cover cannot be checked, and the broker
 - The default `all` grant, accepted above.
 - D10's default `false`, accepted above: with it, writing a `Mosquitto` or a `MosquittoUser` is
   reading the namespace's Secrets.
-- The entry measurements in Status. Until they run, D3's format, D4's signal and D8's latency are
-  claims from documentation and from the rig, not from a cluster.
+- The entry measurements are taken (M20, M22–M24) on a workstation and on one idle Kind node; D8's
+latency on a loaded or differently configured kubelet is not measured.
 - No kick for a client whose credential is still valid; D9's trigger.
 - A pod compromise exposes the hashes in the `emptyDir`; at 1000 iterations they are cheap to
   attack offline. Accepted with D3.

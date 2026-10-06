@@ -31,6 +31,10 @@ spec:
       jsonPath: .status.phase
       name: Phase
       type: string
+    - description: Users the broker accepts
+      jsonPath: .status.users
+      name: Users
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -92,18 +96,55 @@ spec:
                   Config is extra mosquitto.conf content appended to the generated base
                   configuration. It is written into the ConfigMap verbatim.
 
-                  The broker reads it after everything the operator generates, so a global
-                  option repeated here wins over the generated one, and a listener line here
-                  adds a listener the operator neither models nor exposes as a container or
-                  Service port. Bridges and extra log destinations are equally possible.
-                  Nothing here is validated: the broker sees it first at startup, so a
-                  rejected file is a CrashLoopBackOff rather than a rejected resource.
+                  Every non-blank, non-comment line must start with a tuning directive of
+                  the operator's allowlist; a line that does not makes the resource Failed
+                  with reason ConfigDirectiveRefused and writes nothing. The broker reads it
+                  after everything the operator generates, so a directive repeated here wins
+                  over the generated one. Values are checked by the broker's own
+                  --test-config in an init container, before the broker starts.
                 type: string
               image:
                 description: |-
                   Image is the Mosquitto container image. Empty means the operator default
-                  (see internal/builder for the pinned default).
+                  (see internal/builder for the pinned default). The supported broker line is
+                  2.1.x: the generated configuration uses what 2.1 accepts, and an init
+                  container runs the image's own --test-config against it before the broker
+                  starts, so an image that does not understand a directive stops there with
+                  the broker's message. Nothing here checks the tag.
                 type: string
+              metrics:
+                description: |-
+                  Metrics adds an exporter container to every broker pod that serves the
+                  broker's $SYS statistics for Prometheus. Absent or disabled, the pod has
+                  no exporter. Turning it on or off rolls the pods.
+                properties:
+                  enabled:
+                    description: |-
+                      Enabled adds the exporter: a container running the operator image's
+                      exporter binary, logged in to its own broker over localhost as the
+                      reserved user mko-exporter with read access to $SYS/# only, and serving
+                      plain HTTP /metrics on port 9234 of the pod. The endpoint has no
+                      authentication: whatever can reach the pod IP can read it.
+                    type: boolean
+                type: object
+              podAnnotations:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodAnnotations are added to the annotations of every broker pod, merged
+                  under the operator's own keys: the two hash annotations under
+                  mko.gtrfc.com/ always win. A key removed from this map is removed from the
+                  pods. A change rolls the pods.
+                type: object
+              podLabels:
+                additionalProperties:
+                  type: string
+                description: |-
+                  PodLabels are added to the labels of every broker pod, merged under the
+                  operator's own keys: a key the operator sets (the selector labels, the
+                  version label) always wins. A key removed from this map is removed from the
+                  pods. A change rolls the pods.
+                type: object
               replicas:
                 default: 1
                 description: Replicas is the number of broker pods in the StatefulSet.
@@ -207,10 +248,11 @@ spec:
                           The administrator owns the Certificate object; this operator has no
                           cert-manager dependency and installs nothing.
 
-                      The operator does not watch this Secret. Renewing or replacing the
-                      certificate changes the Secret, but running broker pods keep serving the
-                      material they started with, so a rotation only takes effect once the pods
-                      restart (for example kubectl rollout restart statefulset/<name>).
+                      The operator does not watch this Secret or read its data. A renewed or
+                      replaced certificate reaches the running broker pods without a restart:
+                      the reloader sidecar checks that tls.crt and tls.key form a valid pair
+                      and signals the broker to reload them. An invalid pair is never loaded,
+                      and while it is mounted no reload happens at all.
                     minLength: 1
                     type: string
                 required:
@@ -223,7 +265,8 @@ spec:
               conditions:
                 description: |-
                   Conditions follows the standard Kubernetes condition convention.
-                  Type "Ready" is always present once a pass completed.
+                  Type "Ready" is always present once a pass completed; type "Users" once a
+                  pass rendered the users.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -293,6 +336,241 @@ spec:
                   count.
                 format: int32
                 type: integer
+              users:
+                description: |-
+                  Users is how many MosquittoUser objects are rendered into the broker's
+                  credentials. Zero means the broker accepts nobody.
+                format: int32
+                type: integer
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+---
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.21.0
+  name: mosquittousers.mko.gtrfc.com
+spec:
+  group: mko.gtrfc.com
+  names:
+    kind: MosquittoUser
+    listKind: MosquittoUserList
+    plural: mosquittousers
+    shortNames:
+    - mqu
+    singular: mosquittouser
+  scope: Namespaced
+  versions:
+  - additionalPrinterColumns:
+    - description: The Mosquitto this user belongs to
+      jsonPath: .spec.brokerRef.name
+      name: Broker
+      type: string
+    - description: The MQTT username from the credentials Secret
+      jsonPath: .status.username
+      name: Username
+      type: string
+    - description: Whether the user is rendered into its broker
+      jsonPath: .status.conditions[?(@.type=="Ready")].status
+      name: Ready
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          MosquittoUser is one client of a Mosquitto broker, with its credentials in a
+          Secret of its own and its permissions per topic.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              MosquittoUserSpec defines one client of one broker (ADR 0013).
+
+              Everything a MosquittoUser names lives in its own namespace: no reference
+              here carries a namespace field, so a reference across namespaces cannot be
+              written (ADR 0013 D1).
+            properties:
+              acls:
+                description: |-
+                  ACLs are what this user may read and write. A user without ACLs can log in
+                  and reach no topic. No entry may name a topic starting with "$": $SYS and
+                  $CONTROL are the broker's own (ADR 0013 D4).
+                items:
+                  description: |-
+                    MosquittoACL is one entry of a user's access list: a topic filter and what
+                    the user may do on it.
+                  properties:
+                    access:
+                      description: Access is read (subscribe and receive), write (publish)
+                        or readwrite.
+                      enum:
+                      - read
+                      - write
+                      - readwrite
+                      type: string
+                    topic:
+                      description: |-
+                        Topic is an MQTT topic filter; + and # are wildcards. It may not start with
+                        "$" and may not contain a control character. Both are refused here and
+                        again when the user is rendered.
+                      maxLength: 1024
+                      minLength: 1
+                      type: string
+                      x-kubernetes-validations:
+                      - message: a topic starting with $ is reserved for the broker
+                          and the operator
+                        rule: '!self.startsWith(''$'')'
+                      - message: a topic may not contain a control character
+                        rule: '!self.matches(''[\\x00-\\x1f\\x7f]'')'
+                  required:
+                  - access
+                  - topic
+                  type: object
+                maxItems: 256
+                type: array
+                x-kubernetes-list-type: atomic
+              brokerRef:
+                description: |-
+                  BrokerRef names the Mosquitto in this namespace whose clients this user is
+                  one of.
+                properties:
+                  name:
+                    description: Name of the Mosquitto.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                required:
+                - name
+                type: object
+              credentialsSecret:
+                description: |-
+                  CredentialsSecret names the Secret in this namespace that holds the
+                  username and the password. The client application can read the same
+                  Secret. The username is checked when it is rendered - it lives in the
+                  Secret, where no schema can see it - and is written to status.username.
+                properties:
+                  name:
+                    description: Name of the Secret in the user's own namespace.
+                    maxLength: 253
+                    minLength: 1
+                    type: string
+                  passwordKey:
+                    default: password
+                    description: PasswordKey is the key holding the MQTT password.
+                    pattern: ^[-._a-zA-Z0-9]+$
+                    type: string
+                  usernameKey:
+                    default: username
+                    description: |-
+                      UsernameKey is the key holding the MQTT username. Changing it changes the
+                      login; renaming the MosquittoUser does not.
+                    pattern: ^[-._a-zA-Z0-9]+$
+                    type: string
+                required:
+                - name
+                type: object
+            required:
+            - brokerRef
+            - credentialsSecret
+            type: object
+          status:
+            description: MosquittoUserStatus is the observed state of a MosquittoUser.
+            properties:
+              conditions:
+                description: |-
+                  Conditions follows the standard Kubernetes condition convention. Type
+                  "Ready" is True when the user is rendered into its broker's credentials,
+                  and False with a reason saying what is wrong otherwise.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+              observedGeneration:
+                description: ObservedGeneration is the .metadata.generation the operator
+                  last acted on.
+                format: int64
+                type: integer
+              username:
+                description: |-
+                  Username is the MQTT username read from the credentials Secret, once it
+                  was read. A username is not a credential.
+                type: string
             type: object
         type: object
     served: true

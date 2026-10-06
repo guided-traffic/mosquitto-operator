@@ -4,6 +4,7 @@ package common
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	mkov1 "github.com/guided-traffic/mosquitto-operator/api/v1"
@@ -45,8 +46,8 @@ const shortDigestLength = 12
 //
 // The result is always a VALID label value, which is the whole point of this
 // function rather than a strings.Split at the call site. spec.image is free-form
-// (the CRD validates nothing beyond MinLength), and two shapes of reference produce
-// something the API server refuses:
+// (the CRD validates nothing about it, not even a minimum length), and two shapes
+// of reference produce something the API server refuses:
 //
 //   - A digest reference. "eclipse-mosquitto@sha256:<64 hex>" yields
 //     "sha256:<64 hex>", which is 71 bytes and contains a colon. Both break the
@@ -96,7 +97,7 @@ func ExtractVersionFromImage(image string) string {
 // It is deliberately lossy and deliberately never fails: the alternative at the call
 // site would be a reconcile that cannot write anything, which is a worse outcome than
 // an abbreviated version label. What it must never do is return something the API
-// server rejects, and TestSanitizeLabelValue_AlwaysProducesAValidLabel asserts that
+// server rejects, and TestExtractVersionFromImage_AlwaysProducesAValidLabel asserts that
 // against apimachinery's own validator rather than against expected strings, so a
 // future edit cannot pin an invalid value as intended behaviour.
 func sanitizeLabelValue(value string) string {
@@ -166,6 +167,12 @@ func HeadlessServiceName(m *mkov1.Mosquitto) string {
 	return fmt.Sprintf("%s-headless", m.Name)
 }
 
+// AuthSecretName returns the name of the Secret holding a broker's rendered
+// credentials (ADR 0014 D2).
+func AuthSecretName(m *mkov1.Mosquitto) string {
+	return fmt.Sprintf("%s-auth", m.Name)
+}
+
 // ClientServiceName returns the name of the ClusterIP Service clients connect to.
 func ClientServiceName(m *mkov1.Mosquitto) string {
 	return m.Name
@@ -182,4 +189,51 @@ func MapEntriesMissing(desired, current map[string]string) bool {
 		}
 	}
 	return false
+}
+
+// MergeLabels returns a new map holding base with overlay written over it: every
+// key of overlay carries overlay's value, every other key of base is kept. It is
+// how the operator writes its own labels and annotations onto an object other
+// writers label too - its keys win, theirs stay (ADR 0009 D9). Neither argument
+// is modified.
+func MergeLabels(base, overlay map[string]string) map[string]string {
+	merged := make(map[string]string, len(base)+len(overlay))
+	for k, v := range base {
+		merged[k] = v
+	}
+	for k, v := range overlay {
+		merged[k] = v
+	}
+	return merged
+}
+
+// JoinKeys renders the keys of m as one annotation value: sorted and joined by
+// commas, so the same key set always gives the same string. A label or
+// annotation key cannot contain a comma. An empty or nil map gives "".
+func JoinKeys(m map[string]string) string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
+}
+
+// RemovedKeys returns the keys listed in the JoinKeys value previous that the
+// JoinKeys value current no longer lists.
+func RemovedKeys(previous, current string) []string {
+	if previous == "" {
+		return nil
+	}
+	kept := make(map[string]bool)
+	for _, k := range strings.Split(current, ",") {
+		kept[k] = true
+	}
+	var removed []string
+	for _, k := range strings.Split(previous, ",") {
+		if !kept[k] {
+			removed = append(removed, k)
+		}
+	}
+	return removed
 }
