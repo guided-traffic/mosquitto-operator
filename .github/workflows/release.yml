@@ -147,7 +147,7 @@ jobs:
         id: kind-cluster
         uses: helm/kind-action@v1.14.0
         with:
-          version: v0.30.0
+          version: v0.33.0
           node_image: kindest/node:v${{ env.KUBERNETES_VERSION }}
           cluster_name: ${{ matrix.cluster }}
           wait: 300s
