@@ -379,8 +379,18 @@ ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v2.14.0
 # renovate: datasource=go depName=github.com/fzipp/gocyclo/cmd/gocyclo
 GOCYCLO_VERSION ?= v0.6.0
+# gosec is pinned to an untagged commit of its main branch, not to a release.
+# Go 1.27.2 writes version 5 of the unified export data (go.dev/issue/81188),
+# golang.org/x/tools reads it from v0.50.0 on, and the newest release, v2.29.0,
+# is built against x/tools v0.49.0: it type-checks nothing under 1.27.2, reports
+# "export data version 5 is greater than maximum supported version 4" for every
+# package and exits 1 with zero issues. The commit below (2026-10-09) builds
+# against x/tools v0.51.0. A pseudo-version is fixed by the Go checksum database
+# like a tag, and the gosec job holds no secret. It sorts below v2.29.1 in
+# semver, so Renovate moves this pin to the next release on its own; the Makefile
+# manager captures the whole value for exactly that.
 # renovate: datasource=go depName=github.com/securego/gosec/v2/cmd/gosec
-GOSEC_VERSION ?= v2.29.0
+GOSEC_VERSION ?= v2.29.1-0.20261009120814-7b1b5cebe007
 # renovate: datasource=go depName=golang.org/x/vuln/cmd/govulncheck
 GOVULNCHECK_VERSION ?= v1.8.0
 

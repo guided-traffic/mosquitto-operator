@@ -289,13 +289,13 @@
   ],
   "customManagers": [
     {
-      "description": "Update Go tool versions pinned in Makefile via renovate comments",
+      "description": "Update Go tool versions pinned in Makefile via renovate comments. currentValue is the whole token after ?=, not only its leading digits and dots: a pseudo-version pin such as GOSEC_VERSION would otherwise be read as its release prefix (v2.29.1-0.2026...-7b1b5cebe007 as v2.29.1), so the release it waits for looks current and a later one is spliced in front of the stale commit suffix.",
       "customType": "regex",
       "managerFilePatterns": [
         "/^Makefile$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n.+\\?=\\s*(?<currentValue>v[\\d.]+)"
+        "# renovate: datasource=(?<datasource>[^\\s]+) depName=(?<depName>[^\\s]+)\\n.+\\?=\\s*(?<currentValue>v[^\\s]+)"
       ],
       "versioningTemplate": "semver"
     },
