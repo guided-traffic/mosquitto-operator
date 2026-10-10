@@ -35,7 +35,7 @@ in the Makefile:
 | envtest control plane | `ENVTEST_K8S_VERSION` | `1.29.0`, under `bin/k8s/<version>-<os>-<arch>` | none, bumped by hand |
 | `golangci-lint` | `GOLANGCI_LINT_VERSION` | `v2.14.0` | `# renovate:` comment |
 | `gocyclo` | `GOCYCLO_VERSION` | `v0.6.0` | `# renovate:` comment |
-| `gosec` | `GOSEC_VERSION` | `v2.29.0` | `# renovate:` comment |
+| `gosec` | `GOSEC_VERSION` | `v2.29.1-0.20261009120814-7b1b5cebe007` — an untagged commit: v2.29.0 cannot read the export data of Go 1.27.2 (see the Makefile comment) | `# renovate:` comment; moves to v2.29.1 once that is tagged |
 | `govulncheck` | `GOVULNCHECK_VERSION` | `v1.8.0` | `# renovate:` comment |
 | `gocovmerge` | `GOCOVMERGE_VERSION` | `v0.0.0-20160331181800-b5bfa59ec0ad` | none — upstream has no tags |
 

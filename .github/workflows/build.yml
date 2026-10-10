@@ -5,7 +5,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  GO_VERSION: '1.27.1'
+  GO_VERSION: '1.27.2'
 
 # The floor for every job, so a job added without its own block does not inherit
 # the repository default; each job below widens it in its own block and says why.
