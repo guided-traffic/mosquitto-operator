@@ -168,14 +168,23 @@ when the job ends.
 
 [`renovate.json`](../../renovate.json), in short:
 
-- **Automerge** (`platformAutomerge`, squash) for minor and patch updates of every manager — Go
-  modules, the Go version, Docker base images, GitHub Actions, Helm, the custom-regex pins — and
-  for digest updates (the `:automergeDigest` preset and the per-manager rules), after CI.
+- **Automerge** (`platformAutomerge`, squash) for minor and patch updates of Go modules, the Go
+  version, Docker base images, GitHub Actions, Helm and the custom-regex pins, and for digest
+  updates (the `:automergeDigest` preset and the per-manager rules), after CI. **npm has no rule**,
+  so the release tooling in `package.json` — which runs in the release job with the app token —
+  waits for a human at every update type.
 - **Every major waits for a human**, labelled `major-update`. Majors of *indirect* Go modules are
   disabled outright: a module-path bump cannot apply without a direct importer, and `go mod tidy`
   would keep resetting it. GitHub Actions majors are read before they merge because those actions
   execute on the self-hosted runners in jobs that hold `DOCKERHUB_PAT`, or `APP_PRIVATE_KEY` and
   the token minted from it.
+- **An untagged indirect Go module never moves on its own** (`digest` updates of `indirect`
+  disabled): its pseudo-version is pinned by the direct dependency that needs it. Moving
+  `k8s.io/kube-openapi` past the commit `k8s.io/apimachinery` asked for left the Kubernetes group
+  PR uncompilable on 2026-10-10.
+- **One manager per line.** The `dockerfile` manager is disabled for `golang`, whose
+  `Containerfile` line the Go version customManager owns
+  ([ADR 0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md) D8).
 - **Groups:** `Go version` (the `golang-version` datasource and `golang.org/x/*`, so the four Go
   version sites move in one PR — [ADR 0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md)),
   and `Kubernetes Go modules` (`k8s.io/*`, `sigs.k8s.io/*`).
@@ -184,11 +193,14 @@ when the job ends.
   `Mosquitto` ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md) D4).
 - **Commit types:** `fix` for minor, patch, digest and pin updates, `chore` for every GitHub
   Actions update, so each lands in the right release-notes section.
-- **Seven customManagers:** the Makefile tool pins, the Go version in `Containerfile`, in `go.mod`,
+- **Eight customManagers:** the Makefile tool pins (the whole value after `?=`, so a pseudo-version
+  pin such as `GOSEC_VERSION` is read whole), the Go version in `Containerfile`, in `go.mod`,
   in `GO_VERSION` of every workflow (which also selects `renovate.yml`, a tolerated zero) and in
   the release-template badge (`loose` versioning, because the badge carries `major.minor`), the
-  broker image in `test/testimages/images.go` and `internal/builder/statefulset.go`, and the
-  BuildKit image of `build.yml`.
+  broker image in `test/testimages/images.go` and `internal/builder/statefulset.go`, the
+  BuildKit image of `build.yml`, and the `controller-gen.kubebuilder.io/version` annotation of the
+  generated CRDs, under the Makefile pin's depName so a controller-gen bump moves the pin and the
+  stamp in one branch and `generated-manifests` stays green when nothing else in the output moved.
 - **Third-party actions are pinned to a commit** with the version as a comment; Renovate's
   github-actions manager moves both, and digest updates automerge like minor ones. A customManager whose
   regex matches nothing fails silently in Renovate; `make verify-ci-references` is what catches it.

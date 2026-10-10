@@ -100,7 +100,7 @@ change.
 | An RBAC change | Marker in the controller, `make generate-all` for `config/rbac/role.yaml`, the chart's ClusterRole by hand, `make verify-rbac-parity` | [adding-things.md](adding-things.md#a-managed-object) |
 | A pull request | Fourteen jobs on self-hosted runners — two E2E legs and their gate among them — each check entered through a Make target | [ci-and-release.md](ci-and-release.md#test-and-release) |
 | A release | On a push to `main`, after thirteen of those jobs, `semantic-release` cuts the version from Conventional Commits with a GitHub App token; the published release builds and pushes the image and publishes the chart to `gh-pages` | [ci-and-release.md](ci-and-release.md#the-release) |
-| A dependency update | Self-hosted Renovate nightly; minor, patch and digest updates automerge after CI, majors wait for a human; `make verify-ci-references` proves every customManager still matches | [ci-and-release.md](ci-and-release.md#renovate) |
+| A dependency update | Self-hosted Renovate nightly; minor, patch and digest updates automerge after CI (npm excepted), majors wait for a human; `make verify-ci-references` proves every customManager still matches | [ci-and-release.md](ci-and-release.md#renovate) |
 
 ## What has no page here
 
