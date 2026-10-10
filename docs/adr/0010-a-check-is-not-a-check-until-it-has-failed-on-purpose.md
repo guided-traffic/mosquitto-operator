@@ -50,6 +50,27 @@ problem(s) in renovate.json: … matchString "image=moby/buildkit@(?<currentValu
 no line in [".github/workflows/build.yml"]`. Restored, it prints `OK: all 7 Renovate
 customManagers reference real files and lines`.
 
+**Amended 2026-10-10 — the template is a footer now, and the second guard failed on purpose
+twice more.** `conventional-changelog-conventionalcommits` 10 renders through
+`conventional-changelog-writer` 9, which has no handlebars and no `mainTemplate`; with the writer 8
+that `@semantic-release/release-notes-generator` 14.1.1 asks for, it rendered the header and empty
+`Features` and `Bug Fixes` sections, and `release-tooling` went red on its pull request with `FAIL:
+rendered release notes are missing "requeue while the StatefulSet is progressing"`. `package.json`
+now overrides that writer with a pinned `9.3.0`, and
+[`hack/changelog-config.mjs`](../../hack/changelog-config.mjs) hands
+`.github/release-template.hbs` to the preset as its footer partial, filling in its one
+placeholder, `{{version}}`. The notes of the synthetic commit set rendered byte-identical to those
+of the old toolchain. Two needles now carry the version, so four are template-owned (D3). Broken
+on purpose, on darwin/arm64 with node 26.5.0: the footer handed over without filling the
+placeholder gave `FAIL: rendered release notes are missing "docker pull
+guidedtraffic/mosquitto-operator:2.0.0"`; the override removed, so the generator loaded writer
+8.4.0, gave `FAIL: generateNotes threw - the release-notes-generator/preset/writer set is broken`.
+The override is a bridge, so the script also fails once the generator itself asks for the pinned
+writer's major: with its installed `package.json` edited to `^9.0.0`, `FAIL:
+@semantic-release/release-notes-generator 14.1.1 asks for conventional-changelog-writer ^9.0.0,
+which the pinned 9.3.0 satisfies - remove the override from package.json`. Restored, `OK: release
+tooling renders release notes`.
+
 **Open / not verified:** ~~no job of this pipeline has been observed executing on GitHub~~
 *(amended 2026-10-05: the release workflow has run on every push to `main` and built
 `v0.1.0` to `v0.1.8`; the individual guard steps were not inspected run by run).* The reproductions
@@ -91,7 +112,9 @@ commit set. Those strings render whether or not
 [`.github/release-template.hbs`](../../.github/release-template.hbs) is wired in, because the
 template only replaces the preset's *main* template — the header and commit partials, the commit
 transform and the group ordering all stay the preset's, as
-[`hack/changelog-config.mjs`](../../hack/changelog-config.mjs) states. Disconnecting the
+[`hack/changelog-config.mjs`](../../hack/changelog-config.mjs) states. *(Amended 2026-10-10:
+it replaces the preset's footer partial now, which leaves even more of the notes to the preset;
+the argument holds unchanged.)* Disconnecting the
 template from [`.releaserc.json`](../../.releaserc.json) therefore left every assertion
 satisfied, and every future release note would have silently lost its Quality Gates section, its
 `docker pull` line and its `helm repo add` line while CI stayed green.
@@ -102,7 +125,9 @@ preset and no `config` option satisfies all five original needles and does **not
 produce — `"Quality Gates"`, `"docker pull guidedtraffic/mosquitto-operator"` and
 `"helm repo add mosquitto-operator"` — and with the template disconnected it now fails with
 `rendered release notes are missing "Quality Gates" - the writer/preset pair renders incomplete
-notes`, followed by the rendered notes so the reader can see what did come out.
+notes`, followed by the rendered notes so the reader can see what did come out. *(Amended
+2026-10-10: four, the `docker pull` needle and a new `--version` one carrying the release
+version; see Status.)*
 
 The RBAC parity test was proven the other way round, by breaking the thing it guards rather than
 the wiring: injecting a `delete` verb on `statefulsets` into the chart alone produces
@@ -127,8 +152,9 @@ only, which is what a forgotten kubebuilder marker actually produces.
 **D3 — Assertions are on strings only the guarded artefact can produce.** The needle list in
 `hack/verify-release-tooling.mjs` is split into two groups in the source, with the reason
 written between them: the five preset-owned needles "still render when
-`.github/release-template.hbs` is disconnected from `.releaserc.json`", and the three
-template-owned ones are "what proves it is wired in". A needle that both the broken and the
+`.github/release-template.hbs` is disconnected from `.releaserc.json`", and the ~~three~~
+template-owned ones — four since 2026-10-10, two of them carrying the release version so an
+unfilled placeholder fails too — are "what proves it is wired in". A needle that both the broken and the
 working configuration produce is decoration.
 
 **D4 — Every guard asserts that it read something.** `TestRBACParity_BothInstallPathsGrantTheSameAuthority`
@@ -286,8 +312,8 @@ tree deliberately broken, tests the thing that ships.
   field
 * [`.releaserc.json`](../../.releaserc.json) — the plugin configuration both the release job and
   the check read
-* [`.github/release-template.hbs`](../../.github/release-template.hbs) — the source of the three
-  template-owned needles
+* [`.github/release-template.hbs`](../../.github/release-template.hbs) — the footer the four
+  template-owned needles come from
 * [`test/rbacparity/rbac_parity_test.go`](../../test/rbacparity/rbac_parity_test.go) — the
   `grant` key, `authority`, the `require.NotEmpty` guard, and the hint printed on failure
 * [`config/rbac/role.yaml`](../../config/rbac/role.yaml) — the generated half
