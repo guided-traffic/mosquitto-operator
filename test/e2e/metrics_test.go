@@ -62,9 +62,13 @@ func TestE2E_Metrics_TheExporterServesTheBrokersSysTree(t *testing.T) {
 	tc.waitForUserReady(t, ns, "probe")
 
 	t.Run("the exporter logs in and serves the broker's series", func(t *testing.T) {
-		body := tc.eventuallyScraped(t, ns, plain+"-0", "mosquitto_exporter_connected 1")
+		tc.eventuallyScraped(t, ns, plain+"-0", "mosquitto_exporter_connected 1")
+		// The exporter is a client itself, but the retained values it receives on
+		// login are those of the broker's last $SYS publish, from before that login:
+		// its own session counts from the next publish on, up to sys_interval later
+		// (broker-behaviour.md M28).
+		body := tc.eventuallyScrapedLine(t, ns, plain+"-0", regexp.MustCompile(`^mosquitto_clients_connected [1-9]`))
 		assert.Regexp(t, regexp.MustCompile(`mosquitto_version_info\{version="2\.1\.\d+"\} 1`), body)
-		assert.Regexp(t, regexp.MustCompile(`(?m)^mosquitto_clients_connected [1-9]`), body, "the exporter is a client itself")
 		assert.Contains(t, body, "# TYPE mosquitto_bytes_received_total counter")
 		assert.Contains(t, body, `mosquitto_load_messages_received{window="1min"}`)
 	})
@@ -90,6 +94,14 @@ func TestE2E_Metrics_TheExporterServesTheBrokersSysTree(t *testing.T) {
 // HELP text may contain a sample line.
 func (tc *testClients) eventuallyScraped(t *testing.T, ns, pod, want string) string {
 	t.Helper()
+	return tc.eventuallyScrapedLine(t, ns, pod, regexp.MustCompile(`^`+regexp.QuoteMeta(want)+`$`))
+}
+
+// eventuallyScrapedLine is eventuallyScraped for a value that is not known
+// exactly: it waits until one line of the body matches want, which the caller
+// anchors.
+func (tc *testClients) eventuallyScrapedLine(t *testing.T, ns, pod string, want *regexp.Regexp) string {
+	t.Helper()
 	var body string
 	err := wait.PollUntilContextTimeout(context.Background(), 3*time.Second, testTimeout, true,
 		func(context.Context) (bool, error) {
@@ -100,13 +112,13 @@ func (tc *testClients) eventuallyScraped(t *testing.T, ns, pod, want string) str
 			}
 			body = b
 			for _, line := range strings.Split(body, "\n") {
-				if line == want {
+				if want.MatchString(line) {
 					return true, nil
 				}
 			}
 			return false, nil
 		})
-	require.NoError(t, err, "the exporter of %s/%s never served %q; last scrape:\n%s", ns, pod, want, body)
+	require.NoError(t, err, "the exporter of %s/%s never served a line matching %q; last scrape:\n%s", ns, pod, want, body)
 	return body
 }
 

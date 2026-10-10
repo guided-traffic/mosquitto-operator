@@ -561,6 +561,23 @@ without waiting for `sys_interval`. The exporter's mapping table
 is this set ([`internal/exporter/mapping.go`](../../internal/exporter/mapping.go)), plus
 `clients/maximum`, which ADR 0002 measured on 2.0.22 only.
 
+What it sees at once are the values of the broker's last publish, from before its own login.
+*Measured 2026-10-10*, same image, docker 28.4.0, arm64, `sys_interval 10`, the only client a
+`mosquitto_sub -v -t '$SYS/broker/clients/connected' -t '$SYS/broker/uptime'` started 13 seconds
+after the broker:
+
+```
+11:36:00 $SYS/broker/clients/connected 0     # retained, on subscribe: the subscriber is not counted
+11:36:00 $SYS/broker/uptime 13 seconds
+11:36:10 $SYS/broker/uptime 23 seconds
+11:36:10 $SYS/broker/clients/connected 1     # the next publish counts it
+```
+
+So the exporter counts in its own `mosquitto_clients_connected` only up to `sys_interval` after
+it logged in. The E2E metrics test waits for that series rather than reading it from the first
+scrape that shows `mosquitto_exporter_connected 1`, which failed twice in CI on 2026-10-07 and
+2026-10-10 with `mosquitto_clients_connected 0`.
+
 ## M29 — `max_packet_size` defaults to 2,000,000 bytes, and a later line wins
 
 *Measured 2026-10-05*, same rig. With no `max_packet_size` line, a QoS 0 publish of a 1,999,000-byte
