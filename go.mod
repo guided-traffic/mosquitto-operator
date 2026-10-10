@@ -4,7 +4,7 @@ go 1.27.2
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
-	github.com/prometheus/client_golang v1.24.1
+	github.com/prometheus/client_golang v1.25.0
 	github.com/stretchr/testify v1.12.1
 	k8s.io/api v0.37.0
 	k8s.io/apimachinery v0.37.0
