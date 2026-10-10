@@ -366,7 +366,7 @@ $(LOCALBIN):
 
 ## Tool Versions
 # renovate: datasource=go depName=sigs.k8s.io/kustomize/kustomize/v5
-KUSTOMIZE_VERSION ?= v5.8.2
+KUSTOMIZE_VERSION ?= v5.8.3
 # renovate: datasource=go depName=sigs.k8s.io/controller-tools/cmd/controller-gen
 CONTROLLER_GEN_VERSION ?= v0.21.0
 # setup-envtest is pinned to a controller-runtime BRANCH, not a tag, so no
