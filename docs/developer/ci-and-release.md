@@ -19,7 +19,7 @@ The self-hosted runner image ships no `make`, so every job that enters the Makef
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml), on every pull request to
 `main`, every push to `main`, and `workflow_dispatch`. Concurrency-grouped per workflow and ref with
 `cancel-in-progress: true`; top-level `permissions: contents: read`, raised only in the two jobs
-that need more. `env`: `GO_VERSION: '1.27.1'`, `KUBERNETES_VERSION: '1.33.4'`.
+that need more. `env`: `GO_VERSION` (the Go version, [ADR 0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md)), `KUBERNETES_VERSION: '1.33.4'`.
 
 | Job (status context) | Runs | Notes |
 |---|---|---|
@@ -127,7 +127,7 @@ tests" went green; with `e2e-tests` in `needs:`, that is what the workflow enfor
 
 [`.github/workflows/build.yml`](../../.github/workflows/build.yml), on `release: published`.
 Serialised by a workflow-wide concurrency group with `cancel-in-progress: false`, because two runs
-would both rebase the same `gh-pages` `index.yaml`. `env`: `GO_VERSION: '1.27.1'`.
+would both rebase the same `gh-pages` `index.yaml`. `env`: `GO_VERSION`.
 
 The file sets `permissions: contents: read` at the top; each job widens it in its own block.
 

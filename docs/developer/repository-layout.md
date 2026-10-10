@@ -66,12 +66,12 @@ mosquitto-operator/                      # Go module github.com/guided-traffic/m
 │   ├── workflows/release.yml            # "Test and Release": every check, plus semantic-release. PR and push to main
 │   ├── workflows/build.yml              # "Release Docker & Helm": image and chart, on `release: published`
 │   ├── workflows/renovate.yml           # self-hosted Renovate, nightly and on demand
-│   ├── release-template.hbs             # the release-notes template; carries the go-1.27 badge
+│   ├── release-template.hbs             # the release-notes template; carries the go-<major>.<minor> badge
 │   └── badges/coverage.json             # committed artefact; CI rewrites it on main, semantic-release commits it
-├── Containerfile                        # two stages: golang:1.27.1-alpine -> gcr.io/distroless/static-debian12:nonroot,
+├── Containerfile                        # two stages: golang:<version>-alpine -> gcr.io/distroless/static-debian12:nonroot,
 │                                        #   two binaries: /app/manager and /app/exporter
 ├── Makefile                             # every entry point; CI enters the repository only through here
-├── renovate.json                        # packageRules and the six customManagers
+├── renovate.json                        # packageRules and the eight customManagers
 ├── package.json, package-lock.json, .releaserc.json   # semantic-release only; no application JavaScript
 ├── .golangci.yml                        # linters, the revive rule set, the misspell exception, gofmt + goimports
 ├── .dockerignore, .gitignore
