@@ -14,7 +14,7 @@ target list.
 
 | Tool | Version | Where the version lives | Needed for |
 |---|---|---|---|
-| Go | `1.27.1` | `go 1.27.1` in [`go.mod`](../../go.mod), `golang:1.27.1-alpine` in the [`Containerfile`](../../Containerfile), `GO_VERSION: '1.27.1'` in [`release.yml`](../../.github/workflows/release.yml) and [`build.yml`](../../.github/workflows/build.yml), and `go-1.27` (major.minor) in the badge of [`.github/release-template.hbs`](../../.github/release-template.hbs) | everything |
+| Go | the version `go.mod` names — one fact in four places, moved by one Renovate PR ([ADR 0003](../adr/0003-the-go-version-is-one-fact-in-four-files.md)) | `go <version>` in [`go.mod`](../../go.mod), `golang:<version>-alpine` in the [`Containerfile`](../../Containerfile), `GO_VERSION: '<version>'` in [`release.yml`](../../.github/workflows/release.yml) and [`build.yml`](../../.github/workflows/build.yml), and `go-<major>.<minor>` in the badge of [`.github/release-template.hbs`](../../.github/release-template.hbs) | everything |
 | make + bash | any recent | `SHELL = /usr/bin/env bash -o pipefail`, `.SHELLFLAGS = -ec` | everything |
 | Docker | not pinned | — | `test-image-tools`, `docker-build`, `docker-buildx`, `kind-load`, `e2e-local` |
 | kubectl | not pinned for local use | `KUBERNETES_VERSION: '1.33.4'` in `release.yml`, used only by the E2E job | `install`, `uninstall`, `deploy`, `undeploy`, `cert-manager-install`, `e2e-local`, and `test-e2e` (the suite runs `kubectl exec`) |

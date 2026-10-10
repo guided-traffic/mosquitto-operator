@@ -17,6 +17,17 @@ nobody edits with it, so the sites below are named by their form, `<version>` st
 whatever the tree carries. That pull request is also the first observation of D2 working: one
 pull request, four files, written by the app identity.
 
+**Amended 2026-10-10 — one manager per location (D8).** The built-in `dockerfile` manager also
+read `FROM golang:<version>-alpine`, through the `docker` datasource and therefore outside the
+group: on 2026-10-09 it opened its own pull request, #53 (`golang` docker tag to `1.27.2`), next
+to the grouped #52, both editing the same line. A `packageRule` now disables the `dockerfile`
+manager for `golang`, and the `Containerfile` customManager is the only owner of the line. The
+sentence under *Renovate's built-in managers only* that kept both built-in managers on their two
+files is marked there. **Verified by running** Renovate 44.149.1 locally (`--platform=local
+--dry-run=lookup`) against the `main` tree of that day: with the old `renovate.json` it planned
+`renovate/golang-1.x` next to `renovate/go-version`; with the new one only `renovate/go-version`,
+moving all four sites.
+
 **Verified by reading, in this tree:** [`go.mod`](../../go.mod) line 3 (`go <version>`),
 [`Containerfile`](../../Containerfile) line 2 (`FROM golang:<version>-alpine AS builder`),
 [`.github/workflows/build.yml`](../../.github/workflows/build.yml) and
@@ -149,6 +160,11 @@ the failure mode `hack/verify-ci-references.mjs` exists to catch."
 `description` of the manager says why.** `customManagers[4]` carries the reason for `loose` in
 its own description. The next person to "fix" it back to `semver` reads the consequence first.
 
+**D8 — A location that names the Go version has exactly one manager.** *(Amended 2026-10-10.)* A
+built-in manager that reads the same line through another datasource sits outside the group and
+proposes the same bump as a second pull request. The `dockerfile` manager is disabled for the
+`golang` image by a `packageRule`; its other images in the `Containerfile` stay with it.
+
 ## Consequences
 
 * **Every new location that names the Go version costs a `customManager`,** and a change that
@@ -197,8 +213,9 @@ verified** — it has never been tried in this repository.
 
 The `gomod` and `dockerfile` managers cover `go.mod` and the `Containerfile` with no custom
 regex at all. They cover neither the workflow env nor the badge, which are exactly the two that
-broke. Rejected as insufficient, not as wrong: both built-in managers are still enabled and do
-the work for their two files.
+broke. Rejected as insufficient, not as wrong. ~~Both built-in managers are still enabled and do
+the work for their two files.~~ *(Superseded 2026-10-10 by D8: the `dockerfile` manager no longer
+reads the `golang` line, because it did so outside the group.)*
 
 ### Drop the badge from the release template
 
