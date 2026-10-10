@@ -54,7 +54,7 @@ mosquitto-operator/                      # Go module github.com/guided-traffic/m
 │   ├── boilerplate.go.txt               # the Apache-2.0 header controller-gen stamps on generated Go files
 │   ├── verify-ci-references.mjs         # proves every Renovate customManager still matches a real file and line
 │   ├── verify-release-tooling.mjs       # drives the semantic-release plugins over synthetic commits
-│   └── changelog-config.mjs             # loads .github/release-template.hbs into the release-notes generator
+│   └── changelog-config.mjs             # hands .github/release-template.hbs to the release notes as their footer
 ├── docs/
 │   ├── adr/                             # decisions, one file per decision family
 │   ├── developer/                       # this directory: contributor entry point
@@ -66,7 +66,7 @@ mosquitto-operator/                      # Go module github.com/guided-traffic/m
 │   ├── workflows/release.yml            # "Test and Release": every check, plus semantic-release. PR and push to main
 │   ├── workflows/build.yml              # "Release Docker & Helm": image and chart, on `release: published`
 │   ├── workflows/renovate.yml           # self-hosted Renovate, nightly and on demand
-│   ├── release-template.hbs             # the release-notes template; carries the go-<major>.<minor> badge
+│   ├── release-template.hbs             # the footer of the release notes; carries the go-<major>.<minor> badge
 │   └── badges/coverage.json             # committed artefact; CI rewrites it on main, semantic-release commits it
 ├── Containerfile                        # two stages: golang:<version>-alpine -> gcr.io/distroless/static-debian12:nonroot,
 │                                        #   two binaries: /app/manager and /app/exporter

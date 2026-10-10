@@ -14,6 +14,11 @@
 // notes with the installed writer - so an incompatible bump goes red in PR CI
 // instead of on main.
 //
+// That pair is how the tree runs today: package.json overrides the writer of
+// release-notes-generator 14 with the writer@9 it pins (see
+// hack/changelog-config.mjs). Without the override the 10.x preset renders through
+// writer@8 to its header and empty sections, which this script fails on.
+//
 // Run via: make test-release-tooling (CI: the release-tooling job).
 
 import { readFile } from "node:fs/promises";
@@ -67,6 +72,43 @@ function pluginConfigFrom(releaserc, pluginName) {
 
 const releaserc = JSON.parse(await readFile(RELEASERC_URL, "utf8"));
 
+// Step 0: the writer override in package.json is a bridge, not a pin to keep.
+// The generator asks for conventional-changelog-writer 8, the preset renders only
+// through 9. Once the generator itself asks for the major the pinned writer has,
+// the override does nothing but hide that, and it goes. Only a caret range is
+// read; anything else is reported rather than guessed at.
+const pkg = JSON.parse(
+  await readFile(new URL("../package.json", import.meta.url), "utf8"),
+);
+const writerOverride =
+  pkg.overrides?.["@semantic-release/release-notes-generator"]?.[
+    "conventional-changelog-writer"
+  ];
+if (writerOverride) {
+  const generatorPkg = JSON.parse(
+    await readFile(
+      new URL(
+        "../node_modules/@semantic-release/release-notes-generator/package.json",
+        import.meta.url,
+      ),
+      "utf8",
+    ),
+  );
+  const asked = generatorPkg.dependencies?.["conventional-changelog-writer"] ?? "";
+  const pinned = pkg.devDependencies?.["conventional-changelog-writer"] ?? "";
+  const askedMajor = /^\^(\d+)\./.exec(asked)?.[1];
+  if (askedMajor === undefined) {
+    fail(
+      `@semantic-release/release-notes-generator ${generatorPkg.version} asks for conventional-changelog-writer "${asked}", which this check cannot read - decide by hand whether the override in package.json is still needed`,
+    );
+  }
+  if (askedMajor === pinned.split(".")[0]) {
+    fail(
+      `@semantic-release/release-notes-generator ${generatorPkg.version} asks for conventional-changelog-writer ${asked}, which the pinned ${pinned} satisfies - remove the override from package.json`,
+    );
+  }
+}
+
 const context = {
   commits: COMMITS,
   logger,
@@ -97,7 +139,7 @@ if (releaseType !== "major") {
   );
 }
 
-// Step 2: the notes generator must render the notes with the writer it ships.
+// Step 2: the notes generator must render the notes with the writer it loads.
 // This is the step that failed on 2026-08-22: the preset's handlebars template
 // called a helper the installed conventional-changelog-writer does not
 // register, so rendering threw "Missing helper".
@@ -128,6 +170,7 @@ try {
 // template would simply stop being used, and this check would stay green while
 // every release note silently lost its install instructions. Only the template
 // itself can produce the strings below, so they are what proves it is wired in.
+// The two that carry the version prove its placeholder was filled in.
 const mustContain = [
   // From the preset.
   "Features",
@@ -137,8 +180,9 @@ const mustContain = [
   "rename the tls block",
   // From .github/release-template.hbs, and from nowhere else.
   "Quality Gates",
-  "docker pull guidedtraffic/mosquitto-operator",
+  `docker pull guidedtraffic/mosquitto-operator:${context.nextRelease.version}`,
   "helm repo add mosquitto-operator",
+  `--version ${context.nextRelease.version}`,
 ];
 for (const needle of mustContain) {
   if (!notes.includes(needle)) {

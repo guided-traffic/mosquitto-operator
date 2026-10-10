@@ -113,8 +113,12 @@ it.
 
 [`.releaserc.json`](../../.releaserc.json): branch `main`; `@semantic-release/commit-analyzer`
 with the `conventionalcommits` preset; `@semantic-release/release-notes-generator` loading
-[`hack/changelog-config.mjs`](../../hack/changelog-config.mjs), which renders
-[`.github/release-template.hbs`](../../.github/release-template.hbs); `@semantic-release/github`
+[`hack/changelog-config.mjs`](../../hack/changelog-config.mjs), which hands
+[`.github/release-template.hbs`](../../.github/release-template.hbs) to the preset as the footer
+of its notes, its `{{version}}` filled in — `package.json` overrides the generator's
+`conventional-changelog-writer` 8 with the pinned 9 that the `conventionalcommits` 10 preset
+renders through, and `release-tooling` fails once the generator asks for that major itself, so
+the override is removed rather than forgotten; `@semantic-release/github`
 with success and fail comments and released labels off; `@semantic-release/git` committing
 `.github/badges/coverage.json` as `chore(release): <version> [skip ci]` with the notes in the body.
 The version follows the Conventional Commits since the last tag — a `!` or a `BREAKING CHANGE:`
