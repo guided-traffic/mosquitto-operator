@@ -51,7 +51,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
         with:
           driver-opts: |
-            image=moby/buildkit:v0.33.1
+            image=moby/buildkit:v0.34.0
             network=host
 
       - name: Login to Docker Hub
