@@ -59,6 +59,30 @@ that need more. `env`: `GO_VERSION` (the Go version, [ADR 0003](../adr/0003-the-
 
 </details>
 
+### What reaches `main`
+
+`main` carries one repository ruleset, a setting outside the tree — `gh api
+repos/guided-traffic/mosquitto-operator/rulesets` shows it
+([ADR 0015](../adr/0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md)).
+Its one rule requires twelve status contexts, each bound to the GitHub Actions app, and is not
+strict, so a pull request that is behind `main` still merges:
+
+| Required | Not required, and why |
+|---|---|
+| `Code Linting`, `GoSec Security Scan`, `Malware Scan (Source Code)`, `Unit Tests`, `Integration Tests (envtest)`, `Mosquitto Image Tools`, `Vulnerability Check`, `Cyclomatic Complexity`, `Generated Manifests Up To Date`, `Release Tooling` — no `needs:` | `E2E Tests (single-node)`, `E2E Tests (multi-node)` — the gate carries them under a stable name ([ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) D7) |
+| `Container Malware Scan` — needs `Malware Scan (Source Code)`, which is required | `Combined Coverage Report` — a report, not a check |
+| `E2E Tests` — the gate, `if: always()` | `Semantic Release` — runs on no pull request |
+
+**A skipped required check does not block a merge.** A job with `needs:` is only safe to require
+when every job it needs is required too, or it reports *skipped* — and passes — whenever what it
+needs failed. The only bypass is the app `guided-traffic-automation`, because `semantic-release`
+pushes its release commit straight to `main`; nobody else, admins included, pushes past the
+checks. A renamed or removed required job leaves a context nothing reports, and every pull request
+waits on it until the ruleset is edited; a new job is not required until it is added
+([adding-things.md](adding-things.md#a-ci-job)). A change under `.github/workflows/` merges only
+with a token that has the `workflow` scope, which the web interface has and a plain `gh` login
+may not.
+
 ### The E2E jobs
 
 The `e2e-tests` matrix and the `e2e-gate` job open the `jobs:` block. They were commented out from
@@ -66,8 +90,8 @@ The `e2e-tests` matrix and the `e2e-gate` job open the `jobs:` block. They were 
 build-essential` when its ephemeral runner pod lost its network — and were restored, with
 `e2e-tests` back in `semantic-release`'s `needs:`, when both legs had passed on a local Kind
 cluster ([ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) `Status` names the runs).
-`main` carries no branch protection that names a check (a repository setting the tree cannot
-show — not verified here); `E2E Tests`, the gate, is the context a required check would name.
+`E2E Tests`, the gate, is the context `main` requires; neither leg is
+([What reaches `main`](#what-reaches-main)).
 
 What the job does — read it before changing it, because each step exists for a mechanic of
 Docker-in-Docker runners:
@@ -174,9 +198,16 @@ when the job ends.
 
 - **Automerge** (`platformAutomerge`, squash) for minor and patch updates of Go modules, the Go
   version, Docker base images, GitHub Actions, Helm and the custom-regex pins, and for digest
-  updates (the `:automergeDigest` preset and the per-manager rules), after CI. **npm has no rule**,
+  updates (the `:automergeDigest` preset and the per-manager rules). GitHub merges such a pull
+  request the moment the checks `main` requires have passed ([What reaches
+  `main`](#what-reaches-main)), not in a Renovate run. **npm has no rule**,
   so the release tooling in `package.json` — which runs in the release job with the app token —
   waits for a human at every update type.
+- **`rebaseWhen: "auto"`**: an automerge branch that fell behind `main` is rebuilt in the next
+  run — by then it is red or pending, since a green one has merged; a branch that waits for a
+  human, or that a human pushed to, is rebuilt only when it conflicts. A red `main` fixed during
+  the day therefore does not leave the open pull requests red behind it
+  ([ADR 0015](../adr/0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md)).
 - **Every major waits for a human**, labelled `major-update`. Majors of *indirect* Go modules are
   disabled outright: a module-path bump cannot apply without a direct importer, and `go mod tidy`
   would keep resetting it. GitHub Actions majors are read before they merge because those actions

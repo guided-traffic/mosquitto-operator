@@ -79,7 +79,7 @@ change.
 | [build-test-lint.md](build-test-lint.md) | You want to build, generate, lint or test anything locally: the Make targets, the tool pins, what was last recorded, coverage |
 | [testing.md](testing.md) | You are adding a test, choosing a tier, or a suite is failing and you need to know what it is for and what it needs |
 | [ci-and-release.md](ci-and-release.md) | You touch a workflow, Renovate or the release |
-| [adding-things.md](adding-things.md) | You add a CRD field, a managed object, an E2E scenario or a Renovate-managed pin |
+| [adding-things.md](adding-things.md) | You add a CRD field, a managed object, an E2E scenario, a Renovate-managed pin or a CI job |
 | [conventions.md](conventions.md) | You write a commit, Go, a comment, a test, a guard or documentation |
 
 ## Core flows, one fact each
@@ -98,9 +98,9 @@ change.
 | A rotated TLS Secret | Nothing in the operator, which never reads its content; in the pod the reloader checks the new pair and sends `SIGHUP`, an invalid pair holds every signal; nothing rolls | [architecture.md](architecture.md#the-credentials-path) |
 | Deleting a `Mosquitto` | The reconciler writes nothing; the garbage collector removes the five objects through their controller references; its users report `BrokerNotFound` | [ADR 0009](../adr/0009-delete-only-through-owner-references.md) |
 | An RBAC change | Marker in the controller, `make generate-all` for `config/rbac/role.yaml`, the chart's ClusterRole by hand, `make verify-rbac-parity` | [adding-things.md](adding-things.md#a-managed-object) |
-| A pull request | Fourteen jobs on self-hosted runners — two E2E legs and their gate among them — each check entered through a Make target | [ci-and-release.md](ci-and-release.md#test-and-release) |
+| A pull request | Fourteen jobs on self-hosted runners — two E2E legs and their gate among them — each check entered through a Make target; twelve status contexts are required before anything merges into `main` | [ci-and-release.md](ci-and-release.md#test-and-release) |
 | A release | On a push to `main`, after thirteen of those jobs, `semantic-release` cuts the version from Conventional Commits with a GitHub App token; the published release builds and pushes the image and publishes the chart to `gh-pages` | [ci-and-release.md](ci-and-release.md#the-release) |
-| A dependency update | Self-hosted Renovate nightly; minor, patch and digest updates automerge after CI (npm excepted), majors wait for a human; `make verify-ci-references` proves every customManager still matches | [ci-and-release.md](ci-and-release.md#renovate) |
+| A dependency update | Self-hosted Renovate nightly; GitHub merges minor, patch and digest updates once the twelve checks `main` requires pass (npm excepted), majors wait for a human, a branch left behind red is rebuilt the next night; `make verify-ci-references` proves every customManager still matches | [ci-and-release.md](ci-and-release.md#renovate) |
 
 ## What has no page here
 

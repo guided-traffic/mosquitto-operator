@@ -13,10 +13,13 @@ on:
   # active development each merge starts another wave that blocks the pipeline
   # for the work that caused it.
   #
-  # The cost of leaving it out: after a dependency pull request merges, the
-  # remaining open ones are not refreshed until the next nightly run. That is
-  # cheap here, because rebaseWhen is "conflicted" - Renovate rebases the ones
-  # that actually stopped applying, and the rest were already correct.
+  # The cost of leaving it out is small, because Renovate does not merge in its
+  # run: GitHub merges a pull request the moment the checks main requires have
+  # passed (platformAutomerge, enabled by the ruleset on main). What waits for
+  # this run is a branch that fell behind main and is red or pending -
+  # rebaseWhen "auto" rebuilds it on the current main, so a red main fixed
+  # during the day does not leave the open pull requests red behind it
+  # (docs/adr/0015).
   #
   # Manual trigger, for when a refresh is wanted before 02:00
   workflow_dispatch:
