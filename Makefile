@@ -392,7 +392,7 @@ GOCYCLO_VERSION ?= v0.6.0
 # renovate: datasource=go depName=github.com/securego/gosec/v2/cmd/gosec
 GOSEC_VERSION ?= v2.29.1-0.20261009120814-7b1b5cebe007
 # renovate: datasource=go depName=golang.org/x/vuln/cmd/govulncheck
-GOVULNCHECK_VERSION ?= v1.8.0
+GOVULNCHECK_VERSION ?= v1.9.0
 
 # gocovmerge carries no tags at all upstream (last commit 2016-03-31), so the
 # only thing to pin is the pseudo-version of that commit and there is no
