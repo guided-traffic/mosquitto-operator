@@ -140,3 +140,22 @@ A switch that changes the operator's flags and its RBAC together — `secretSecu
 6. Break it on purpose — the failure the guard exists for, not any failure — watch it fail, restore
    it, and record the exact message in
    [ADR 0010](../adr/0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md).
+
+## A CI job
+
+1. Add the job to [`release.yml`](../../.github/workflows/release.yml) with a `name:` that is its
+   status context, and enter it through a Make target, never through a tool on `PATH`.
+2. Decide whether `semantic-release` waits for it: if it gates a release, add it to that job's
+   `needs:` — the matrix itself for an E2E job, not `e2e-gate`
+   ([ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md) D7).
+3. Decide whether `main` requires it. A job without `needs:` can be required as it is; a job with
+   `needs:` only together with every job it needs, because a required check that was skipped
+   passes. A matrix job is never required — a gate with `if: always()` is. Adding a context to the
+   ruleset is a repository setting, done by an admin
+   ([ADR 0015](../adr/0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md)
+   D5). Renaming or removing a required job blocks every pull request on the old context until the
+   ruleset is edited, this one included.
+4. Update the job table and the required list in
+   [ci-and-release.md](ci-and-release.md#what-reaches-main) in the same change.
+5. Make the job fail on purpose once and record the message
+   ([ADR 0010](../adr/0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md)).

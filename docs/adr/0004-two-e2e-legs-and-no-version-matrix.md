@@ -4,6 +4,12 @@
 
 Accepted. Date: 2026-09-01.
 
+**Amended 2026-10-12 — D7 has something to point at.** Until this date `main` carried no rule that
+named a check, so D7 described where a required check would go. The ruleset of
+[ADR 0015](0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md)
+now requires `E2E Tests`, the gate, and neither `E2E Tests (single-node)` nor
+`E2E Tests (multi-node)`.
+
 **Amended 2026-10-05 — the tier was out of CI for five weeks, and is back.** From 2026-09-01 until
 the change that wrote this amendment, `e2e-tests` and `e2e-gate` were commented out of
 [`release.yml`](../../.github/workflows/release.yml) and `e2e-tests` was missing from

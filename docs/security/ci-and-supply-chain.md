@@ -65,6 +65,14 @@ runs a Docker Scout CVE scan with no `exit-code` input. The release workflow has
 release from `v0.1.0` to `v0.1.8`; the individual checks were not inspected run by run for this
 page.
 
+Since 2026-10-12 a repository ruleset makes twelve of those checks a condition of every merge and
+push into `main`, each bound to the GitHub Actions app so no other sender can report it, and lets
+GitHub merge a Renovate pull request the moment they pass
+([ADR 0015](../adr/0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md),
+the list in [ci-and-release.md](../developer/ci-and-release.md#what-reaches-main)). Admins have no
+bypass; the app does ([H-21](#h-21)). The ruleset is a repository setting: this page states what
+it was set to, the API states what it is.
+
 ## What this does not cover
 
 <a id="h-7"></a>
@@ -112,7 +120,8 @@ Live, and narrower than it was. Every third-party action outside the `actions/*`
 `renovatebot/github-action` in `renovate.yml` — so a moved tag or branch upstream no longer
 reaches the runners on its own. What is left: [`renovate.json`](../../renovate.json) automerges
 GitHub Actions minor, patch and digest updates once CI passes, so a new upstream release of a
-pinned action still lands after one Renovate cycle without a human reading it; and the four
+pinned action still lands without a human reading it — since 2026-10-12 within minutes of its
+checks passing, through GitHub auto-merge, rather than at the next Renovate run; and the four
 first-party and vendor namespaces stay on tag references, trusted because their tags are
 protected upstream — `docker/login-action@v4` in jobs that then hold `DOCKERHUB_PAT`, and
 `actions/create-github-app-token@v3`, the one step that receives `APP_PRIVATE_KEY` itself. The
@@ -135,3 +144,21 @@ and gates every release, on Kind clusters the runners create, and was first obse
 configuration of its own, so a claim that depends on a CNI, a cloud load balancer, a storage
 driver or a production admission chain is not covered by it. What an operator can do: run
 `make e2e-local` against a cluster shaped like theirs before relying on one.
+
+<a id="h-21"></a>
+### H-21 — The app pushes to `main` past every required check
+
+Live, accepted with
+[ADR 0015](../adr/0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md)
+D3. The ruleset on `main` holds every merge and push to twelve checks, except those of the app
+`guided-traffic-automation`, which bypasses it always: `semantic-release` pushes its
+`chore(release): <version> [skip ci]` commit to `main` directly, and no check runs on that commit.
+Whoever can mint a token for the app — the `semantic-release` and `renovate` jobs through
+`APP_PRIVATE_KEY`, and anyone else who holds that key ([H-8](#h-8)) — can therefore write to `main`
+unchecked, and a Renovate merge that does not go through GitHub auto-merge is held only by
+Renovate's own `ignoreTests: false`. Before 2026-10-12 `main` had no rule at all, so this is what is
+left, not what was added. Two more limits of the same setting: a job added to `release.yml` is not
+required until an admin adds its context, and the setting itself is not in the tree, so a change to
+it shows in the organisation's audit log, not in `git log`. Giving releases an identity of their own,
+separate from Renovate's, would narrow the bypass to the one job that needs it; that was not
+chosen.
