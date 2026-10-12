@@ -9,8 +9,9 @@ were put to them: keep `rebaseWhen: "conflicted"` and document the manual recove
 **Implemented in this change:** `"rebaseWhen": "auto"` in [`renovate.json`](../../renovate.json),
 the comment in [`renovate.yml`](../../.github/workflows/renovate.yml) that rested on the old value,
 and the pages that describe both. **Implemented outside the tree, right after this change
-merged:** the repository ruleset of D2 and D3. A ruleset is a repository setting; `git log` does
-not show it, `gh api repos/guided-traffic/mosquitto-operator/rulesets` does.
+merged:** the repository ruleset of D2 and D3, created on 2026-10-12 as ruleset `24926421`,
+`main: required checks`, target `~DEFAULT_BRANCH`. A ruleset is a repository setting; `git log`
+does not show it, `gh api repos/guided-traffic/mosquitto-operator/rulesets` does.
 
 **Verified by reading** Renovate 44.149.1, the version the workflow ran on 2026-10-10:
 `determineRebaseWhenValue` in `lib/workers/repository/update/branch/reuse.ts` turns `"auto"` into
@@ -27,9 +28,19 @@ after that ("Automerged but already retried once").
 never taken effect: `main` carried no rule that names a check, and GitHub enables auto-merge only
 on a pull request with a requirement still open.
 
-**Not yet observed:** GitHub auto-merge engaging for a pull request the app opens; the release
-commit of `semantic-release` passing the ruleset through the app's bypass. Both happen first with
-the next Renovate update and the next `fix` or `feat` on `main`.
+**Observed on 2026-10-12, after the ruleset was created:**
+
+| What | Seen |
+|---|---|
+| A direct push to `main` by an admin | refused: `GH013: Repository rule violations found for refs/heads/main`, `12 of 12 required status checks are expected`; the rule suite records it as `fail` |
+| Auto-merge for app-opened pull requests | #59, #60 and #61, green but unmerged since the 04:05 run, were behind `main`; a dispatched Renovate run rebuilt all three and the app enabled auto-squash on each between 12:09 and 12:10 UTC; the run ended at 12:10:35; GitHub merged them at 12:34, 12:35 and 12:39, each as its checks finished, and the rule suites record each as `pass` |
+| The release that followed | `v0.2.3` at 12:53 from the same `main` run, whose 15 jobs all passed |
+
+**Not yet observed:** the release commit passing the ruleset through the app's bypass. The
+`v0.2.3` run made none — `@semantic-release/git` commits only when `.github/badges/coverage.json`
+changed, and it had not. If the bypass does not work, the next release that changes the badge
+fails in the `prepare` step of `@semantic-release/git`, before its tag, as a red
+`Semantic Release` job on `main`; the rule suite of that push then shows `bypass` or `fail`.
 
 ## Context
 
