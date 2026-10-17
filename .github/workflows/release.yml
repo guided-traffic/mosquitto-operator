@@ -335,7 +335,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v5
         with:
-          version: 'v4.3.0'
+          version: 'v4.3.1'
 
       - name: Debug cluster state
         run: |
@@ -763,7 +763,7 @@ jobs:
       - name: Install Helm
         uses: azure/setup-helm@v5
         with:
-          version: 'v4.3.0'
+          version: 'v4.3.1'
 
       # Runs the generator itself, so the kubebuilder markers in the Go sources are
       # compared against the checked-in manifests. build.yml runs the same check, but
