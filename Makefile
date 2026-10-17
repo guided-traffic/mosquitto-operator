@@ -376,7 +376,7 @@ CONTROLLER_GEN_VERSION ?= v0.23.0
 # failure mode hack/verify-ci-references.mjs exists to catch.
 ENVTEST_VERSION ?= release-0.19
 # renovate: datasource=go depName=github.com/golangci/golangci-lint/v2/cmd/golangci-lint
-GOLANGCI_LINT_VERSION ?= v2.14.0
+GOLANGCI_LINT_VERSION ?= v2.15.0
 # renovate: datasource=go depName=github.com/fzipp/gocyclo/cmd/gocyclo
 GOCYCLO_VERSION ?= v0.6.0
 # gosec is pinned to an untagged commit of its main branch, not to a release.
