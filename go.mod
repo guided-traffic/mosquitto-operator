@@ -1,6 +1,6 @@
 module github.com/guided-traffic/mosquitto-operator
 
-go 1.27.2
+go 1.27.3
 
 require (
 	github.com/eclipse/paho.mqtt.golang v1.5.1
