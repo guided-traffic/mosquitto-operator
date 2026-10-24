@@ -390,7 +390,7 @@ GOCYCLO_VERSION ?= v0.6.0
 # semver, so Renovate moves this pin to the next release on its own; the Makefile
 # manager captures the whole value for exactly that.
 # renovate: datasource=go depName=github.com/securego/gosec/v2/cmd/gosec
-GOSEC_VERSION ?= v2.29.1-0.20261009120814-7b1b5cebe007
+GOSEC_VERSION ?= v2.30.0
 # renovate: datasource=go depName=golang.org/x/vuln/cmd/govulncheck
 GOVULNCHECK_VERSION ?= v1.9.0
 
