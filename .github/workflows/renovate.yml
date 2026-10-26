@@ -60,7 +60,7 @@ jobs:
       - name: Self-hosted Renovate
         # Pinned to a commit, like every third-party action (see the comment above
         # the Trivy step in release.yml); Renovate moves digest and comment together.
-        uses: renovatebot/github-action@a63d9a7bc606f7336fd20b47f2f32259a35e6213 # v46.3.9
+        uses: renovatebot/github-action@2804199d260ad00c1fae0e9e842888369391c776 # v46.3.10
         with:
           token: ${{ steps.app-token.outputs.token }}
           configurationFile: renovate.json
