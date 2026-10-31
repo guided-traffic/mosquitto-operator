@@ -2,8 +2,31 @@ apiVersion: v1
 entries:
   mosquitto-operator:
   - apiVersion: v2
+    appVersion: 0.2.12
+    created: "2026-10-31T11:06:13.873196083Z"
+    description: A Kubernetes operator that turns one Mosquitto custom resource into
+      an Eclipse Mosquitto deployment
+    digest: 3f3a9d51b3db8c195ab9a9122265b64190f7053dad15e9d1c5ef749a2280c5ff
+    home: https://github.com/guided-traffic/mosquitto-operator
+    keywords:
+    - mosquitto
+    - mqtt
+    - broker
+    - operator
+    - kubernetes
+    maintainers:
+    - name: Guided Traffic
+      url: https://github.com/guided-traffic
+    name: mosquitto-operator
+    sources:
+    - https://github.com/guided-traffic/mosquitto-operator
+    type: application
+    urls:
+    - https://guided-traffic.github.io/mosquitto-operator/mosquitto-operator-0.2.12.tgz
+    version: 0.2.12
+  - apiVersion: v2
     appVersion: 0.2.11
-    created: "2026-10-29T10:40:35.386869618Z"
+    created: "2026-10-31T11:06:13.871653937Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: b8e11c1abdf916ea317f57286020957fc0ebd515d5391b73903314b26ff1496c
@@ -26,7 +49,7 @@ entries:
     version: 0.2.11
   - apiVersion: v2
     appVersion: 0.2.10
-    created: "2026-10-29T10:40:35.38561682Z"
+    created: "2026-10-31T11:06:13.867932864Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: 242daed3f39e4e1ff4fc61ed6863c6823b5c3e0e4a3a972376bc0f339f4264bb
@@ -49,7 +72,7 @@ entries:
     version: 0.2.10
   - apiVersion: v2
     appVersion: 0.2.9
-    created: "2026-10-29T10:40:35.393055252Z"
+    created: "2026-10-31T11:06:13.888144063Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: a02830860183ca9c693099b35503afe249f04901185fe0a1af8438a385a455c3
@@ -72,7 +95,7 @@ entries:
     version: 0.2.9
   - apiVersion: v2
     appVersion: 0.2.8
-    created: "2026-10-29T10:40:35.392289601Z"
+    created: "2026-10-31T11:06:13.887496773Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: 0b1a290fd47f24d398bf90393bdd359e6ca8e65e473845533dd440f0149d303a
@@ -95,7 +118,7 @@ entries:
     version: 0.2.8
   - apiVersion: v2
     appVersion: 0.2.7
-    created: "2026-10-29T10:40:35.391414464Z"
+    created: "2026-10-31T11:06:13.886848201Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: 678de94cfd51b8c8609099b8035d76c8ab098ed8a92af168f546fab5a4e67c25
@@ -118,7 +141,7 @@ entries:
     version: 0.2.7
   - apiVersion: v2
     appVersion: 0.2.5
-    created: "2026-10-29T10:40:35.390588679Z"
+    created: "2026-10-31T11:06:13.88620012Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: 27f66eb6694205053639a086b9c6c9031c1ca12bf203d6bdd57b0864256c75ea
@@ -141,7 +164,7 @@ entries:
     version: 0.2.5
   - apiVersion: v2
     appVersion: 0.2.4
-    created: "2026-10-29T10:40:35.389757795Z"
+    created: "2026-10-31T11:06:13.885497887Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: b43acabd23ae59adb07b90a204e2074b68a0b2a2bc854591e9ad4098e87c8e94
@@ -164,7 +187,7 @@ entries:
     version: 0.2.4
   - apiVersion: v2
     appVersion: 0.2.3
-    created: "2026-10-29T10:40:35.388773272Z"
+    created: "2026-10-31T11:06:13.884816011Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: b05e9b39ccd4f2baec4943bc2a2776d8851ff69bc2ff75cd7dd13f9ca4649e04
@@ -187,7 +210,7 @@ entries:
     version: 0.2.3
   - apiVersion: v2
     appVersion: 0.2.2
-    created: "2026-10-29T10:40:35.387907311Z"
+    created: "2026-10-31T11:06:13.883858136Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: 0de9a7676691d727067fb5ea2b90bbcfaf35413575e51c39805b1bec170f21ad
@@ -210,7 +233,7 @@ entries:
     version: 0.2.2
   - apiVersion: v2
     appVersion: 0.2.1
-    created: "2026-10-29T10:40:35.384759286Z"
+    created: "2026-10-31T11:06:13.864325015Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: b0448d1fcaa9e8afd21f1605d082851431849b476fa65b2d063d7d121134f36d
@@ -233,7 +256,7 @@ entries:
     version: 0.2.1
   - apiVersion: v2
     appVersion: 0.2.0
-    created: "2026-10-29T10:40:35.383826179Z"
+    created: "2026-10-31T11:06:13.86317122Z"
     description: A Kubernetes operator that turns one Mosquitto custom resource into
       an Eclipse Mosquitto deployment
     digest: 034341308db010faea63d9648044a52b01978e6cf0a557be439577f8a0e35d96
@@ -256,7 +279,7 @@ entries:
     version: 0.2.0
   - apiVersion: v2
     appVersion: 0.1.8
-    created: "2026-10-29T10:40:35.381156344Z"
+    created: "2026-10-31T11:06:13.861428797Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 06d10ccbf4092e25cbce899a7c3ade3ed3798ce4a43f5c438c595d6e025f8c18
@@ -279,7 +302,7 @@ entries:
     version: 0.1.8
   - apiVersion: v2
     appVersion: 0.1.7
-    created: "2026-10-29T10:40:35.380013142Z"
+    created: "2026-10-31T11:06:13.860680336Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 4da76af7e654a2fde99fca713ded435ea89175bbccc105c9de2b38c7a4d6934c
@@ -302,7 +325,7 @@ entries:
     version: 0.1.7
   - apiVersion: v2
     appVersion: 0.1.6
-    created: "2026-10-29T10:40:35.374771394Z"
+    created: "2026-10-31T11:06:13.859924472Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 337e4f771cfc26ac25cee378b6823559cdd5e83c67c49e83e14b8f40c0b5b337
@@ -325,7 +348,7 @@ entries:
     version: 0.1.6
   - apiVersion: v2
     appVersion: 0.1.5
-    created: "2026-10-29T10:40:35.373910825Z"
+    created: "2026-10-31T11:06:13.859391267Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: f119f663a4bd4a00ebca98ae84fbcab5b22a548cb05e477514e5516417447317
@@ -348,7 +371,7 @@ entries:
     version: 0.1.5
   - apiVersion: v2
     appVersion: 0.1.4
-    created: "2026-10-29T10:40:35.373078949Z"
+    created: "2026-10-31T11:06:13.858717567Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 41ffe7a93197e8f5cc0d37468270c58c89198cc83f14f57cdccec1bc3540e3b8
@@ -371,7 +394,7 @@ entries:
     version: 0.1.4
   - apiVersion: v2
     appVersion: 0.1.3
-    created: "2026-10-29T10:40:35.372325581Z"
+    created: "2026-10-31T11:06:13.858191456Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: ea065bbe980925c0dc8caef56565f7eddf74c1297dff9761c27726c897c45968
@@ -394,7 +417,7 @@ entries:
     version: 0.1.3
   - apiVersion: v2
     appVersion: 0.1.2
-    created: "2026-10-29T10:40:35.371589645Z"
+    created: "2026-10-31T11:06:13.857649565Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 300127538a1a8792031985cd7a5e668e08827516e5f045aeaa6b9164a7db46ff
@@ -417,7 +440,7 @@ entries:
     version: 0.1.2
   - apiVersion: v2
     appVersion: 0.1.1
-    created: "2026-10-29T10:40:35.368352862Z"
+    created: "2026-10-31T11:06:13.857086394Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: a1ccf3647eb17b5b5b30ba2fe61a6d30fd72fa917e96d57a9da446dbfd39e7c3
@@ -440,7 +463,7 @@ entries:
     version: 0.1.1
   - apiVersion: v2
     appVersion: 0.1.0
-    created: "2026-10-29T10:40:35.366036552Z"
+    created: "2026-10-31T11:06:13.856472436Z"
     description: A Kubernetes operator for provisioning highly available Mosquitto
       MQTT brokers
     digest: 2da98374ca4b13d46f3735d822bb787aa360ab96b7b5b20388e9ef96cce5301e
@@ -461,4 +484,4 @@ entries:
     urls:
     - https://guided-traffic.github.io/mosquitto-operator/mosquitto-operator-0.1.0.tgz
     version: 0.1.0
-generated: "2026-10-29T10:40:35.36515384Z"
+generated: "2026-10-31T11:06:13.85560974Z"
