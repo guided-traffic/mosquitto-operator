@@ -37,9 +37,16 @@ Timeouts per tier: the integration target passes `-timeout=60m`, `test-e2e` `-ti
 
 ## Unit tests
 
-Next to the code, in `api/v1`, `cmd`, `internal/builder`, `internal/common`,
-`internal/controller` and `test/testimages`. testify throughout — `require` for preconditions,
-`assert` for the claim.
+Next to the code, in `api/v1`, `cmd`, `internal/auth`, `internal/builder`, `internal/common`,
+`internal/controller`, `internal/exporter`, `internal/reloader` and `test/testimages`. testify
+throughout — `require` for preconditions, `assert` for the claim.
+
+A test that waits for a goroutine or a poll loop waits with `require.Eventually` for the very thing
+it then asserts. A fixed `time.Sleep` is only for a claim that something did *not* happen, which a
+slow runner can make pass but never fail.
+`TestRun_SignalsOnChangeAndRetriesUntilTheBrokerIsThere` failed once on `main` (run `41046472930`)
+because a 50 ms sleep raced the reloader's 10 ms poll; with the poll slowed to 200 ms the old form
+fails every time (`expected: "a\nb\n"`, `actual  : "a\n"`) and the `Eventually` form passes.
 
 | Fixture | Where | What it gives you |
 |---|---|---|

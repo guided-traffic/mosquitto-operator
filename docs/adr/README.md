@@ -84,14 +84,14 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) | A client is a `MosquittoUser` with its credentials in its own Secret | Implemented — 2026-10-05 |
-| [0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) | Credentials reach the broker as one rendered Secret and a signal, never as a restart | Partly built — D1–D8, D10; D9 later by decision |
+| [0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) | Credentials reach the broker as one rendered Secret and a signal, never as a restart | Partly built — D1–D8, D10 (amended 2026-11-08: a Secret cache without data); D9 later by decision |
 
 ### Reconciliation and privilege
 
 | ADR | Decision | State |
 |---|---|---|
 | [0006](0006-both-install-paths-grant-the-same-authority.md) | Both install paths grant the same authority, and a test compares what they render | Implemented — D9 built 2026-10-05 |
-| [0009](0009-delete-only-through-owner-references.md) | Delete only through owner references, and never patch — and an update keeps foreign labels | Implemented — D9 built 2026-10-05, the removal of a deleted `spec.podLabels` key on an open question |
+| [0009](0009-delete-only-through-owner-references.md) | Delete only through owner references, and never patch — and an update keeps foreign labels | Implemented — D9 built 2026-10-05, amended 2026-11-08: a deleted `spec.podLabels` or `spec.podAnnotations` key leaves the pods |
 
 ### Observability
 

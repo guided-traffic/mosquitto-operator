@@ -25,19 +25,20 @@ target list.
 | bc | any | — | `coverage-json` |
 
 Everything else installs itself into `bin/` on first use, through `go install` at a version pinned
-in the Makefile:
+in the Makefile. The versions are not repeated here: Renovate moves them in the Makefile, and a copy
+on this page was six pins behind by 2026-11-08.
 
-| Binary | Variable | Pinned to | Renovate |
+| Binary | Variable | Renovate | Note |
 |---|---|---|---|
-| `kustomize` | `KUSTOMIZE_VERSION` | `v5.8.2` | `# renovate:` comment |
-| `controller-gen` | `CONTROLLER_GEN_VERSION` | `v0.21.0` | `# renovate:` comment |
-| `setup-envtest` | `ENVTEST_VERSION` | `release-0.19` — a controller-runtime branch | none, bumped by hand |
-| envtest control plane | `ENVTEST_K8S_VERSION` | `1.29.0`, under `bin/k8s/<version>-<os>-<arch>` | none, bumped by hand |
-| `golangci-lint` | `GOLANGCI_LINT_VERSION` | `v2.14.0` | `# renovate:` comment |
-| `gocyclo` | `GOCYCLO_VERSION` | `v0.6.0` | `# renovate:` comment |
-| `gosec` | `GOSEC_VERSION` | `v2.29.1-0.20261009120814-7b1b5cebe007` — an untagged commit: v2.29.0 cannot read the export data of Go 1.27.2 (see the Makefile comment) | `# renovate:` comment; moves to v2.29.1 once that is tagged |
-| `govulncheck` | `GOVULNCHECK_VERSION` | `v1.8.0` | `# renovate:` comment |
-| `gocovmerge` | `GOCOVMERGE_VERSION` | `v0.0.0-20160331181800-b5bfa59ec0ad` | none — upstream has no tags |
+| `kustomize` | `KUSTOMIZE_VERSION` | `# renovate:` comment | |
+| `controller-gen` | `CONTROLLER_GEN_VERSION` | `# renovate:` comment | its version is stamped into the generated CRDs (`controller-gen.kubebuilder.io/version`): a stale local binary writes its own, and the CI job `generated-manifests` fails on the diff |
+| `setup-envtest` | `ENVTEST_VERSION` | none, bumped by hand | a controller-runtime branch, not a tag |
+| envtest control plane | `ENVTEST_K8S_VERSION` | none, bumped by hand | under `bin/k8s/<version>-<os>-<arch>` |
+| `golangci-lint` | `GOLANGCI_LINT_VERSION` | `# renovate:` comment | |
+| `gocyclo` | `GOCYCLO_VERSION` | `# renovate:` comment | |
+| `gosec` | `GOSEC_VERSION` | `# renovate:` comment | must be built against `golang.org/x/tools` v0.50.0 or newer to read the export data of Go 1.27.2 (see the Makefile comment) |
+| `govulncheck` | `GOVULNCHECK_VERSION` | `# renovate:` comment | |
+| `gocovmerge` | `GOCOVMERGE_VERSION` | none — upstream has no tags | a pseudo-version |
 
 Three Makefile properties worth knowing before you fight one of them:
 
@@ -45,10 +46,16 @@ Three Makefile properties worth knowing before you fight one of them:
   silently ignores the pin — which is how a Homebrew gosec 2.28.0 once ran in place of the pinned
   `v2.29.0`. To try another version, override the variable
   (`make lint GOLANGCI_LINT=$(which golangci-lint)`).
-- **A pin that moved does not reinstall the tool.** `go-install-tool` installs only when the file
-  is missing (`[ -f $(1) ] || …`), and the binaries carry no version in their names. After a
-  Renovate bump of a pin, delete the binary under `bin/` — or all of `bin/` — or the old version
-  keeps running locally.
+- **A tool reinstalls itself when its pin or the Go toolchain moved.** `go-install-tool` writes
+  `bin/<tool>.installed` with the package, the version and `go env GOVERSION` of the install, and
+  every tool target depends on `FORCE`, so each use compares the record against the current pin and
+  toolchain and runs `go install` again on any difference. Until 2026-11-08 it installed only when
+  the file was missing: a `golangci-lint` v2.13.2 built with go1.27.0 kept running under a pin of
+  v2.15.0 and failed every package with `export data version 5 is greater than maximum supported
+  version 4`. With the record in place, a stale binary reinstalls on the next `make lint`
+  (`Installing github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0 go1.27.3`), a current
+  one does nothing, and a record naming another Go version reinstalls again — each observed on
+  2026-11-08.
 - **`ENVTEST_VERSION` names a branch**, so no Renovate datasource resolves it; it is bumped by hand
   together with `ENVTEST_K8S_VERSION`, and it deliberately carries no `# renovate:` comment,
   because a comment that matches nothing is exactly the failure

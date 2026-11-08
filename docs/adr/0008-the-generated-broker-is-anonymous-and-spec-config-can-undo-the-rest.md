@@ -2,8 +2,9 @@
 
 ## Status
 
-Accepted. Date: 2026-09-01. Both decision groups are **implemented** as described; the future work
-named in D11 and D12 is not.
+Accepted. Date: 2026-09-01. Both decision groups are **implemented** as described; ~~the future work
+named in D11 and D12 is not~~ *(corrected 2026-11-08: D11 and D12 were built on 2026-10-05 with
+Group C, see the note after D12)*.
 
 **Amended 2026-10-05.** The title described the tree until Group C was built and is kept so the
 record's links stay stable; **Group C is built (2026-10-05)** and Groups A and B are history where
@@ -238,7 +239,7 @@ never as `spec.config` content, for the reason in Consequences. Not implemented.
 the `acl-file` plugin, not `acl_file`. Authenticated-but-unrestricted is a different posture from
 anonymous and needs its own field. Not implemented.
 
-*(D11 and D12 fulfilled by decision 2026-10-05 in [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md); not built.)*
+*(D11 and D12 fulfilled by decision 2026-10-05 in [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md); ~~not built~~ built 2026-10-05: the generated configuration loads the `password-file` and `acl-file` plugins (`builder.GenerateMosquittoConf`), fed from `MosquittoUser` objects whose credentials are Secret references. Corrected 2026-11-08.)*
 
 ### Group C — the broker requires a login, and `spec.config` cannot take it back
 

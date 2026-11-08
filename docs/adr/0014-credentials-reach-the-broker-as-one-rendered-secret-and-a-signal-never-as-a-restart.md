@@ -9,6 +9,10 @@ Secret per user password, once when the owner allowed the operator to read Secre
 step rests on measurements against the pinned image, recorded in
 [docs/developer/broker-behaviour.md](../developer/broker-behaviour.md).
 
+**Amended 2026-11-08 (decided by the owner):** D10 — the operator's Secret cache holds no Secret
+data in either setting, instead of only labelled Secrets; the consent label is checked on the cached
+metadata before one uncached `get` reads the data.
+
 **Built 2026-10-05:** D1–D8 and D10 — everything but D9, the later dynamic-security mode. Where the build differs from the text, it says so below.
 
 - D1, D2: the generated configuration loads the file plugins; `<name>-auth` (keys `passwd`, `acl`)
@@ -24,12 +28,15 @@ step rests on measurements against the pinned image, recorded in
   (`make deploy`, `kustomize edit set image`) — **not** for an `images:` entry in a user's own
   overlay, which runs after `config/default` was built; the installation docs show the patch.
 - D7: the markers, the chart's `secretAccess` and the component `secret-namespaces`
-  ([ADR 0006](0006-both-install-paths-grant-the-same-authority.md) D9). **Built differently from
-  the text in one point, on the recommended answer of an open question in
-  [the project plan](../planning/project-plan.md):** the operator caches Secrets with their data,
-  annotations and managed fields stripped (`controller.StripSecret`) and reads a credentials
-  Secret's data with one uncached `get` — so no Secret data is held in the cache at all — instead of
-  D10's "the operator's Secret cache is restricted to labelled Secrets".
+  ([ADR 0006](0006-both-install-paths-grant-the-same-authority.md) D9). The cache follows D10 as
+  amended on 2026-11-08 (built 2026-10-05, ahead of the decision): the operator caches Secrets with
+  their data, annotations and managed fields stripped (`controller.StripSecret`, wired in
+  `managerOptions` in `cmd/main.go`) and reads a credentials Secret's data with one uncached `get`,
+  so no Secret data is held in the cache at all. Observed failing on 2026-11-08: `TestStripSecret`
+  against a `StripSecret` that keeps `Data` (`Expected nil, but got:
+  map[string][]uint8{"password":…}`), and `TestManagerOptions_SecretCache` against a Secret cache
+  without the transform (`Expected value not to be nil.` — `Secrets are cached stripped of their
+  data`).
 - D8: observed on Kind — a new user publishes 67 s after it was created, a changed password locks
   the old one out within 45 s, a deleted user's connection drops within 72 s, nothing restarted
   (`TestE2E_Users_TheBrokerFollowsItsUsers`, run 2026-10-05 against `kind-mko-dev`).
@@ -176,12 +183,12 @@ existing connections.
 
 **D10 — Which Secret a `Mosquitto` or a `MosquittoUser` may name is an install-time switch,
 `secretSecurity`, default `false`.** *(Added 2026-10-05; built 2026-10-05 for both halves; the
-cache restriction below built as a cache without Secret data, pending the answer in the plan.)* With `true`, the
+cache rule amended 2026-11-08, see the end of D10.)* With `true`, the
 operator mounts a TLS Secret and reads a `credentialsSecret` only when the Secret carries an opt-in
 label under `mko.gtrfc.com/` (the key is fixed when built); whoever can label a Secret is whoever
 can write it, so the label is the Secret owner's consent. A resource naming an unlabelled Secret
-reports `Ready=False` with a reason naming the label, and the operator's Secret cache is restricted
-to labelled Secrets. With `false`, any Secret of the resource's namespace may be named — the
+reports `Ready=False` with a reason naming the label~~, and the operator's Secret cache is restricted
+to labelled Secrets~~ *(superseded 2026-11-08 by the cache rule at the end of D10)*. With `false`, any Secret of the resource's namespace may be named — the
 behaviour of the tree today — and the README and
 [docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-15) state the trust rule:
 `create` or `update` on `mosquittoes` (and on `mosquittousers`) in a namespace is equivalent to
@@ -193,6 +200,21 @@ exposed until its administrator turns the switch on. The finding was published o
 owner's decision, before the switch exists. With `true` in `namespaces` grant mode (D7), a TLS
 Secret in a namespace the grant does not cover cannot be checked, and the broker reports
 `Ready=False`.
+
+**The operator's Secret cache holds no Secret data, with `secretSecurity` on or off.** *(Amended
+2026-11-08; built 2026-10-05.)* Every Secret in the scope of the grant (D7) is cached with its
+`data`, `stringData`, annotations and managed fields removed; names, labels, type and owner
+references stay, because the `Owns` watch, `ensureOwned` and the label check read them. The consent
+label is checked on that cached metadata, and only then is a Secret's data read, with one `get`
+that bypasses the cache. What the label restriction was for — the operator never holds or reads the
+data of a Secret whose owner did not consent — holds, and it holds more strictly than the
+superseded text: no Secret data is in memory at all, and the annotation in which `kubectl apply`
+records a whole Secret is gone too. A cache restricted to labelled Secrets cannot hold the
+operator's own `<name>-auth` unless the operator labels it consenting, which would let any
+`Mosquitto` or `MosquittoUser` of the namespace name it. Accepted cost: the names and labels of
+every Secret in scope are in the operator's memory — with `secretAccess.mode: all`, every Secret of
+the cluster — and every pass costs one API request per user. The authority is unchanged either
+way: the grant of D7, not the cache, is what bounds a compromised operator.
 
 ## Consequences
 
@@ -230,6 +252,13 @@ Secret in a namespace the grant does not cover cannot be checked, and the broker
 - **For D10 — only a type check** (`kubernetes.io/tls`, `kubernetes.io/basic-auth`). Another
   service's Secret of the right type still passes. Lost.
 - **For D10 — `true` as the default.** Recommended; the owner chose `false`.
+- **For D10 — a cache restricted to labelled Secrets, with `<name>-auth` labelled consenting.**
+  Matches the superseded text; every `Mosquitto` of the namespace could then name a broker's
+  rendered hashes as its TLS Secret, and the cache holds the full data of every labelled Secret.
+  Lost on 2026-11-08.
+- **For D10 — two caches, labelled Secrets and Secrets a `Mosquitto` owns.** Matches the superseded
+  text without labelling `<name>-auth`, but needs a custom cache for two informers of one type, and
+  the labelled Secrets' data is still cached. Lost on 2026-11-08.
 
 ## Residual risks
 

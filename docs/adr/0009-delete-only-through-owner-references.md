@@ -7,20 +7,24 @@ added, and the pod-template annotations. **D9 built 2026-10-05**: `common.MergeL
 `reconcileConfigMap` and `reconcileService`, `builder.MergeStatefulSet` in `reconcileStatefulSet`;
 `TestReconcile_UpdatesKeepForeignLabels` and
 `TestReconcile_ReplicaChangeKeepsTheTemplateMetadataOthersAdded` were observed failing against the
-wholesale assignments (`expected: "mqtt"`, `actual  : ""` for each of the four objects). Building
-it met an open question this record does not answer — what happens to a key of
-`spec.podLabels` or `spec.podAnnotations` that is deleted from the resource, which D9's accepted
-cost would leave on the pods forever. It is built on the recommended answer, pending the owner's
-decision in [the project plan](../planning/project-plan.md): the StatefulSet records the keys it
-applied (`mko.gtrfc.com/applied-pod-labels`, `mko.gtrfc.com/applied-pod-annotations`) and removes
-exactly the keys that left the spec. **And (decided, matches the tree):**
+wholesale assignments (`expected: "mqtt"`, `actual  : ""` for each of the four objects).
+**Amended 2026-11-08 (decided by the owner):** D9 — a key deleted from `spec.podLabels` or
+`spec.podAnnotations` leaves the pod template; the StatefulSet records the keys it applied
+(`mko.gtrfc.com/applied-pod-labels`, `mko.gtrfc.com/applied-pod-annotations`) and removes exactly
+the keys that left the spec. Built 2026-10-05, ahead of the decision, in
+`builder.MergeStatefulSet` and `common.RemovedKeys`; `spec.podLabels` and the record arrived in the
+same commit, so no StatefulSet carries pod labels without it.
+`TestReconcile_PodLabelsReachAndLeaveTheTemplate` was observed failing on 2026-11-08 against
+`withoutKeys` ignoring the keys it is given: `map[string]string{…, "network.example.com/allow-mqtt":"true",
+"policy.example.com/scanned":"true", "team":"iot"} should not contain
+"network.example.com/allow-mqtt"`. **And (decided, matches the tree):**
 D5's precise refusal message stays, with the existence oracle it gives a `Mosquitto` writer
 accepted by the owner and published on
-[docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-16). Today every update assigns the desired label map wholesale
-(`current.Labels = desired.Labels` in `reconcileConfigMap`, `reconcileService` and
-`reconcileStatefulSet`, and `current.Spec.Template = desired.Spec.Template`), which drops foreign
-labels whenever a write happens for another reason, while `MapEntriesMissing` documents the
-opposite intent.
+[docs/security/trust-boundaries.md](../security/trust-boundaries.md#h-16). Until D9 was built,
+every update assigned the desired label map wholesale (`current.Labels = desired.Labels` in
+`reconcileConfigMap`, `reconcileService` and `reconcileStatefulSet`, and
+`current.Spec.Template = desired.Spec.Template`), which dropped foreign labels whenever a write
+happened for another reason, while `MapEntriesMissing` documented the opposite intent.
 
 **Verified by reading:**
 [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)
@@ -229,10 +233,20 @@ every pass, would fight every other tool that labels objects.
 
 The same merge applies to the StatefulSet's pod-template **annotations**: the operator's
 `mko.gtrfc.com/pod-spec-hash` and `mko.gtrfc.com/config-hash` always win, every other key is
-kept. Today the template write removes `kubectl.kubernetes.io/restartedAt`, so a write caused only
-by `spec.replicas` or by the object labels after a `kubectl rollout restart` rolls every pod a
-second time (derived from `reconcileStatefulSet`, not observed), and annotations other tools set
-on the pod template disappear at the next template write.
+kept. Before D9 was built, the template write removed `kubectl.kubernetes.io/restartedAt`, so a
+write caused only by `spec.replicas` or by the object labels after a `kubectl rollout restart`
+rolled every pod a second time (derived from `reconcileStatefulSet`, not observed), and
+annotations other tools set on the pod template disappeared at the next template write.
+
+**The keys of `spec.podLabels` and `spec.podAnnotations` are the one exception to the accepted
+cost.** *(Amended 2026-11-08; built 2026-10-05.)* The StatefulSet object carries
+`mko.gtrfc.com/applied-pod-labels` and `mko.gtrfc.com/applied-pod-annotations`, the sorted,
+comma-separated keys of the two maps last written into the pod template. Before merging, an update
+deletes from the live template exactly the keys the current record lists and the desired one does
+not. A key removed from the resource in Git therefore leaves the pods, and a NetworkPolicy or a
+scraper that selected on it stops matching after the roll. Accepted cost: two annotations of
+bookkeeping on an object the operator owns, and a foreign key that happens to share a removed key's
+name is removed with it. The operator's own keys stay under the original rule.
 
 ## Consequences
 
@@ -301,6 +315,18 @@ collector is removing, and the outcome would depend on which loop ran last.
 
 Rejected. A verb granted for a migration that has not happened is a verb nobody is checking, on
 every namespace in the cluster. It comes back with the code that uses it.
+
+### Leave a deleted `spec.podLabels` key on the pods, as D9's accepted cost does for every key
+
+Rejected 2026-11-08. A label would reach the pods through Git and never leave through Git;
+removing it would mean editing the StatefulSet's pod template by hand, which the next roll keeps.
+A label a NetworkPolicy or a scraper selects on would keep granting what it granted.
+
+### Replace the pod template's labels and annotations wholesale, and merge everywhere else
+
+Rejected 2026-11-08. Simple, and it brings back what D9 removed: `kubectl.kubernetes.io/restartedAt`
+and every policy-engine key on the template disappear on any write, and a `kubectl rollout
+restart` followed by an unrelated write rolls the pods twice.
 
 ## Residual risks
 

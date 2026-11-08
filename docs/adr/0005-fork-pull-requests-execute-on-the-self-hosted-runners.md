@@ -34,6 +34,14 @@ after the push; and every third-party action outside `actions/*`, `docker/*`, `a
 `helm/*` is pinned to a commit. The security page carries what is left
 ([ci-and-supply-chain.md](../security/ci-and-supply-chain.md#h-9)).
 
+**Observed 2026-10-06 — a release on the reduced permissions.** The first `Test and Release` run
+on `main` after that change (run `37418297323`, the merge of pull request #46) passed every job;
+the `Semantic Release` job ran with the job token at `Contents: read`, `Metadata: read`, created the
+tag `v0.2.0` and published the release through the app token. The `Release Docker & Helm` run it
+triggered (run `37419314072`) passed `Build Docker Image` and `Release Helm Chart to GitHub Pages`
+(`release-helm-gh`). No step failed for a permission, so none was given back; the releases since,
+up to `v0.2.13`, ran on the same permissions.
+
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the comment block above
 `on:`, the `on:` block itself, the `concurrency` block, the top-level `permissions:`, every
@@ -57,8 +65,11 @@ tree at all:
   runner pod". Whether the runners are in fact ephemeral, what else shares their node, and what
   credentials live on them are properties of infrastructure outside this repository. Not checked.
 
-Nothing in this repository has ever run: there is no workflow run, no fork pull request and no
-observed runner behaviour behind any statement here. Everything about GitHub's own behaviour
+~~Nothing in this repository has ever run: there is no workflow run, no fork pull request and no
+observed runner behaviour behind any statement here.~~ *(Corrected 2026-11-08: the workflows have
+run since 2026-09-01, and the permissions of D6 and D7 were observed in a release, above. Whether a
+fork pull request has run was not checked, and no runner behaviour behind D1–D5 was observed.)*
+Everything about GitHub's own behaviour
 (what a fork run receives, which workflow definition a `pull_request` event uses, how a skipped
 required check is counted) is platform behaviour reasoned from documentation, marked as such
 where it appears, and not reproduced here.

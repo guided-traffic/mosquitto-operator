@@ -364,6 +364,11 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 $(LOCALBIN):
 	mkdir -p $(LOCALBIN)
 
+# FORCE makes every tool target run its recipe, so go-install-tool can compare
+# the installed binary against the pin and the toolchain on each use.
+.PHONY: FORCE
+FORCE:
+
 ## Tool Versions
 # renovate: datasource=go depName=sigs.k8s.io/kustomize/kustomize/v5
 KUSTOMIZE_VERSION ?= v5.8.3
@@ -379,16 +384,12 @@ ENVTEST_VERSION ?= release-0.19
 GOLANGCI_LINT_VERSION ?= v2.15.0
 # renovate: datasource=go depName=github.com/fzipp/gocyclo/cmd/gocyclo
 GOCYCLO_VERSION ?= v0.6.0
-# gosec is pinned to an untagged commit of its main branch, not to a release.
-# Go 1.27.2 writes version 5 of the unified export data (go.dev/issue/81188),
-# golang.org/x/tools reads it from v0.50.0 on, and the newest release, v2.29.0,
-# is built against x/tools v0.49.0: it type-checks nothing under 1.27.2, reports
-# "export data version 5 is greater than maximum supported version 4" for every
-# package and exits 1 with zero issues. The commit below (2026-10-09) builds
-# against x/tools v0.51.0. A pseudo-version is fixed by the Go checksum database
-# like a tag, and the gosec job holds no secret. It sorts below v2.29.1 in
-# semver, so Renovate moves this pin to the next release on its own; the Makefile
-# manager captures the whole value for exactly that.
+# Go 1.27.2 writes version 5 of the unified export data (go.dev/issue/81188), and
+# golang.org/x/tools reads it from v0.50.0 on. A Go analysis tool built against
+# an older x/tools - gosec v2.29.0 was - type-checks nothing, reports "export data
+# version 5 is greater than maximum supported version 4" for every package and
+# exits 1 with zero issues. gosec v2.30.0 is built against x/tools v0.52.0; the
+# untagged commit pinned here until that release is no longer needed.
 # renovate: datasource=go depName=github.com/securego/gosec/v2/cmd/gosec
 GOSEC_VERSION ?= v2.30.0
 # renovate: datasource=go depName=golang.org/x/vuln/cmd/govulncheck
@@ -418,12 +419,12 @@ CYCLO_THRESHOLD ?= 15
 
 .PHONY: kustomize
 kustomize: $(KUSTOMIZE) ## Download kustomize locally if necessary.
-$(KUSTOMIZE): $(LOCALBIN)
+$(KUSTOMIZE): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(KUSTOMIZE),sigs.k8s.io/kustomize/kustomize/v5,$(KUSTOMIZE_VERSION))
 
 .PHONY: controller-gen
 controller-gen: $(CONTROLLER_GEN) ## Download controller-gen locally if necessary.
-$(CONTROLLER_GEN): $(LOCALBIN)
+$(CONTROLLER_GEN): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(CONTROLLER_GEN),sigs.k8s.io/controller-tools/cmd/controller-gen,$(CONTROLLER_GEN_VERSION))
 
 .PHONY: generate
@@ -437,35 +438,42 @@ manifests: controller-gen ## Generate ClusterRole and CustomResourceDefinition o
 
 .PHONY: envtest
 envtest: $(ENVTEST) ## Download setup-envtest locally if necessary.
-$(ENVTEST): $(LOCALBIN)
+$(ENVTEST): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(ENVTEST),sigs.k8s.io/controller-runtime/tools/setup-envtest,$(ENVTEST_VERSION))
 
 .PHONY: golangci-lint
 golangci-lint: $(GOLANGCI_LINT) ## Download golangci-lint locally if necessary.
-$(GOLANGCI_LINT): $(LOCALBIN)
+$(GOLANGCI_LINT): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
 
 # The four tools below have no phony alias: their target name would collide with
 # the analysis target that runs them (gosec, cyclo, vuln, coverage-merge), which
 # name the binary path as a prerequisite instead.
-$(GOCYCLO): $(LOCALBIN)
+$(GOCYCLO): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(GOCYCLO),github.com/fzipp/gocyclo/cmd/gocyclo,$(GOCYCLO_VERSION))
 
-$(GOSEC): $(LOCALBIN)
+$(GOSEC): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(GOSEC),github.com/securego/gosec/v2/cmd/gosec,$(GOSEC_VERSION))
 
-$(GOVULNCHECK): $(LOCALBIN)
+$(GOVULNCHECK): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(GOVULNCHECK),golang.org/x/vuln/cmd/govulncheck,$(GOVULNCHECK_VERSION))
 
-$(GOCOVMERGE): $(LOCALBIN)
+$(GOCOVMERGE): $(LOCALBIN) FORCE
 	$(call go-install-tool,$(GOCOVMERGE),github.com/wadey/gocovmerge,$(GOCOVMERGE_VERSION))
 
-# go-install-tool will 'go install' any package with custom target and target path
+# go-install-tool installs a pinned Go tool into $(LOCALBIN), and installs it
+# again whenever the pin or the Go toolchain moved since the binary was built.
+# $(1).installed records "<package>@<version> <go version>" of the last install,
+# and every tool target carries FORCE, so the check runs on each use: a Renovate
+# bump of a pin or of the Go version cannot leave an old binary running locally.
+# Before this check, a golangci-lint v2.13.2 built with go1.27.0 kept running
+# under a pin of v2.15.0 and failed every package with "export data version 5 is
+# greater than maximum supported version 4".
 define go-install-tool
-@[ -f $(1) ] || { \
-set -e; \
-package=$(2)@$(3) ;\
-echo "Downloading $${package}" ;\
-GOBIN=$(LOCALBIN) go install $${package} ;\
-}
+@want="$(2)@$(3) $$(go env GOVERSION)"; \
+if [ ! -f $(1) ] || [ "$$(cat $(1).installed 2>/dev/null)" != "$$want" ]; then \
+  echo "Installing $$want"; \
+  GOBIN=$(LOCALBIN) go install $(2)@$(3); \
+  echo "$$want" > $(1).installed; \
+fi
 endef
