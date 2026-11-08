@@ -121,9 +121,12 @@ Live, and narrower than it was. Every third-party action outside the `actions/*`
 reaches the runners on its own. What is left: [`renovate.json`](../../renovate.json) automerges
 GitHub Actions minor, patch and digest updates once CI passes, so a new upstream release of a
 pinned action still lands without a human reading it — since 2026-10-12 within minutes of its
-checks passing, through GitHub auto-merge, rather than at the next Renovate run; and the four
-first-party and vendor namespaces stay on tag references, trusted because their tags are
-protected upstream — `docker/login-action@v4` in jobs that then hold `DOCKERHUB_PAT`, and
+checks passing, through GitHub auto-merge, rather than at the next Renovate run. One pin is the
+exception: Renovate has not been able to look up `aquasecurity/trivy-action` since 2026-09-25.
+The `aquasecurity` organisation's IP allow list refuses the app's installation token, so that
+pin changes only when someone edits it. Also left: the four first-party and vendor namespaces
+stay on tag references, trusted because their tags are protected upstream —
+`docker/login-action@v4` in jobs that then hold `DOCKERHUB_PAT`, and
 `actions/create-github-app-token@v3`, the one step that receives `APP_PRIVATE_KEY` itself. The
 actions run in jobs that hold `DOCKERHUB_PAT`, or `APP_PRIVATE_KEY` and the app token minted from
 it. Taking GitHub Actions out of automerge is what would turn every upstream change into a
