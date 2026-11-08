@@ -1,8 +1,10 @@
 # Project plan
 
-How `v0.1.x` becomes the operator the Home Assistant migration needs: one broker per `Mosquitto`,
-run from Git through Flux, with users, permissions and credentials that follow every change on
-their own ([ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
+What is left between the released operator and the one the Home Assistant migration needs: one
+broker per `Mosquitto`, run from Git through Flux, with users, permissions and credentials that
+follow every change on their own
+([ADR 0012](../adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
+The operator side was released in `v0.2.0` on 2026-10-06.
 
 **This file is the work list.** Each phase is worked out to the step: what it builds, which files
 and functions it touches, which tests in which tier prove it, which documentation and records it
@@ -51,98 +53,20 @@ StatefulSet; TLS from an existing Secret; anonymous brokers; two install paths w
 authority; five test tiers. What it built is in the records 0001 to 0010 and in
 [docs/developer/](../developer/README.md).
 
-Built for the next release on 2026-10-05, and deleted here: phase 3 (the measurements,
-[broker-behaviour.md](../developer/broker-behaviour.md) M19–M27) and phase 5 (a renewed
-certificate reloaded in place, [ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md)
-D10). Phases 1, 2 and 4 keep only what is left of them.
+Built on 2026-10-05, released in `v0.2.0` on 2026-10-06, and deleted here:
 
-## Phase 1 — The tree tells the truth, and the release gate is back
+- phase 1, the tree tells the truth and the release gate is back — the E2E gate, the corrected
+  statements, the reduced pipeline authority (observed in the `v0.2.0` release, ADR 0005), the
+  pinned refusal message (ADR 0009 D5);
+- phase 2, pod labels, the configuration gate, the admission guard and `secretSecurity` for the TLS
+  Secret (ADR 0007 D10, ADR 0009 D9 as amended on 2026-11-08, ADR 0012 D4 and D5, ADR 0014 D10);
+- phase 3, the measurements ([broker-behaviour.md](../developer/broker-behaviour.md) M19–M27);
+- phase 4, users, permissions and a broker that requires a login (ADR 0006 D9, ADR 0008 D13–D16,
+  ADR 0013, ADR 0014 D1–D4, D6–D8 and D10 as amended on 2026-11-08);
+- phase 5, a renewed certificate reloaded in place
+  ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10).
 
-**Built 2026-10-05.** The E2E tier gates releases again (first CI run of both legs: `Test and
-Release` run `37367556237`), the statements the code contradicted are corrected, the pipeline holds
-only the authority it uses, and the ownership refusal message is pinned. What it built is recorded
-in ADR 0001, 0003, 0004, 0005, 0007, 0009 and 0010 and in
-[ci-and-release.md](../developer/ci-and-release.md). One check is left, because only a merge to
-`main` can run it:
-
-- **A release run on `main` with the reduced permissions.** `semantic-release` now holds
-  `contents: read` only and writes through the app token; `build` logs out of Docker Hub before the
-  pinned SBOM and release actions. **Done when** the first `Test and Release` run on `main` after
-  the merge succeeds through `semantic-release`, and the `Release Docker & Helm` run it triggers
-  succeeds through `release-helm-gh`. A step that fails for a permission gets the permission back,
-  with a comment naming the call that needed it, and ADR 0005 D6 says so.
-
-## Phase 2 — Pod labels, the configuration gate, the admission guard, and the first Secret switch
-
-**Built 2026-10-05**: `spec.podLabels` and `spec.podAnnotations` (ADR 0012 D5), updates that merge
-(ADR 0009 D9), the `config-check` init container (ADR 0007 D10, with the measurement M19 it
-needed), the PodSecurity admission guard (ADR 0012 D4) and `secretSecurity` for the TLS Secret
-(ADR 0014 D10). One decision is open, and the tree is built on its recommended answer:
-
-### 2.1a — What happens to a key deleted from `spec.podLabels` or `spec.podAnnotations`?
-
-ADR 0009 D9 makes every update merge the operator's keys over the live labels and annotations and
-keep every other key; its accepted cost is that "a label the operator once set and later stops
-setting is never removed by merging". `spec.podLabels` turns that cost into a user-visible one: a
-pod label deleted from the `Mosquitto` in Git would stay on the pods forever, and a label a
-NetworkPolicy or a scraper selects on keeps granting what it granted.
-
-- **A — The StatefulSet records the keys it applied and removes those that left the spec.**
-  *(Recommended, and built.)* Two annotations on the StatefulSet object,
-  `mko.gtrfc.com/applied-pod-labels` and `mko.gtrfc.com/applied-pod-annotations`, list the sorted
-  keys last written; `builder.MergeStatefulSet` deletes exactly the keys that one lists and the new
-  spec does not, then merges. Cost: two annotations of bookkeeping, and a foreign label that
-  happens to share a removed key is removed too. It is what `kubectl apply` does with its
-  last-applied record, scoped to the two maps the user owns, and it needs no status as memory.
-- **B — Accept D9's cost for these keys as well.** No bookkeeping; removing a pod label means
-  editing the StatefulSet's pod template by hand, which the next roll keeps. Against R4 of ADR
-  0012, half-met: a label reaches the pods, it never leaves.
-- **C — Replace the pod template's labels and annotations wholesale, keep merging elsewhere.**
-  Simple, and it brings back what D9 removed: `kubectl.kubernetes.io/restartedAt` and every
-  policy-engine label on the template disappear on any write.
-
-A is recommended because it is the only option under which a Git change to `spec.podLabels` means
-the same thing in both directions, at the cost of state the operator already owns. The answer
-becomes an amendment of ADR 0009 D9.
-
-**Answer:** _open_
-
-## Phase 4 — Users, permissions, and a broker that requires a login
-
-**Built 2026-10-05**: the `MosquittoUser` kind, the renderer, `<name>-auth`, the pod with
-`auth-init` and `reloader`, the generated listener that requires a login, the `spec.config`
-allowlist, the watches and statuses, and the Secret grant in two modes on both install paths
-(ADR 0006 D9, ADR 0008 D13–D16, ADR 0013, ADR 0014 D1–D4, D6–D8, D10). The scenario of 4.8 passed on
-Kind (`TestE2E_Users_TheBrokerFollowsItsUsers`). One decision is open, and the tree is built on its
-recommended answer:
-
-### 4.6a — Is a Secret cache without data what ADR 0014 D10 asks for, instead of one restricted to labelled Secrets?
-
-ADR 0014 D10 says that with `secretSecurity: true` "the operator's Secret cache is restricted to
-labelled Secrets". Building it showed that a label-restricted cache cannot hold the operator's own
-`<name>-auth`, which the `Owns` watch and the ownership check read, unless the operator labels its
-own Secret as consenting — which would let any `Mosquitto` or `MosquittoUser` of the namespace name
-it. What the label restriction is for is that the operator never holds or reads the data of a
-Secret whose owner did not consent.
-
-- **A — Cache every Secret in scope stripped of its data, check the label on the cached metadata,
-  read a Secret's data with one uncached `get` only after the check.** *(Recommended, and built:
-  `controller.StripSecret`, `readCredentials`.)* No Secret data is in the cache at all, with or
-  without `secretSecurity`, and annotations — where `kubectl apply` records a whole Secret — are
-  stripped too. Cost: the names and labels of every Secret in scope are in memory, and one API
-  request per user per pass reads the data.
-- **B — Restrict the cache to labelled Secrets, and label `<name>-auth` consenting.** Matches the
-  text; the cache holds the full data of every labelled Secret, and every `Mosquitto` of the
-  namespace may then name a broker's rendered hashes as its TLS Secret or a user's credentials.
-- **C — Two caches: labelled Secrets, and Secrets owned by a `Mosquitto`.** Matches the text
-  without labelling `<name>-auth`, at the cost of a second informer setup controller-runtime does
-  not offer for one type without a custom cache; and the labelled Secrets' data is still cached.
-
-A is recommended because it is stricter than the text — no Secret data in the cache in either
-setting — and costs one request per user per pass. The answer becomes an amendment of ADR 0014
-D10.
-
-**Answer:** _open_
+Phases 1, 2 and 4 were closed on 2026-11-08, after their last two open decisions were answered.
 
 ## Phase 6 — The Home Assistant migration
 

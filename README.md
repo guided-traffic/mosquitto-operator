@@ -189,7 +189,7 @@ them through the chart's `fullname` template. The **names** differ between the t
 | [SECURITY.md](SECURITY.md) | How to report a vulnerability |
 | [docs/developer/](docs/developer/README.md) | Contributing: repository layout, per-package responsibilities, the reconcile pipeline, the test tiers, the build/test/lint matrix, CI and release, extension checklists, and what the pinned broker image measurably does |
 | [docs/adr/](docs/adr/README.md) | Architecture Decision Records — what was decided, why, what was rejected and what it costs, and which decisions are not built yet |
-| [docs/planning/project-plan.md](docs/planning/project-plan.md) | The plan for the next release: users, permissions and credentials that follow every change, run from Git through Flux |
+| [docs/planning/project-plan.md](docs/planning/project-plan.md) | The work list: what is left before the Home Assistant migration runs on this operator, the exporter decisions still open, and high availability last |
 | [Full reference](#-full-reference) (below) | Every `spec` field, its default and its effect |
 | [Eclipse Mosquitto documentation](https://mosquitto.org/documentation/) | Upstream broker behaviour and every `mosquitto.conf` option `spec.config` can carry |
 | [cert-manager](https://cert-manager.io/docs/) | Optional, and never installed by this project — one of the two ways to fill the Secret `spec.tls.secretName` names |

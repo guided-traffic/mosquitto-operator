@@ -4,12 +4,12 @@ Repo: https://github.com/guided-traffic/mosquitto-operator
 Module `github.com/guided-traffic/mosquitto-operator` · API group `mko.gtrfc.com`, version `v1` ·
 Kinds `Mosquitto` (resource `mosquittoes`, short name `mq`) and `MosquittoUser` (`mosquittousers`,
 `mqu`).
-**Status: `v0.1.x` is released, with anonymous brokers. The tree has built the core of the next
-release: one broker run from Git through Flux, every broker requiring a login, `MosquittoUser`
-objects with their credentials in their own Secrets, and changes that reach the running broker
-without a restart
+**Status: `v0.2.x` is released (since `v0.2.0`, 2026-10-06): one broker run from Git through
+Flux, every broker requiring a login, `MosquittoUser` objects with their credentials in their own
+Secrets, changes that reach the running broker without a restart, and the metrics exporter
 ([ADR 0012](docs/adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
-High availability comes last, after every other phase.** The work list is
+`v0.1.x` brokers were anonymous. Left: the Home Assistant migration on a real cluster, the
+exporter's open decisions, and high availability last, after every other phase.** The work list is
 [the project plan](docs/planning/project-plan.md).
 
 **Kind is the only cluster this operator has been observed on.** The E2E suite runs on a Kind
