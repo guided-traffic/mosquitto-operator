@@ -163,9 +163,14 @@ func TestRun_SignalsOnChangeAndRetriesUntilTheBrokerIsThere(t *testing.T) {
 	assert.Zero(t, rec.count(), "nothing changed since auth-init, so nothing is signalled")
 
 	publish(t, cfg.Source, "2", map[string]string{"passwd": "a\nb\n", "acl": "a\n"})
-	time.Sleep(50 * time.Millisecond)
+	// Wait for the poll that copies the change, not for a fixed time: on a
+	// loaded runner the next tick can come later than any sleep chosen here.
+	passwd := filepath.Join(cfg.Target, "passwd")
+	require.Eventually(t, func() bool {
+		data, err := os.ReadFile(passwd)
+		return err == nil && string(data) == "a\nb\n"
+	}, time.Second, 10*time.Millisecond, "the copy happens without a broker process")
 	assert.Zero(t, rec.count(), "no broker process yet: the signal is pending, not lost")
-	assert.Equal(t, "a\nb\n", read(t, filepath.Join(cfg.Target, "passwd")), "the copy happened anyway")
 
 	require.NoError(t, os.MkdirAll(filepath.Join(proc, "7"), 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(proc, "7", "comm"), []byte("mosquitto\n"), 0o644))
