@@ -12,7 +12,7 @@ reasonable person would assume the other way, and the decisions in
 follow from them.
 
 **Rig.** Single-container docker 28.4.0 on arm64, the pinned image, configuration and credential
-files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M29 on 2026-10-05. **None of it
+files on bind mounts. M1–M9 were measured on 2026-09-01, M12–M29 on 2026-10-05, M30 on 2026-11-08. **None of it
 ran on a cluster**, except M22 and M23, which were measured on Kind, and where a section says it
 was observed on Kind as well. The numbering has a gap: M10 and M11 measure a bridged broker pair and belong
 to the parked high-availability research in [docs/planning/](../planning/), not to anything the
@@ -587,6 +587,26 @@ packet`, while `mosquitto_pub` still exits `0`. A file with `sys_interval 10` an
 listener: `$SYS/broker/uptime` arrives every 2 seconds and a 3,000,000-byte payload is accepted.
 So the generated file can state both defaults (ADR 0002 D7), and a `spec.config` line, appended
 after it, still overrides them.
+
+## M30 — The broker logs `running` once its listeners are open, and accepts a client right after
+
+*Measured 2026-11-08*, same rig, run as `1883:1883`. At start the broker logs, in this order:
+
+```
+mosquitto version 2.1.2 starting
+Config loaded from c.conf.
+...
+Opening ipv4 listen socket on port 1883.
+Opening ipv6 listen socket on port 1883.
+mosquitto version 2.1.2 running
+```
+
+Started 20 times in the background, each time followed by a wait for the `running` line and then
+an immediate `mosquitto_pub`: all 20 publishes connected. So a script that needs a listening broker
+can wait for that line instead of sleeping (`startBroker` in
+[`password_hash_test.go`](../../test/imagetools/password_hash_test.go)). The log file the shell
+redirects into can be missing for the first milliseconds after the fork, so the wait uses
+`grep -s`.
 
 ## Not measured
 

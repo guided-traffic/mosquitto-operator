@@ -241,7 +241,19 @@ job does preload it, reading the tag out of `test/testimages/images.go`.
   logs a client in with its password (`right=0`) and not with another (`wrong=5`); and a line the
   image's `mosquitto_passwd` writes verifies with `auth.VerifyPassword`. Observed failing with the
   key derived at 999 iterations under a `1000` label: `"right=5\nwrong=5" does not contain
-  "right=0"`. `runInImageAs` is `runInImage` with `--user`.
+  "right=0"` (before the probe printed the client errors and the broker log after its result
+  lines). `runInImageAs` is `runInImage` with `--user`.
+- The two probes that run a broker start it through `startBroker`, which waits for the line the
+  broker logs once its listeners are open ([broker-behaviour.md](broker-behaviour.md) M30) for up
+  to ten seconds, instead of a fixed `sleep 1`. If the line does not come, the script prints the
+  broker's log and fails. Observed failing with an unknown option added to the configuration:
+  `the broker did not start:` followed by `Error: Unknown configuration variable
+  'bogus_option'.` The hash probe also prints the clients' stderr and the broker log after its
+  result lines. The reason: on 2026-11-08 it failed once in 40 local runs with
+  `"right=1\nwrong=1" does not contain "right=0"`: exit code 1 for the right and the wrong password
+alike, so neither client got as far as the broker refusing a password (that is `5`). The
+  run printed nothing that showed why, and it did not fail again in the 39 runs after it, so the
+  cause is not known.
 
 A cold pull plus the probe is bounded by 5 minutes.
 

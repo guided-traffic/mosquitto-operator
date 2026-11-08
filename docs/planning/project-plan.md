@@ -14,8 +14,8 @@ and becomes a record when it is answered. A phase that is done is deleted from t
 ([ADR 0011](../adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md)
 D10, D12). The only tickets are embargoed security findings, which a tracked file cannot carry.
 
-Written 2026-10-05. Phases, not dates; the order is the order of the work, and each phase is
-releasable on its own.
+Written 2026-10-05, last brought up to date on 2026-11-08. Phases, not dates; the order is the
+order of the work, and each phase is releasable on its own.
 
 ## Working agreements
 
@@ -67,6 +67,40 @@ Built on 2026-10-05, released in `v0.2.0` on 2026-10-06, and deleted here:
   ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10).
 
 Phases 1, 2 and 4 were closed on 2026-11-08, after their last two open decisions were answered.
+
+## Upkeep — findings outside the phases
+
+### U1 — Renovate cannot look up `aquasecurity/trivy-action`
+
+**Finding (2026-11-08).** Every Renovate run since 2026-09-25 warns `Failed to look up
+github-tags package aquasecurity/trivy-action: no-result`, and the Dependency Dashboard lists it
+under "Repository Problems". 2026-09-25 is the first run under the `guided-traffic-automation`
+app. A run at `logLevel: debug` (run `42495383270`) shows the cause. The `aquasecurity`
+organisation has an IP allow list, and GitHub refuses the app's installation token from the
+runner's address on the GraphQL query that Renovate's `github-tags` datasource makes:
+"Although you appear to have the correct authorization credentials, the `aquasecurity`
+organization has an IP allow list enabled, and your IP address is not permitted to access this
+resource."
+
+The two Trivy steps of `container-malware-scan` in
+[`release.yml`](../../.github/workflows/release.yml) are pinned to the commit of `v0.36.0`, and
+that pin no longer moves on its own. On 2026-11-08 `v0.36.0` is still the newest tag, so nothing
+is stale yet.
+
+- **A — run Trivy from the `aquasec/trivy` image on Docker Hub, pinned by digest.**
+  *(Recommended.)* Renovate looks the image up through Docker Hub, where no GitHub allow list
+  applies, and moves digest and tag together like every other image pin. Both steps become
+  `docker run` with the Docker socket mounted, the same access the action's binary has today. The
+  action's inputs become explicit Trivy flags.
+- **B — keep the action and look it up through `git-tags`** (`overrideDatasource` in a
+  `packageRules` entry). One line of configuration. But Renovate's git lookup sends the app token
+  for `github.com` as well (`getRemoteUrlWithToken` in its `git-refs` datasource). Whether GitHub
+  applies the allow list to that `git ls-remote` too is not verified; only a dispatched run would
+  show it.
+- **C — keep the action and move the pin by hand.** The tree does not change. The warning stays
+  on every run, and the pin goes stale without a pull request saying so.
+
+**Answer:** _open_
 
 ## Phase 6 — The Home Assistant migration
 

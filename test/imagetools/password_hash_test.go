@@ -30,6 +30,21 @@ plugin_use pwfile
 plugin_use aclfile
 `
 
+// startBroker starts the broker on mosquitto.conf in the background and waits
+// for the line it logs once its listeners are open (broker-behaviour.md M30),
+// for up to ten seconds. A probe needs a listening broker, so this waits for
+// that to happen instead of sleeping a fixed time (testing.md). If the line
+// does not come, the script prints the broker's log and fails, and
+// runInImageAs shows that output.
+const startBroker = `/usr/sbin/mosquitto -c mosquitto.conf > broker.log 2>&1 &
+i=0
+until grep -qs 'mosquitto version .* running' broker.log; do
+  i=$((i+1))
+  [ "$i" -le 100 ] || { echo "the broker did not start:"; cat broker.log; exit 1; }
+  sleep 0.1
+done
+`
+
 // TestImageAcceptsTheHashTheOperatorRenders is broker-behaviour.md M20, repeated
 // on every pull request: a $7$ line auth.HashPassword renders logs a client in
 // with its password and refuses a wrong one, on the pinned image. A Renovate
@@ -48,12 +63,12 @@ printf 'user probe\ntopic readwrite probe/#\n' > acl
 chmod 0600 passwd acl
 cat > mosquitto.conf <<'CONF'
 %sCONF
-/usr/sbin/mosquitto -c mosquitto.conf > broker.log 2>&1 &
-sleep 1
-set +e
-mosquitto_pub -h 127.0.0.1 -u probe -P go-rendered-pw -t probe/x -m hi >/dev/null 2>&1; echo "right=$?"
-mosquitto_pub -h 127.0.0.1 -u probe -P wrong -t probe/x -m hi >/dev/null 2>&1; echo "wrong=$?"
-`, hash, brokerWithPasswordFile)
+%sset +e
+mosquitto_pub -h 127.0.0.1 -u probe -P go-rendered-pw -t probe/x -m hi >/dev/null 2>>probe.err; echo "right=$?"
+mosquitto_pub -h 127.0.0.1 -u probe -P wrong -t probe/x -m hi >/dev/null 2>>probe.err; echo "wrong=$?"
+echo "--- client errors:"; cat probe.err
+echo "--- broker log:"; cat broker.log
+`, hash, brokerWithPasswordFile, startBroker)
 
 	out := runInImageAs(t, testimages.MosquittoImage, "1883:1883", script)
 	assert.Contains(t, out, "right=0", "the broker refused the password of a hash the operator rendered")
@@ -99,14 +114,13 @@ cat > acl <<'ACL'
 chmod 0600 passwd acl
 cat > mosquitto.conf <<'CONF'
 %sCONF
-/usr/sbin/mosquitto -c mosquitto.conf > broker.log 2>&1 &
-sleep 1
-mosquitto_pub -h 127.0.0.1 -u probe -P probe-pw -r -t app/state -m on
+%smosquitto_pub -h 127.0.0.1 -u probe -P probe-pw -r -t app/state -m on
 set +e
 echo "exporter-sys=$(mosquitto_sub -h 127.0.0.1 -u mko-exporter -P exporter-pw -t '$SYS/broker/version' -C 1 -W 5)"
 echo "exporter-app=$(mosquitto_sub -h 127.0.0.1 -u mko-exporter -P exporter-pw -t 'app/#' -C 1 -W 3 2>&1)"
 echo "user-sys=$(mosquitto_sub -h 127.0.0.1 -u probe -P probe-pw -t '$SYS/broker/version' -C 1 -W 3 2>&1)"
-`, result.Data[auth.PasswdKey], result.Data[auth.ACLKey], brokerWithPasswordFile)
+echo "--- broker log:"; cat broker.log
+`, result.Data[auth.PasswdKey], result.Data[auth.ACLKey], brokerWithPasswordFile, startBroker)
 
 	out := runInImageAs(t, testimages.MosquittoImage, "1883:1883", script)
 	assert.Contains(t, out, "exporter-sys=mosquitto version", "mko-exporter must read $SYS")
