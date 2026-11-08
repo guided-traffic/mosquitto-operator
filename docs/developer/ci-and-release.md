@@ -12,7 +12,12 @@ outside the repository, under Settings > Actions > General, and there is deliber
 guard in any workflow ([ADR 0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md);
 the comment above `on:` in [`release.yml`](../../.github/workflows/release.yml) says the same).
 The self-hosted runner image ships no `make`, so every job that enters the Makefile first runs
-`sudo apt-get install -y build-essential`.
+`sudo apt-get install -y build-essential`. It ships no `libatomic1` either, which the Node.js 26
+binary links against: `setup-node` with `lts/*` fails with exit code 127 without it, so both jobs
+that set up Node.js install `libatomic1` first. Observed from 2026-11-02, when `lts/*` first
+resolved to 26.13.0, on every pull request until the install was added; reproduced on
+`ghcr.io/actions/actions-runner:latest` (Ubuntu 24.04.5), where `node --version` fails with
+`libatomic.so.1: cannot open shared object file` and passes once `libatomic1` is installed.
 
 ## Test and Release
 
@@ -130,7 +135,8 @@ mints a GitHub App installation token (`actions/create-github-app-token`, from `
 `APP_PRIVATE_KEY`, scoped to this repository with `contents: write`, valid one hour, revoked when
 the job ends). Not `GITHUB_TOKEN`, because a release that token creates does not trigger
 `build.yml`. The checkout uses `persist-credentials: false`; the coverage badge artefact is
-downloaded into `.github/badges/` (the committed file stays when it is missing); `npm ci
+downloaded into `.github/badges/` (the committed file stays when it is missing); `libatomic1` is
+installed before `setup-node` (above); `npm ci
 --ignore-scripts`, so no lifecycle script runs on the runner, and `npm audit signatures`; then
 `npx semantic-release` with the token as `GITHUB_TOKEN` — the only step whose environment holds
 it.

@@ -1201,15 +1201,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
 
+      # The self-hosted runner image ships no make, and the target below is entered
+      # through the Makefile like every other check in this workflow. It ships no
+      # libatomic1 either, which the Node.js 26 binary links against: without it
+      # setup-node fails with exit code 127 ("libatomic.so.1: cannot open shared
+      # object file"), so this step runs before setup-node.
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y build-essential libatomic1
+
       - name: Setup Node.js
         uses: actions/setup-node@v7
         with:
           node-version: "lts/*"
-
-      # The self-hosted runner image ships no make, and the target below is entered
-      # through the Makefile like every other check in this workflow.
-      - name: Install build tools
-        run: sudo apt-get update && sudo apt-get install -y build-essential
 
       # Runs before npm install because it needs nothing from node_modules: a
       # Renovate customManager whose regex stopped matching drops its file out of a
@@ -1285,6 +1288,11 @@ jobs:
           else
             echo "⚠️ Coverage badge not found, using existing file"
           fi
+
+      # The Node.js 26 binary links against libatomic1, which the self-hosted runner
+      # image does not ship; without it setup-node fails with exit code 127.
+      - name: Install the Node.js runtime library
+        run: sudo apt-get update && sudo apt-get install -y libatomic1
 
       - name: Setup Node.js
         uses: actions/setup-node@v7
