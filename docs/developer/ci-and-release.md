@@ -154,9 +154,12 @@ to move. The cost and what contains it are
   `alpine:3.12.0` exited `1` with `Total: 36 (HIGH: 32, CRITICAL: 4)`, and against the operator
   image with `0`.
 
-Not verified before the first CI run: that the bind mount of a directory under `$RUNNER_TEMP`
-reaches the Docker daemon of the self-hosted runners. If the daemon cannot see the path, the scan
-fails because `/scan/image.tar` does not exist, not silently.
+The bind mount of a directory under `$RUNNER_TEMP` reaches the Docker daemon of the self-hosted
+runners: the first CI run (run `42587489503`, pull request #93) scanned `/scan/image.tar`
+(`debian 12.15`, `app/exporter`, `app/manager`), printed the digest
+`sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb` (`0.76.2`) and uploaded
+the SARIF report. Were the path ever invisible to the daemon, the scan would fail on the missing
+tarball, not pass silently.
 
 ## The release
 

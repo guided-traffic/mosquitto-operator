@@ -56,8 +56,10 @@ runners that is not pinned, and the security page carries what that leaves
 ([ci-and-supply-chain.md](../security/ci-and-supply-chain.md#h-22)). Verified on 2026-11-09 on a
 local Docker `28.4.0`: the step's command fails on purpose against `alpine:3.12.0` (exit `1`,
 `Total: 36 (HIGH: 32, CRITICAL: 4)`), passes against the operator image, and reports the same
-targets and findings as Trivy `0.70.0` scanning by image name. Not verified until the first CI
-run: that the self-hosted runners' Docker daemon sees the mounted directory under `$RUNNER_TEMP`.
+targets and findings as Trivy `0.70.0` scanning by image name. Observed in CI the same day (run
+`42587489503`): the self-hosted runners' Docker daemon sees the mounted directory under
+`$RUNNER_TEMP`, the scan ran on the tarball with `0.76.2` and passed, and the SARIF report was
+uploaded.
 
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the comment block above
