@@ -1131,63 +1131,96 @@ jobs:
           load: true
           tags: mosquitto-operator:scan-${{ github.sha }}
 
+      # Trivy runs from the image the scan steps below use, pulled here while the
+      # job is still logged in, so the pull counts against the account and not
+      # against the anonymous rate limit. Only the Docker daemon runs in this step;
+      # no Trivy code does. The digest is printed so every run records which image
+      # it scanned with - the tree does not (ADR 0005 D9).
+      - name: Pull the Trivy image
+        run: |
+          docker pull aquasec/trivy:latest
+          docker image inspect --format '{{index .RepoDigests 0}}' aquasec/trivy:latest
+
       # Defence in depth for the two Trivy steps below: `docker/login-action` wrote
-      # the Docker Hub credential into ~/.docker/config.json on this runner, and the
-      # image is already built, so nothing after this point needs the registry. The
-      # scan steps therefore run third-party action code with no credential on disk.
+      # the Docker Hub credential into ~/.docker/config.json on this runner, and
+      # nothing after this point needs the registry. The scan steps therefore run
+      # third-party code with no credential on disk.
       - name: Log out of Docker Hub
         run: docker logout
 
-      # Pinned to a commit, not to the moving `master` it used to track: this
-      # action runs on a self-hosted runner, two steps after a Docker Hub login,
-      # so whoever can move that branch could run code here with the credential
-      # still on disk. `docker logout` above closes the second half.
+      # Trivy reads the image from a tarball in a directory of its own, so its
+      # container gets no Docker socket: with the socket it could start a
+      # privileged container and reach the host. Only this directory is mounted;
+      # $RUNNER_TEMP as a whole holds the runner's own files.
+      - name: Export the image for Trivy
+        run: |
+          mkdir -p "$RUNNER_TEMP/trivy-scan/cache"
+          docker save mosquitto-operator:scan-${{ github.sha }} -o "$RUNNER_TEMP/trivy-scan/image.tar"
+
+      # Every action outside actions/*, docker/*, azure/* and helm/* is pinned to a
+      # commit, with its version as a comment: marocchino/sticky-pull-request-comment
+      # in coverage-report (its `v3` was a branch, not a tag), anchore/sbom-action
+      # and softprops/action-gh-release in build.yml, renovatebot/github-action in
+      # renovate.yml. Renovate's github-actions manager moves the digest and the
+      # version comment together. The four namespaces keep tag refs: they are
+      # first-party or vendor-published actions whose tags are protected upstream.
       #
       # What the pin actually buys, stated honestly: Renovate automerges
-      # github-actions DIGEST updates, so a new upstream release still lands here
-      # without a human reading it. The pin removes the "whatever is on master
+      # github-actions DIGEST updates, so a new upstream release still lands
+      # without a human reading it. The pin removes the "whatever the ref points at
       # right now" window and replaces it with a Renovate cycle - it is not human
       # review. Drop `digest` from the github-actions automerge rule in
       # renovate.json if review is what is wanted.
       #
-      # Every action outside actions/*, docker/*, azure/* and helm/* is pinned
-      # this way: trivy here, marocchino/sticky-pull-request-comment in
-      # coverage-report (its `v3` was a branch, not a tag), anchore/sbom-action
-      # and softprops/action-gh-release in build.yml, renovatebot/github-action
-      # in renovate.yml. Renovate's github-actions manager moves the digest and
-      # the version comment together. The four namespaces keep tag refs: they are
-      # first-party or vendor-published actions whose tags are protected upstream.
+      # Trivy is the deliberate exception, by the owner's decision of 2026-11-09
+      # (ADR 0005 D9): it runs from `aquasec/trivy:latest`, unpinned, so every run
+      # scans with the newest release. The cost is stated in
+      # docs/security/ci-and-supply-chain.md (H-22): on 2026-03-19 and 2026-03-22
+      # `latest` pointed at credential stealers for hours (GHSA-69fq-xp46-6x23).
+      # What contains it here: no Docker socket, no environment, the container's
+      # own PID namespace (the March payload read secrets out of the Runner.Worker
+      # process), and the runner's uid, so nothing it writes is owned by root.
       - name: Run Trivy vulnerability scan
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: mosquitto-operator:scan-${{ github.sha }}
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          vuln-type: 'os,library'
-          severity: 'CRITICAL,HIGH'
-          scanners: 'vuln,secret,misconfig'
+        run: >-
+          docker run --rm --pull=never --user "$(id -u):$(id -g)"
+          -v "$RUNNER_TEMP/trivy-scan:/scan"
+          aquasec/trivy:latest image
+          --input /scan/image.tar
+          --cache-dir /scan/cache
+          --no-progress
+          --format table
+          --exit-code 1
+          --ignore-unfixed
+          --pkg-types os,library
+          --severity CRITICAL,HIGH
+          --scanners vuln,secret,misconfig
 
       - name: Run Trivy scan (SARIF output)
         if: always()
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: mosquitto-operator:scan-${{ github.sha }}
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          scanners: 'vuln,secret,misconfig'
+        run: >-
+          docker run --rm --pull=never --user "$(id -u):$(id -g)"
+          -v "$RUNNER_TEMP/trivy-scan:/scan"
+          aquasec/trivy:latest image
+          --input /scan/image.tar
+          --cache-dir /scan/cache
+          --no-progress
+          --format sarif
+          --output /scan/trivy-results.sarif
+          --scanners vuln,secret,misconfig
 
       - name: Upload Trivy scan results
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: trivy-container-report
-          path: trivy-results.sarif
+          path: ${{ runner.temp }}/trivy-scan/trivy-results.sarif
           retention-days: 30
 
       - name: Cleanup scan image
         if: always()
-        run: docker rmi mosquitto-operator:scan-${{ github.sha }} || true
+        run: |
+          docker rmi mosquitto-operator:scan-${{ github.sha }} || true
+          rm -rf "$RUNNER_TEMP/trivy-scan"
 
   # Proves on every PR that the semantic-release dependency set can still render
   # release notes. The release job is the only other place these npm packages are

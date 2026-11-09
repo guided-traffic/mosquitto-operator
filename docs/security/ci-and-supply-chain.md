@@ -38,7 +38,7 @@ run does get is code execution on the fleet ([H-7](#h-7)).
 
 | Credential | Which job holds it | What for | What bounds it |
 |---|---|---|---|
-| `DOCKERHUB_PAT` | `release.yml`: `e2e-tests`, `mosquitto-image-tools` and `container-malware-scan`, each in a `docker/login-action@v4` step. `build.yml`: `build` — its login, and as the `dockerhub-password` input of `docker/scout-action@v1` | Authenticated Docker Hub pulls (the anonymous rate limit is why the image-tools and E2E jobs log in at all); in `build`, the release push and the Scout scan | `container-malware-scan` runs `docker logout` **before** its two Trivy steps, so that third-party code runs with no credential in `~/.docker/config.json`, and Trivy is pinned to a commit. `build` runs `docker logout` right after the push, before `anchore/sbom-action` and `softprops/action-gh-release` run; the Scout step then receives the credential as its own input. `mosquitto-image-tools` and `e2e-tests` keep the credential on disk while the repository's own code runs — `make test-image-tools`, and in `e2e-tests` the image build, the cluster setup and the whole suite |
+| `DOCKERHUB_PAT` | `release.yml`: `e2e-tests`, `mosquitto-image-tools` and `container-malware-scan`, each in a `docker/login-action@v4` step. `build.yml`: `build` — its login, and as the `dockerhub-password` input of `docker/scout-action@v1` | Authenticated Docker Hub pulls (the anonymous rate limit is why the image-tools and E2E jobs log in at all); in `build`, the release push and the Scout scan | `container-malware-scan` runs `docker logout` **before** its two Trivy steps, so that third-party code runs with no credential in `~/.docker/config.json`; Trivy runs unpinned, in a container without the Docker socket ([H-22](#h-22)). `build` runs `docker logout` right after the push, before `anchore/sbom-action` and `softprops/action-gh-release` run; the Scout step then receives the credential as its own input. `mosquitto-image-tools` and `e2e-tests` keep the credential on disk while the repository's own code runs — `make test-image-tools`, and in `e2e-tests` the image build, the cluster setup and the whole suite |
 | `APP_CLIENT_ID`, `APP_PRIVATE_KEY` — organisation secrets, the client ID and private key of the org GitHub App `guided-traffic-automation` | `release.yml`: `semantic-release`. `renovate.yml`: `renovate`. In both only as `with:` inputs of the first step, `actions/create-github-app-token@v3`; no later step receives them as an input or in its environment | Identifying the app and signing the request for an installation token | The private key is the long-lived secret of this set: it does not expire, and per [ADR 0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md)'s amendment it can mint tokens for every repository of the organisation, with every permission the app holds — the app's installations and permissions are not visible from this tree. What this repository controls is where the key goes: neither job runs for a pull request, and the key is handed to the token step alone. It still passes through the self-hosted runner ([H-8](#h-8)). Rotation — a new key in the app settings, then the secret replaced — is manual and outside this repository |
 | The GitHub App installation token (`steps.app-token.outputs.token`), minted per job | `semantic-release`: the checkout `token:` and the `GITHUB_TOKEN` env of the Release step. `renovate`: the `token:` input of the Renovate step | Tagging, publishing the release, committing the coverage badge; Renovate's pull requests. Not the job token, because events that token creates start no other workflow — a release it published would never run `build.yml` | Scoped to this repository (the token step sets no `owner` or `repositories`), valid for one hour and revoked by the action's post step, per the workflow comments. `semantic-release` requests `permission-contents: write` only, and [`.releaserc.json`](../../.releaserc.json) turns off `successComment`, `failComment` and `releasedLabels`, so `@semantic-release/github` writes no issue and no comment. `renovate` requests no `permission-*` input and therefore gets every permission of the app installation. In `semantic-release` the checkout sets `persist-credentials: false`, so the token is not written into `.git/config`, and `npm ci --ignore-scripts` followed by `npm audit signatures` installs and checks the release toolchain before the token is in any step's environment — the Release step then runs `npx semantic-release`, the whole installed dependency tree, with the token in its environment |
 | `GITHUB_TOKEN`, the job token | `release.yml`: `coverage-report` (its checkout, and the sticky pull-request comment); `semantic-release` holds one too. `build.yml`: `build` (the SBOM upload to the release), `release-helm-gh` (its checkouts, the `git push` to `gh-pages`, the release-asset upload) | The pull-request coverage comment, release assets, publishing the Helm chart | All three workflows set a top-level `permissions: contents: read` floor. In `release.yml` one job raises it, `coverage-report` to `pull-requests: write`; `semantic-release` holds only the floor, because every write it makes goes through the app token. In `build.yml` both jobs raise it to `contents: write` in their own block |
@@ -115,17 +115,15 @@ reason to rotate the app key.
 
 Live, and narrower than it was. Every third-party action outside the `actions/*`, `docker/*`,
 `azure/*` and `helm/*` namespaces is pinned to a commit with its version as a comment —
-`aquasecurity/trivy-action` and `marocchino/sticky-pull-request-comment` in `release.yml`,
-`anchore/sbom-action` and `softprops/action-gh-release` in `build.yml`,
-`renovatebot/github-action` in `renovate.yml` — so a moved tag or branch upstream no longer
-reaches the runners on its own. What is left: [`renovate.json`](../../renovate.json) automerges
-GitHub Actions minor, patch and digest updates once CI passes, so a new upstream release of a
-pinned action still lands without a human reading it — since 2026-10-12 within minutes of its
-checks passing, through GitHub auto-merge, rather than at the next Renovate run. One pin is the
-exception: Renovate has not been able to look up `aquasecurity/trivy-action` since 2026-09-25.
-The `aquasecurity` organisation's IP allow list refuses the app's installation token, so that
-pin changes only when someone edits it. Also left: the four first-party and vendor namespaces
-stay on tag references, trusted because their tags are protected upstream —
+`marocchino/sticky-pull-request-comment` in `release.yml`, `anchore/sbom-action` and
+`softprops/action-gh-release` in `build.yml`, `renovatebot/github-action` in `renovate.yml` — so
+a moved tag or branch upstream no longer reaches the runners on its own. Trivy is no action any
+more and runs unpinned by decision ([H-22](#h-22)). What is left:
+[`renovate.json`](../../renovate.json) automerges GitHub Actions minor, patch and digest updates
+once CI passes, so a new upstream release of a pinned action still lands without a human reading
+it — since 2026-10-12 within minutes of its checks passing, through GitHub auto-merge, rather than
+at the next Renovate run. Also left: the four first-party and vendor namespaces stay on tag
+references, trusted because their tags are protected upstream —
 `docker/login-action@v4` in jobs that then hold `DOCKERHUB_PAT`, and
 `actions/create-github-app-token@v3`, the one step that receives `APP_PRIVATE_KEY` itself. The
 actions run in jobs that hold `DOCKERHUB_PAT`, or `APP_PRIVATE_KEY` and the app token minted from
@@ -165,3 +163,46 @@ required until an admin adds its context, and the setting itself is not in the t
 it shows in the organisation's audit log, not in `git log`. Giving releases an identity of their own,
 separate from Renovate's, would narrow the bypass to the one job that needs it; that was not
 chosen.
+
+<a id="h-22"></a>
+### H-22 — The container scan runs whatever `aquasec/trivy:latest` is when the job runs
+
+Live, accepted by the owner on 2026-11-09
+([ADR 0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) D9) after the
+alternatives below were put to them. `container-malware-scan` pulls `aquasec/trivy:latest` from
+Docker Hub on every run and executes it on the self-hosted runner, in the job that logged in with
+`DOCKERHUB_PAT` — the secret `build` pushes the release image with. Nothing in the tree names the
+version, no pull request announces a new one, and the digest that ran is recorded only in the job
+log.
+
+This is the shape that was hit before. Aqua's advisory
+[GHSA-69fq-xp46-6x23](https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23)
+(read on 2026-11-09) lists `latest` as affected twice: on 2026-03-19 a malicious `v0.69.4` was
+published to every channel, Docker Hub's `latest` included, for about three hours, and on
+2026-03-22 malicious Docker Hub images `0.69.5` and `0.69.6` were `latest` for about ten. The
+payload described there reads the secrets out of the memory of the runner's `Runner.Worker`
+process and sweeps the file system for credentials.
+
+What contains a malicious image here, from Docker's defaults and the step's flags, not from an
+observed attack: the container gets no Docker socket, no environment variable of the job, its own
+PID namespace — so it cannot open the `Runner.Worker` process the March payload read — and one
+mounted directory, `$RUNNER_TEMP/trivy-scan`, holding the image tarball and the vulnerability
+database. `docker logout` before the scan keeps the credential out of `~/.docker/config.json`,
+which the container could not see anyway. What is left:
+
+- **The gate is as honest as the image.** A malicious or broken Trivy can report a clean image,
+  and the job passes; the scan is a check only while the image is the one Aqua meant to publish.
+- **Network access.** The container downloads its database, so it can send out what it sees: the
+  tarball of an image built from a public tree, and the database.
+- **An escape from the container** — a kernel or container runtime flaw — puts the code on a runner
+  whose worker holds `DOCKERHUB_PAT`, with the Docker daemon and unprompted `sudo` the other jobs
+  use ([H-7](#h-7), [H-8](#h-8)).
+- **The runner's Docker daemon is shared with the rest of the job.** What else the daemon of a
+  self-hosted runner runs, and whether a container started there sees anything of the node, is
+  infrastructure outside this repository ([H-8](#h-8)).
+
+Rejected for this: the same image pinned by digest and moved by Renovate with
+`minimumReleaseAge: "3 days"`, which the owner was offered as the recommendation — every exposure
+window of March was shorter than twelve hours — and the action with a hand-moved `version:`.
+The digest printed by the `Pull the Trivy image` step is what tells, after the fact, whether a run
+used an image Aqua later withdrew.
