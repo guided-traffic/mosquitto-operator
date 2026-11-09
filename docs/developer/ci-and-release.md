@@ -40,7 +40,7 @@ that need more. `env`: `GO_VERSION` (the Go version, [ADR 0003](../adr/0003-the-
 | `generated-manifests` (Generated Manifests Up To Date) | `make generate-all`, a dirty-tree check, then `make verify-rbac-parity` | Installs Helm `v4.3.0`. The dirty check fails on `git diff` or on any untracked file. |
 | `integration-tests` (Integration Tests (envtest)) | `make test-integration-coverage` | Uploads `coverage/integration.out` for 7 days. |
 | `coverage-report` (Combined Coverage Report) | `needs: [unit-tests, integration-tests]`, runs when at least one succeeded | Merges the profiles, writes the job summary and a sticky PR comment (per-package table, difference to the badge on `main`); on a push to `main` writes the badge and uploads it as the `coverage-badge` artefact ([build-test-lint.md](build-test-lint.md#coverage)). `pull-requests: write`. |
-| `container-malware-scan` (Container Malware Scan) | `needs: [malware-scan]` | Builds the image with `persist-credentials: false` on the checkout, **logs out of Docker Hub**, then runs Trivy twice — table at `CRITICAL,HIGH` with `exit-code: 1`, then SARIF. Trivy is pinned to a commit SHA because it used to track a moving branch two steps after a registry login. |
+| `container-malware-scan` (Container Malware Scan) | `needs: [malware-scan]` | Builds the image with `persist-credentials: false` on the checkout, pulls `aquasec/trivy:latest` and prints its digest, **logs out of Docker Hub**, saves the image to a tarball under `$RUNNER_TEMP/trivy-scan`, then runs Trivy twice with `docker run` on that tarball — table at `CRITICAL,HIGH` with `--ignore-unfixed` and `--exit-code 1`, then SARIF over every severity. [Trivy runs unpinned](#trivy-runs-unpinned). |
 | `release-tooling` (Release Tooling) | `make verify-ci-references`, `npm ci --ignore-scripts`, `npm audit signatures`, `node hack/verify-release-tooling.mjs` | Calls the node script directly rather than `make test-release-tooling`: the Makefile target runs `npm ci --no-audit --no-fund`, the job runs `--ignore-scripts` and checks registry signatures. |
 | `semantic-release` (Semantic Release) | only on a push to `main`; `needs:` the thirteen jobs above except `e2e-gate` — `e2e-tests` itself | [The release](#the-release). `permissions: contents: read` only. |
 
@@ -126,6 +126,40 @@ Docker-in-Docker runners:
 `e2e-gate`, named `E2E Tests`, carries the stable status context: a matrix leg reports as
 `E2E Tests (<topology>)`, renamed whenever a leg is, so a required check never points at a leg
 ([ADR 0004](../adr/0004-two-e2e-legs-and-no-version-matrix.md)).
+
+### Trivy runs unpinned
+
+`container-malware-scan` runs Trivy from `aquasec/trivy:latest` with `docker run`, not through
+`aquasecurity/trivy-action`, by the owner's decision of 2026-11-09
+([ADR 0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) D9). Every run
+scans with the newest Trivy release; no file in the tree names a version and Renovate has nothing
+to move. The cost and what contains it are
+[H-22](../security/ci-and-supply-chain.md#h-22). What that means for a contributor:
+
+- **The job can turn red with no change in the tree.** A new Trivy release can find something the
+  last one did not, or drop a flag: `--vuln-type`, which the action passed, is gone in `0.76.2`,
+  and the step passes `--pkg-types os,library` instead. A red scan on a pull request that touched
+  nothing near the image is read in the job log first; the step before the scan prints the digest
+  of the image it ran.
+- **The image is scanned as a tarball.** `docker save` writes it to `$RUNNER_TEMP/trivy-scan`, the
+  only directory mounted into the Trivy container, which gets no Docker socket and runs as the
+  runner's uid. The vulnerability database is downloaded into `cache/` there on every run and
+  shared by the two scans; the action's `actions/cache` step is gone with the action.
+- **The scanners match what the action ran.** On 2026-11-09, against the operator image built
+  locally (`arm64`), Trivy `0.70.0` scanning the image by name through the Docker daemon — what
+  the action did — and `0.76.2` scanning the tarball reported the same three targets
+  (`debian 12.15`, `app/exporter`, `app/manager`), four OS findings without a fix, no secret and
+  no misconfiguration, and both logged `Detected config files num=0`.
+- **The gate failed on purpose** on the same day: the step's exact command against a tarball of
+  `alpine:3.12.0` exited `1` with `Total: 36 (HIGH: 32, CRITICAL: 4)`, and against the operator
+  image with `0`.
+
+The bind mount of a directory under `$RUNNER_TEMP` reaches the Docker daemon of the self-hosted
+runners: the first CI run (run `42587489503`, pull request #93) scanned `/scan/image.tar`
+(`debian 12.15`, `app/exporter`, `app/manager`), printed the digest
+`sha256:8f6bb947dbc528902e11f2f5be52f7b519f6a39d5d148f41166f2040499768fb` (`0.76.2`) and uploaded
+the SARIF report. Were the path ever invisible to the daemon, the scan would fail on the missing
+tarball, not pass silently.
 
 ## The release
 

@@ -42,6 +42,25 @@ triggered (run `37419314072`) passed `Build Docker Image` and `Release Helm Char
 (`release-helm-gh`). No step failed for a permission, so none was given back; the releases since,
 up to `v0.2.13`, ran on the same permissions.
 
+**Amended 2026-11-09 — Trivy runs unpinned, by the owner's decision (D9).** Renovate had not been
+able to look up `aquasecurity/trivy-action` since 2026-09-25: the `aquasecurity` organisation's IP
+allow list refuses the app's installation token on the GraphQL query of the `github-tags`
+datasource (Renovate run `42495383270`, `logLevel: debug`). The action's pin, `v0.36.0`, was its
+newest tag, but its `version` input defaults to Trivy `v0.70.0`, six minor releases behind
+`v0.76.2` and inside the range of the `high` advisory GHSA-mcj4-mphf-j9ff (fixed in `0.71.1`). Put
+to the owner with a recommendation for a digest-pinned image moved by Renovate, the owner chose
+`latest`. `container-malware-scan` now runs `aquasec/trivy:latest` with `docker run`, and the
+action is gone from the tree. The 2026-10-05 statement that every third-party action outside the
+four namespaces is pinned to a commit stays true; Trivy is the one piece of third-party code on the
+runners that is not pinned, and the security page carries what that leaves
+([ci-and-supply-chain.md](../security/ci-and-supply-chain.md#h-22)). Verified on 2026-11-09 on a
+local Docker `28.4.0`: the step's command fails on purpose against `alpine:3.12.0` (exit `1`,
+`Total: 36 (HIGH: 32, CRITICAL: 4)`), passes against the operator image, and reports the same
+targets and findings as Trivy `0.70.0` scanning by image name. Observed in CI the same day (run
+`42587489503`): the self-hosted runners' Docker daemon sees the mounted directory under
+`$RUNNER_TEMP`, the scan ran on the tarball with `0.76.2` and passed, and the SARIF report was
+uploaded.
+
 **Verified by reading**
 [`.github/workflows/release.yml`](../../.github/workflows/release.yml) — the comment block above
 `on:`, the `on:` block itself, the `concurrency` block, the top-level `permissions:`, every
@@ -206,6 +225,16 @@ environment.~~ *(Amended 2026-10-05: no install step has the token in its enviro
 Release step does, and it executes the installed tree with it. The flag keeps install-time code off
 the runner; it does not protect the token.)*
 
+**D9 — The container scan runs the newest Trivy, unpinned, and contained.** *(Added 2026-11-09,
+the owner's decision.)* `container-malware-scan` in
+[`.github/workflows/release.yml`](../../.github/workflows/release.yml) pulls
+`aquasec/trivy:latest` while the job is still logged in to Docker Hub, prints its digest, runs
+`docker logout`, and scans a `docker save` tarball of the built image with two `docker run`
+invocations of that image: no Docker socket, no job environment, the runner's uid, and one mounted
+directory, `$RUNNER_TEMP/trivy-scan`. No file in the tree names a Trivy version, and Renovate does
+not move one. Whoever changes the scan keeps the containment: a step that mounts the Docker socket,
+passes a secret or runs Trivy outside a container changes this decision, not the workflow alone.
+
 ## Consequences
 
 * **A fork pull request runs arbitrary code as the runner user, on a fleet that has a Docker
@@ -283,6 +312,22 @@ Not a separate option in the setting; `"Require approval for all outside collabo
 already the strictest of the fork-run choices GitHub offers short of disabling fork runs
 entirely, and that last one is the previous alternative under another name.
 
+### For D9: Trivy pinned by digest, moved by Renovate after three days
+
+Recommended to the owner on 2026-11-09 and not chosen.
+`aquasec/trivy:<version>@sha256:<digest>` in the step, looked up by Renovate's `docker` datasource
+on Docker Hub, where the GitHub allow list does not apply, with `minimumReleaseAge: "3 days"` for
+that one package. It would have kept Trivy within three days and one CI run of its newest release,
+each move a pull request, and every exposure window of March 2026 was shorter than twelve hours.
+The owner preferred no delay at all.
+
+### For D9: the action, with `version: latest` or a hand-moved `version:`
+
+Rejected. Both keep `aquasecurity/trivy-action` at a commit Renovate cannot move, and run the Trivy
+binary directly as the runner user, beside the `Runner.Worker` process the March 2026 payload read.
+`version: latest` is named in GHSA-69fq-xp46-6x23 as an affected configuration; a hand-moved
+version goes stale without a pull request saying so — it had, at `v0.70.0`.
+
 ## Residual risks
 
 * **The control is a repository setting this repository cannot see (open).** Nothing in the tree
@@ -316,6 +361,10 @@ entirely, and that last one is the previous alternative under another name.
   happen. The first fork pull request is what turns them into observations, and the first one
   should be treated as an experiment: watch the Docker Hub login steps and the sticky comment,
   and expect to explain red checks that are not the contributor's fault.
+* **Trivy is whatever `latest` is when the job runs (accepted, D9).** A compromised release runs
+  on the self-hosted runner in a job that logged in with `DOCKERHUB_PAT`, and it decides the gate.
+  What the container leaves it, and what it does not, is
+  [H-22](../security/ci-and-supply-chain.md#h-22).
 
 ## References
 
@@ -323,7 +372,9 @@ entirely, and that last one is the previous alternative under another name.
   comment above `on:`, the `pull_request` trigger, the top-level `permissions: contents: read`,
   the `coverage-report` and `semantic-release` permission blocks, the `DOCKERHUB_PAT` logins,
   the `BOT_PAT` checkout and Release step, `persist-credentials: false`, `npm ci
-  --ignore-scripts`
+  --ignore-scripts`, and the Trivy steps of `container-malware-scan` (D9)
+* [GHSA-69fq-xp46-6x23](https://github.com/aquasecurity/trivy/security/advisories/GHSA-69fq-xp46-6x23)
+  — Aqua's advisory on the March 2026 compromise of Trivy, `trivy-action` and the `latest` image
 * [`.github/workflows/build.yml`](../../.github/workflows/build.yml) — the
   `release: types: [published]` trigger, the two per-job `contents: write` blocks and their
   comments, `persist-credentials: false` on the build checkout

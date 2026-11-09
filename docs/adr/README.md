@@ -105,6 +105,6 @@ the detail.
 |---|---|---|
 | [0003](0003-the-go-version-is-one-fact-in-four-files.md) | The Go version is one fact in four files, and one Renovate PR moves all four | Implemented |
 | [0004](0004-two-e2e-legs-and-no-version-matrix.md) | Two E2E legs, shaped by node count, and no version matrix | Implemented — out of CI from 2026-09-01 to 2026-10-05, restored |
-| [0005](0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) | Fork pull requests execute on the self-hosted runners, gated outside the repository | Implemented — the gate is a GitHub setting, not verifiable from the tree |
+| [0005](0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) | Fork pull requests execute on the self-hosted runners, gated outside the repository | Implemented — the gate is a GitHub setting, not verifiable from the tree; amended 2026-11-09: D9, Trivy runs unpinned |
 | [0010](0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md) | A check is not a check until it has failed on purpose | Implemented |
 | [0015](0015-a-renovate-pull-request-merges-when-its-checks-pass-and-one-left-behind-is-rebuilt.md) | A Renovate pull request merges when its checks pass, and one left behind is rebuilt | Implemented — the ruleset is a GitHub setting, not verifiable from the tree |
