@@ -68,7 +68,14 @@ else; add an ingress rule for port `9234` from the scraper's namespace.
   all. A topic the broker does not publish has no series. Alert on
   `mosquitto_exporter_connected == 0`, and on the series being absent.
 - **Counters restart with the broker.** The `_total` series count since the broker process
-  started; a restarted pod starts them again from zero, which `rate()` treats as a reset.
+  started; a restarted pod starts them again from zero, which `rate()` treats as a reset. Only
+  counters end in `_total`; every other series is a gauge.
+- **Three gauges were renamed on 2026-11-11**, in the first release after `v0.2.16`, because their
+  names promised a counter or a summary: `mosquitto_clients_total` is now
+  `mosquitto_clients_registered`, `mosquitto_connections_socket_count` is now
+  `mosquitto_connections_sockets`, and `mosquitto_packet_out_count` is now
+  `mosquitto_packet_out_queued`. A dashboard or alert on an old name finds no series after the
+  upgrade.
 - **Ten-second resolution.** The broker publishes `$SYS` every `sys_interval`, which the generated
   file states as `10`; a scrape between two updates sees the same values.
 - **Every `$SYS` topic is retained** (M28), so an exporter that reconnects has every value back at

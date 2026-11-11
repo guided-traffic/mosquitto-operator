@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil/promlint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,6 +84,36 @@ func TestTable_CoversTheMeasuredTopics(t *testing.T) {
 		if m.kind == prometheus.CounterValue {
 			assert.True(t, strings.HasSuffix(m.name, "_total"), "a counter is named *_total: %s", m.name)
 		}
+	}
+}
+
+// TestScrape_PassesPromlint lints every series the exporter can serve with
+// Prometheus' own linter (ADR 0002 D10): a gauge never ends in _total, _count
+// or another suffix that promises a counter, a histogram or a summary.
+func TestScrape_PassesPromlint(t *testing.T) {
+	c := NewCollector()
+	c.Connected()
+	for path := range table {
+		payload := "1"
+		if path == "uptime" {
+			payload = "1 seconds"
+		}
+		require.True(t, c.Observe(sysPrefix+path, []byte(payload)), path)
+	}
+	for _, what := range []string{
+		"bytes/received", "bytes/sent", "messages/received", "messages/sent",
+		"publish/received", "publish/sent", "publish/dropped", "connections", "sockets",
+	} {
+		for window := range loadWindows {
+			require.True(t, c.Observe(sysPrefix+"load/"+what+"/"+window, []byte("0.5")), what)
+		}
+	}
+	require.True(t, c.Observe(sysPrefix+"version", []byte("mosquitto version 2.1.2")))
+
+	problems, err := promlint.New(strings.NewReader(scrape(t, c))).Lint()
+	require.NoError(t, err)
+	for _, p := range problems {
+		t.Errorf("%s: %s", p.Metric, p.Text)
 	}
 }
 

@@ -606,11 +606,11 @@ The generated `mosquitto.conf` states `sys_interval 10`, so the values change ev
 | `mosquitto_messages_stored` | gauge | `messages/stored` |
 | `mosquitto_publish_messages_received_total`, `…_sent_total`, `…_dropped_total` | counter | `publish/messages/received`, `sent`, `dropped` |
 | `mosquitto_publish_bytes_received_total`, `mosquitto_publish_bytes_sent_total` | counter | `publish/bytes/received`, `sent` |
-| `mosquitto_clients_connected`, `_active`, `_disconnected`, `_inactive`, `_total`, `_expired` | gauge | `clients/…` |
+| `mosquitto_clients_connected`, `_active`, `_disconnected`, `_inactive`, `_registered`, `_expired` | gauge | `clients/…` |
 | `mosquitto_clients_maximum` | gauge | `clients/maximum` (published by 2.0 only) |
-| `mosquitto_connections_socket_count` | gauge | `connections/socket/count` |
+| `mosquitto_connections_sockets` | gauge | `connections/socket/count` |
 | `mosquitto_heap_current_bytes`, `mosquitto_heap_maximum_bytes` | gauge | `heap/current`, `heap/maximum` |
-| `mosquitto_packet_out_count`, `mosquitto_packet_out_bytes` | gauge | `packet/out/count`, `packet/out/bytes` |
+| `mosquitto_packet_out_queued`, `mosquitto_packet_out_bytes` | gauge | `packet/out/count`, `packet/out/bytes` |
 | `mosquitto_retained_messages` | gauge | `retained messages/count` |
 | `mosquitto_store_messages`, `mosquitto_store_messages_bytes` | gauge | `store/messages/count`, `store/messages/bytes` |
 | `mosquitto_subscriptions`, `mosquitto_shared_subscriptions` | gauge | `subscriptions/count`, `shared_subscriptions/count` |

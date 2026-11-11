@@ -7,7 +7,8 @@ code so that nothing else is built against a contradicting assumption.~~
 
 **Built 2026-10-05: D1–D7 as amended.** Four points the text leaves open were built on the
 recommended answers of open decisions in [the project plan](../planning/project-plan.md), phase 7,
-and each answer becomes an amendment here:
+and each answer becomes an amendment here. All four were answered on 2026-11-11, three as built and
+one with three series renamed (the amendments below):
 
 - D1: `cmd/exporter` and [`internal/exporter`](../../internal/exporter); the module is
   `github.com/eclipse/paho.mqtt.golang v1.5.1` (the path D1 recorded unverified), and
@@ -20,16 +21,19 @@ and each answer becomes an amendment here:
 - D4: `auth.ExporterPrincipal` renders `mko-exporter` with `topic read $SYS/#`; the controller
   generates its password once and keeps it in `<name>-auth` under `exporter-password`, projected
   into the exporter alone. The `auth-secret` mount of `auth-init` and `reloader` became an `items`
-  projection of `passwd` and `acl`, so they no longer see that key. **Built on open decision
-  7c:** under TLS the exporter connects to `ssl://127.0.0.1:8883` and accepts exactly the mounted
+  projection of `passwd` and `acl`, so they no longer see that key. **Decided 2026-11-11 (open
+  decision 7c, answered A — built as recommended), D3 as amended:** under TLS the exporter connects to `ssl://127.0.0.1:8883` and accepts exactly the mounted
   certificate (`--tls-cert`), not a chain or a host name.
-- D6: **built on open decision 7a:** the gate is `spec.metrics.enabled`, default `false`; absent
-  or `false`, the pod spec is what it was. **Open decision 7b:** port `9234`, named `metrics`, on
-  the container only — no Service port.
+- D6: **decided 2026-11-11 (open decision 7a, answered A — built as recommended):** the gate is
+  `spec.metrics.enabled`, default `false`; absent or `false`, the pod spec is what it was.
+  **Decided 2026-11-11 (open decision 7b, answered A — built as recommended), D3 as amended:**
+  port `9234`, named `metrics`, on the container only — no Service port, no authentication.
 - D7: the generated file states `sys_interval 10` and `max_packet_size 2000000`, for every broker
   (M28, M29 in [broker-behaviour.md](../developer/broker-behaviour.md)); a `spec.config` line still
-  overrides them (M29). **Open decision 7d:** the series names and types of
-  [`internal/exporter/mapping.go`](../../internal/exporter/mapping.go).
+  overrides them (M29).
+- D10: **decided 2026-11-11 (open decision 7d, answered A with three names corrected):** the
+  series names and types of [`internal/exporter/mapping.go`](../../internal/exporter/mapping.go),
+  held to Prometheus' linter by `TestScrape_PassesPromlint`.
 
 Observed failing on purpose: the renderer with its prefix check removed (`the bypass is for the
 reserved prefix only`), the exporter's ACL widened to `#` on the pinned image (`exporter-sys=`
@@ -49,6 +53,40 @@ no `MosquittoUser` may hold a `$` topic ([ADR 0013](0013-a-client-is-a-mosquitto
 reserved user the operator renders for itself — D4 as amended. The sentence that the ClusterRole
 "grants nothing on `secrets` today and must not start" is superseded by [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md) D7; the
 exporter itself still adds no rule.
+
+**Amended 2026-11-11 — open decision 7a answered: the gate is `spec.metrics.enabled`.** The owner
+chose the recommended shape, the one built on 2026-10-05 and released since `v0.2.0`: a `bool`
+under `spec.metrics`, default `false`. D6 now fixes the field, not only the gate; no code changed.
+`TestIsMetricsEnabled` in [`api/v1/mosquitto_types_test.go`](../../api/v1/mosquitto_types_test.go)
+holds it, an empty `metrics` block included (`an empty block is not a switch`).
+
+**Amended 2026-11-11 — open decision 7b answered: a container port, no Service, no
+authentication.** The owner chose the recommended reach, the one built: the exporter serves plain
+HTTP on container port `9234` named `metrics`, no Service publishes it, and a scraper finds the
+pods. D3 now says so; no code changed. The open endpoint is
+[trust-boundaries.md H-20](../security/trust-boundaries.md#h-20).
+
+**Amended 2026-11-11 — open decision 7c answered: under TLS the exporter pins the mounted
+certificate.** The owner chose the recommended check, the one built: the exporter accepts exactly
+the certificate the broker was given, re-read on every handshake, and checks no chain and no host
+name. D3 now says so. The pin had been covered only on Kind; it gained the unit test
+`TestPinnedTLS_AcceptsExactlyTheMountedCertificate` in
+[`internal/exporter/tls_test.go`](../../internal/exporter/tls_test.go), observed failing with the
+comparison removed (`a broker serving any other certificate must be refused`) and with the
+certificate read once when the configuration is built (`a renewed certificate must be accepted by
+the same configuration`).
+
+**Amended 2026-11-11 — open decision 7d answered: a fixed table, named by the Prometheus
+conventions (D10).** The owner chose the recommended scheme with the three names corrected that
+broke it. `promlint` from `client_golang` flagged them on the built table:
+`mosquitto_clients_total: non-counter metrics should not have "_total" suffix`,
+`mosquitto_connections_socket_count: non-histogram and non-summary metrics should not have "_count"
+suffix` and the same for `mosquitto_packet_out_count`. They are now `mosquitto_clients_registered`,
+`mosquitto_connections_sockets` and `mosquitto_packet_out_queued` — a rename of series served since
+`v0.2.0`, taken while no production cluster scrapes them. `TestScrape_PassesPromlint` in
+[`internal/exporter/exporter_test.go`](../../internal/exporter/exporter_test.go) lints a scrape
+holding every series the exporter can serve; it failed with exactly those three messages before
+the rename. With 7a to 7d answered, phase 7 is done.
 
 What was verified by reading the tree, on 2026-09-01 *(superseded by the build above; kept as the
 record of the decision's starting point)*:
@@ -201,6 +239,27 @@ every pod individually anyway. Over `localhost`, because that connection never l
 network namespace: no data port is exposed anywhere new, and no MQTT credential travels over the
 cluster network.
 
+*(Amended 2026-11-11, open decision 7b:)* A scraper reaches each exporter on its pod: `/metrics`,
+plain HTTP without authentication, on container port `9234` named `metrics` (`ExporterPort` and
+`ExporterPortName` in [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go),
+the `--listen` default in [`internal/exporter/run.go`](../../internal/exporter/run.go)). No Service
+publishes the port — both Services keep exactly the broker's one port — so a `PodMonitor` or pod
+discovery finds it, which is what a per-pod `$SYS` asks for anyway. Authentication is not added for
+the reason D8 gives for the operator's own endpoint: `TokenReview` and `SubjectAccessReview` need
+API access, and the broker pod holds none (D4). Whoever must keep the statistics in, leaves metrics
+off or admits only the scraper to `9234` with a NetworkPolicy of their own (H-20).
+
+*(Amended 2026-11-11, open decision 7c:)* Under `spec.tls` the broker's one listener is `8883`, and
+its certificate names the broker's DNS names, not `127.0.0.1`. The exporter connects to
+`ssl://127.0.0.1:8883` and accepts exactly the certificate the operator points `--tls-cert` at, the
+mounted `/mosquitto/tls/tls.crt`: `pinnedTLS` in
+[`internal/exporter/run.go`](../../internal/exporter/run.go) compares the peer's certificate byte for
+byte with the file, and checks no chain and no host name. The file is read on every handshake, so
+a renewed certificate is accepted as soon as the broker serves it
+([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10). The pin still
+proves the peer holds the broker's key, needs no `ca.crt`, and works for every Secret shape,
+`kubectl create secret tls` included.
+
 **D4 — The exporter gets no API access of its own, and logs in as a reserved user the operator
 renders.** *(Amended 2026-10-05; the credential half is new, the rest unchanged.)* It reuses what
 the operator already mounts into the pod: under TLS, the volume `TLSVolumeName` (`"tls"`) at
@@ -223,10 +282,14 @@ pod unready when that sidecar fails, which removes the pod from both Services bu
 take a broker out of its Service.** The price is stated in Consequences rather than hidden.
 
 **D6 — The feature is gated on a CR field, and no broker pod grows a container it did not ask
-for.** The working name is `spec.metrics`; **this ADR deliberately fixes neither the field's shape
+for.** ~~The working name is `spec.metrics`; **this ADR deliberately fixes neither the field's shape
 nor its default**, because neither is written and inventing them here would create a second
-authority for the code to contradict. What is fixed is the gate: absent the field, the pod spec is
-byte-for-byte what it is today.
+authority for the code to contradict.~~ *(Amended 2026-11-11, open decision 7a:)* The gate is
+`spec.metrics.enabled`, a `bool` with default `false`, read through `IsMetricsEnabled` in
+[`api/v1/mosquitto_types.go`](../../api/v1/mosquitto_types.go). Only `enabled: true` adds the
+exporter; an absent `spec.metrics`, an empty one and `enabled: false` all leave the pod spec
+byte-for-byte what it is without the feature. A later setting of the exporter is a further field
+under `spec.metrics`, never a second switch.
 
 **D7 — When the exporter lands, the generated configuration states `sys_interval` explicitly.**
 `GenerateMosquittoConf` emits no such line today, so the scrape resolution is an inherited default
@@ -258,7 +321,18 @@ closes the port. Adding an authentication filter is a separate trade, because it
 endpoint.** They have different lifetimes, different failure modes and different readers: one lives
 and dies with a broker pod, the other with the operator Deployment.
 
-## Consequences
+**D10 — The series are a fixed table of the measured topics, named the way Prometheus names them.**
+*(Added 2026-11-11, open decision 7d.)* `table` in
+[`internal/exporter/mapping.go`](../../internal/exporter/mapping.go) maps each numeric `$SYS` topic
+the pinned image publishes (M28), plus `clients/maximum`, to one series with a `mosquitto_` name;
+a topic outside it is skipped, and a topic in it the broker does not publish is absent, never zero
+(D1's consequence). What counts since the broker started is a counter ending in `_total`;
+everything else is a gauge, and no gauge ends in `_total`, `_count`, `_sum` or `_bucket`. The load
+averages are one series per kind with a `window` label (`1min`, `5min`, `15min`), and the version
+is `mosquitto_version_info{version}` with the value `1`. The rule is held by
+`TestScrape_PassesPromlint`, which runs Prometheus' own linter over a scrape of every series; a
+new topic gets a name that passes it.
+
 
 * **This repository takes on an MQTT client's failure modes.** Reconnection, subscription
   resumption after a broker restart, and a stale-value policy when the broker stops publishing all
@@ -310,6 +384,57 @@ and dies with a broker pod, the other with the operator Deployment.
   restricting ingress to the operator namespace is left to the cluster administrator.
 
 ## Alternatives Considered
+
+### For D6: the presence of `spec.metrics` as the switch
+
+Rejected on 2026-11-11 (open decision 7a). `spec.metrics: {}` would be one line shorter, but an
+empty object reads as nothing, and the only way to turn the exporter off would be to delete the
+key. Against the released field it is worse: with `enabled` gone from the schema, the API server
+prunes it, so a stored `metrics: {enabled: false}` becomes `metrics: {}` — and the exporter would
+appear on exactly the brokers that had turned it off, which D6 forbids. Reasoned from structural
+pruning, not tested.
+
+### For D3: a `metrics` port on the headless Service
+
+Rejected on 2026-11-11 (open decision 7b). It would serve `ServiceMonitor` users with a second way to
+the same per-pod endpoint, at the cost of a Service change on every broker whenever metrics are
+turned on or off, and of the rule that both Services carry exactly the broker's port
+(`TestServicePortsFollowTLS` in
+[`internal/builder/service_test.go`](../../internal/builder/service_test.go)).
+
+### For D3: authentication with `TokenReview` and `SubjectAccessReview`
+
+Rejected on 2026-11-11 (open decision 7b). It needs API access and a ServiceAccount token in the
+broker pod, which the pod deliberately has not (D4) — the trade D8 records for the operator's own
+endpoint.
+
+### For D3: verifying the chain against `ca.crt` and a DNS name of the certificate
+
+Rejected on 2026-11-11 (open decision 7c). It needs a `ca.crt` that `kubectl create secret tls`
+does not write, so the exporter of a broker with such a Secret would never connect, and it would
+accept any certificate the CA issued for that name, where the pin accepts one.
+
+### For D3: a second, plain listener on `127.0.0.1` for the exporter
+
+Rejected on 2026-11-11 (open decision 7c). It changes the generated configuration and breaks "one
+listener" for a monitoring convenience.
+
+### For D6: the port and the container resources as fields now
+
+Rejected on 2026-11-11 (open decision 7a). No known need, and each field is API surface, a README
+row and a hash input. Under `spec.metrics` either can be added later without a breaking change.
+
+### For D10: the table exactly as built in 2026-10
+
+Rejected on 2026-11-11 (open decision 7d). It would have kept three gauges whose names promised a
+counter or a summary — `rate()` over `mosquitto_clients_total` returns nonsense — and made the
+`_total` rule one with exceptions. Its one advantage, no rename for whoever scrapes since
+`v0.2.0`, was smallest now, before any production cluster ran the exporter.
+
+### For D10: every numeric topic as a gauge named after its path
+
+Rejected on 2026-11-11 (open decision 7d). No table to maintain, but no counter semantics, and the
+series set changes whenever the broker adds a topic.
 
 ### Depend on `sapcc/mosquitto-exporter`
 
