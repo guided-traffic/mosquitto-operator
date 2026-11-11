@@ -97,7 +97,7 @@ the detail.
 
 | ADR | Decision | State |
 |---|---|---|
-| [0002](0002-the-metrics-exporter-is-written-here.md) | The broker metrics exporter is written in this repository, and logs in as a reserved user | Implemented — D1–D9, built 2026-10-05; D4, D6 and D7 on the recommended answers of open decisions 7a–7d in the plan |
+| [0002](0002-the-metrics-exporter-is-written-here.md) | The broker metrics exporter is written in this repository, and logs in as a reserved user | Implemented — D1–D9 built 2026-10-05; amended 2026-11-11: the gate (D6), the port and the TLS pin (D3) decided, D10 the series names, three of them renamed |
 
 ### Build, CI and verification
 

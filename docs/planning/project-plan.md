@@ -14,7 +14,7 @@ and becomes a record when it is answered. A phase that is done is deleted from t
 ([ADR 0011](../adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md)
 D10, D12). The only tickets are embargoed security findings, which a tracked file cannot carry.
 
-Written 2026-10-05, last brought up to date on 2026-11-09. Phases, not dates; the order is the
+Written 2026-10-05, last brought up to date on 2026-11-11. Phases, not dates; the order is the
 order of the work, and each phase is releasable on its own.
 
 ## Working agreements
@@ -67,6 +67,10 @@ Built on 2026-10-05, released in `v0.2.0` on 2026-10-06, and deleted here:
   ([ADR 0001](../adr/0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10).
 
 Phases 1, 2 and 4 were closed on 2026-11-08, after their last two open decisions were answered.
+Phase 7, the exporter, was built on 2026-10-05 and closed on 2026-11-11, when its four open
+decisions were answered: the gate, the port, the TLS pin and the series names, three of which were
+renamed ([ADR 0002](../adr/0002-the-metrics-exporter-is-written-here.md) D3, D6 and D10 as amended;
+[metrics.md](../operations/metrics.md)).
 The upkeep finding that Renovate could not look up the Trivy action was answered and built on
 2026-11-09: Trivy runs unpinned from `aquasec/trivy:latest`
 ([ADR 0005](../adr/0005-fork-pull-requests-execute-on-the-self-hosted-runners.md) D9).
@@ -85,67 +89,6 @@ this operator running anywhere but CI.
 - **Done when** both clients run against it, a password rotated in Git reaches both without a
   manual step, and what was run and observed is written into
   [docs/operations/](../operations/README.md).
-
-## Phase 7 — The exporter
-
-**Built 2026-10-05**: `cmd/exporter` and `internal/exporter`, the `exporter` container, the
-reserved user `mko-exporter` with its generated password in `<name>-auth`, the stated
-`sys_interval` and `max_packet_size`, and the tests of every tier — the E2E scenario passed on Kind
-(`TestE2E_Metrics_TheExporterServesTheBrokersSysTree`). ADR 0002 left four points open; each is
-built on its recommended answer, and each answer becomes an amendment of ADR 0002:
-
-### 7a — What does the gate look like?
-
-ADR 0002 D6 fixes the gate (absent means no container) and deliberately not the field.
-
-- **A — `spec.metrics.enabled: bool`, default `false`.** *(Recommended, and built.)* Reads as what
-  it does in a Git diff, and leaves room for more fields under `metrics` without a breaking
-  change.
-- **B — the presence of `spec.metrics: {}` turns it on.** One line shorter; an empty object as a
-  switch is easy to misread and impossible to turn off without deleting the key.
-- **C — A with the port and the container resources as fields now.** More API than any known need.
-
-**Answer:** _open_
-
-### 7b — How does a scraper reach the exporter, and does it authenticate?
-
-- **A — a container port `9234` named `metrics`, on no Service, plain HTTP without
-  authentication.** *(Recommended, and built.)* Per-pod is what `$SYS` is (D3); a `PodMonitor` or
-  pod discovery finds it; no Service puts the endpoint behind a name. The endpoint is open to the
-  cluster network ([H-20](../security/trust-boundaries.md#h-20)).
-- **B — A, plus a `metrics` port on the headless Service** for `ServiceMonitor` users. A second
-  way to reach the same endpoint, and an object change for every broker.
-- **C — authentication with `TokenReview`/`SubjectAccessReview`.** Needs API access and a
-  ServiceAccount token in the broker pod, which the pod deliberately has not (ADR 0002 D4) — the
-  same reason the operator's own endpoint is open (D8).
-
-**Answer:** _open_
-
-### 7c — Under TLS, what does the exporter verify?
-
-The only listener is `8883`, and its certificate names the broker's DNS names, not `127.0.0.1`.
-
-- **A — accept exactly the certificate mounted at `/mosquitto/tls/tls.crt`, re-read on every
-  handshake.** *(Recommended, and built.)* Works for every Secret shape, a hand-made one without
-  `ca.crt` included, and still proves the peer holds the broker's key; the connection never
-  leaves the pod.
-- **B — verify the chain against `ca.crt` and a DNS name from the certificate.** Needs a `ca.crt`
-  the `kubectl create secret tls` path does not write.
-- **C — a second, plain listener on `127.0.0.1` for the exporter.** Changes the generated
-  configuration and breaks "one listener" for a monitoring convenience.
-
-**Answer:** _open_
-
-### 7d — What are the series called?
-
-- **A — a fixed table of the measured topics, `mosquitto_` names, counters with `_total` for what
-  counts since the broker started, the load averages as one series per kind with a `window`
-  label, the version as `mosquitto_version_info{version}`.** *(Recommended, and built.)* Unknown
-  topics are skipped, missing ones absent (D1's consequence).
-- **B — every numeric topic as a gauge named after its path.** No table to maintain; no counter
-  semantics, and the names change whenever the broker adds a topic.
-
-**Answer:** _open_
 
 ## Phase 8 — High availability
 
