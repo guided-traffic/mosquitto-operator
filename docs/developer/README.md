@@ -69,8 +69,8 @@ change.
   every pull request and before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)).
   It was first observed passing on 2026-10-05. Since 2026-11-12 the operator also runs on the
   owner's production cluster (Helm through Flux, `secretAccess.mode: namespaces`,
-  `secretSecurity: true`); what was observed there is in phase 6 of
-  [the plan](../planning/project-plan.md). No test runs there.
+  `secretSecurity: true`); what was observed there is in
+  [migration.md](../operations/migration.md). No test runs there.
 - **English only**, in code, comments, commits and documentation.
 
 | Page | Read it when |

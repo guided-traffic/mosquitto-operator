@@ -32,8 +32,12 @@ applied before its broker or its Secret converges through the watches —
 and the other users alone — `TestReconcile_EveryUserReason`), and R6 for every container now in a
 broker pod (D4). R3 for a renewed certificate is built as well
 ([ADR 0001](0001-the-operator-consumes-tls-material-it-never-issues-it.md) D10: a cert-manager
-renewal reaches a fresh handshake with no restart, observed on Kind). **Not built:** D1's
-migration, which is the owner's to run. The work is ordered in [the project plan](../planning/project-plan.md).
+renewal reaches a fresh handshake with no restart, observed on Kind). ~~**Not built:** D1's
+migration, which is the owner's to run.~~ *(Done 2026-11-12:)* D1's migration ran: the Home
+Assistant broker runs from Git through Flux on the owner's production cluster, every client moved
+onto it one at a time, the old broker is removed, and a password rotated in Git reached broker and
+client without a manual step — [migration.md](../operations/migration.md). What is left is D3's
+high availability, last; the work is ordered in [the project plan](../planning/project-plan.md).
 
 ## Context
 
@@ -141,8 +145,8 @@ what it references. A failure of one user never makes the broker or another user
 - ~~Kind is the only cluster this operator has been observed on (the E2E tier, first observed
   2026-10-05); D1's migration is the first production observation.~~ *(Updated 2026-11-12:)* D1's
   migration ran on 2026-11-12: the Home Assistant broker runs from Git through Flux on the
-  owner's production cluster, every online client moved onto it; the plan's phase 6 records what
-  was observed and what is left.
+  owner's production cluster, every client moved onto it; what was observed is in
+  [migration.md](../operations/migration.md).
 
 ## References
 

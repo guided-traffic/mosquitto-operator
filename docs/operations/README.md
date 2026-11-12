@@ -12,6 +12,7 @@ restates the reference tables, which live in the README and nowhere else.
 | [users.md](users.md) | You are giving clients access to a broker. It covers the `MosquittoUser` and its Secret, what the operator renders from them and how the broker picks a change up without a restart, how long a new user, a rotated password or a revocation takes, which Secrets the operator reads, and who can reach the broker at all |
 | [metrics.md](metrics.md) | You want the brokers' statistics in Prometheus. It covers turning the exporter on, finding the pods to scrape, what the series mean — per broker, absent rather than zero — and what the exporter costs, its open endpoint included |
 | [flux.md](flux.md) | You run brokers and users from Git with Flux. It covers why the health checks need `healthCheckExprs`, how a refused object holds back the next commit, and what a password rotated or a user deleted in Git does — observed on Kind with Flux |
+| [migration.md](migration.md) | You are moving the clients of a broker you already run onto this operator. It covers running the new broker beside the old one, one user per client and per device, ACLs taken from the traffic, a relay that keeps both brokers in sync and what it does on a restart, the order to move clients in, and a password rotated from Git — as done and observed on a production cluster |
 | [runtime.md](runtime.md) | You want to know what the operator does when it starts and what one reconcile pass writes or leaves alone. It also covers which `spec` changes restart the broker pods, changing `spec.storage` on a running broker, what `Pending`, `Progressing`, `Ready` and `Failed` mean, the operator's ports and probes, what happens while it is not running, what it logs, and how a renewed certificate reaches a broker |
 
 **What these pages rest on.** Every statement about the operator was read from this repository's
@@ -22,9 +23,9 @@ Helm install path, a rollout and garbage collection have a recorded run behind t
 2026-11-12 one production cluster runs the operator (Kubernetes v1.37.1, Cilium, Rook Ceph RBD;
 Helm through Flux with `secretAccess.mode: namespaces` and `secretSecurity: true`): there the
 install, a broker with persistent storage, users added to a running broker, the exporter scraped
-by Prometheus, and clients speaking MQTT 3.1, 3.1.1 and 5 were observed (phase 6 of
-[the plan](../planning/project-plan.md)). The kustomize path, TLS, an operator upgrade and garbage
-collection were not observed on it. Where a page describes what Kubernetes itself does
+by Prometheus, and clients speaking MQTT 3.1, 3.1.1 and 5 were observed
+([migration.md](migration.md)), and an operator upgrade (`0.2.18` to `0.2.19`) that rolled the
+broker once. The kustomize path, TLS and garbage collection were not observed on it. Where a page describes what Kubernetes itself does
 with the objects the operator writes beyond what the suite checks, it says so.
 
 **What the brokers are.** One `Mosquitto` runs independent Mosquitto processes behind one Service.

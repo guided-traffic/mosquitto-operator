@@ -3,8 +3,8 @@
 What runs where, what happens between `main()` and the first reconcile, what one pass does and
 writes, how status is computed, and how a change reaches a running broker. Read against the tree
 on 2026-10-05. Everything described here exists in the code, and the E2E suite runs it on Kind;
-since 2026-11-12 it also runs on one production cluster (phase 6 of
-[the plan](../planning/project-plan.md)). What is read from the code and what was measured is said
+since 2026-11-12 it also runs on one production cluster
+([migration.md](../operations/migration.md)). What is read from the code and what was measured is said
 where it matters. What is not built is listed at the end. The decisions behind the shape are ADRs and
 are linked, not restated.
 

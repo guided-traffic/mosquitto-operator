@@ -69,7 +69,7 @@ the detail.
 | ADR | Decision | State |
 |---|---|---|
 | [0011](0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md) | Documentation has five homes, tickets are work lists that get archived, an open security finding is embargoed, and planning documents are consumed | Implemented |
-| [0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) | The first release is one broker run from Git, and high availability is parked | Partly built — R1, R2, R4, R5, R6 and R3 for users; R3 for certificates and D1's migration not yet |
+| [0012](0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md) | The first release is one broker run from Git, and high availability is parked | Implemented — R1–R6 built 2026-10-05; D1's migration ran 2026-11-12; high availability parked (D3) |
 
 ### Broker workload and configuration
 
