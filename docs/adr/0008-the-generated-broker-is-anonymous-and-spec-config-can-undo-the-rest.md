@@ -44,6 +44,10 @@ could separate them (broker-behaviour.md M31). `TestBuildStatefulSet_Container` 
 connection, and the broker logs every one"); `TestListenerProbeSeesTheBrokerWithoutConnecting` runs
 the rendered command in the pinned image and was observed failing with a connecting probe
 (`logged=11`) and with one that matched any listening port (`other_port=0`).
+Observed on the production broker after release `0.2.19` rolled it (2026-11-12, 15:07 UTC): the
+pod turned ready with the exec probe, all 27 clients reconnected, and in the following 90 seconds
+the log held 15 `New connection` lines, each followed by a client login, and no line from a probe
+(before: 36 probe lines a minute).
 
 D11 and D12 are fulfilled by [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md): credentials are Secret
 references, rendered as the `password-file` and `acl-file` plugins. The measurements these rest
