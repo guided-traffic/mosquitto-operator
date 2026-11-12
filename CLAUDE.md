@@ -9,7 +9,7 @@ Flux, every broker requiring a login, `MosquittoUser` objects with their credent
 Secrets, changes that reach the running broker without a restart, and the metrics exporter
 ([ADR 0012](docs/adr/0012-the-first-release-is-one-broker-run-from-git-and-high-availability-is-parked.md)).
 `v0.1.x` brokers were anonymous. The Home Assistant broker was migrated onto it on 2026-11-12
-(phase 6, closing items left). Left after that: high availability, last.** The work list is
+([docs/operations/migration.md](docs/operations/migration.md)). Left: high availability, last.** The work list is
 [the project plan](docs/planning/project-plan.md).
 
 **One production cluster, since 2026-11-12; everything else is Kind.** The E2E suite runs on a
@@ -17,9 +17,10 @@ Kind cluster per leg on every pull request, and `semantic-release` waits for it
 ([`release.yml`](.github/workflows/release.yml)); it was commented out from 2026-09-01 to
 2026-10-05 and first observed passing on 2026-10-05. Since 2026-11-12 the operator also runs on
 the owner's cluster (Kubernetes v1.37.1, Cilium, Rook Ceph RBD), installed by Flux from the
-published chart `0.2.18` with `secretAccess.mode: namespaces` and `secretSecurity: true`, with one
-broker and 30 users; what was observed there is in phase 6 of the plan. Not observed on it: the
-kustomize path, TLS, an operator upgrade rolling the broker, garbage collection. Where that
+published chart (`0.2.18`, upgraded to `0.2.19` the same day, which rolled the broker once) with
+`secretAccess.mode: namespaces` and `secretSecurity: true`, with one broker and 29 users; what was
+observed there is in [docs/operations/migration.md](docs/operations/migration.md). Not observed
+on it: the kustomize path, TLS, garbage collection. Where that
 matters, the ADRs say so in their own `Status` sections.
 
 ## Language policy
