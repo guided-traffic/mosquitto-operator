@@ -114,9 +114,10 @@ this operator running anywhere but CI.
   restarted broker replays its persisted retained values to the other side, which can revert a
   value changed during the restart. Hence Home Assistant and AppDaemon move first, so a broker
   roll by an operator release can only stale the old broker. Nothing in this operator changes.
-- **Left:** two devices that were offline; then the relay and the old broker off (the owner's
-  decision); a password rotated in Git, observed reaching the broker; and what was run and
-  observed written into [docs/operations/](../operations/README.md) as a page of its own.
+- *(Done 2026-11-12.)* The two devices that were offline moved when they came back; the relay was
+  switched off and the old broker removed, after no client but the relay used it.
+- **Left:** a password rotated in Git, observed reaching the broker; and what was run and observed
+  written into [docs/operations/](../operations/README.md) as a page of its own.
 - **Done when** every client runs against it, a password rotated in Git reaches the broker without
   a manual step (and the in-cluster clients that mount their Secret; a device keeps its password
   in its own settings), and what was run and observed is written into
