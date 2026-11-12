@@ -42,7 +42,8 @@ flowchart LR
 
 Every claim in this document was verified by reading this repository. The E2E suite in
 [`test/e2e/`](test/e2e/) exercises the provisioning path on a Kind cluster on every pull request
-and before every release; Kind is the only cluster this operator has been observed on. Commands
+and before every release; besides Kind, the operator has run on one production cluster since
+2026-11-12, installed from the published chart through Flux. Commands
 below are transcribed from the code and from that suite; the ones that need no cluster were
 executed while writing this file.
 

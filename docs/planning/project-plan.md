@@ -14,7 +14,7 @@ and becomes a record when it is answered. A phase that is done is deleted from t
 ([ADR 0011](../adr/0011-documentation-has-five-homes-and-tickets-are-work-lists-that-get-archived.md)
 D10, D12). The only tickets are embargoed security findings, which a tracked file cannot carry.
 
-Written 2026-10-05, last brought up to date on 2026-11-11. Phases, not dates; the order is the
+Written 2026-10-05, last brought up to date on 2026-11-12. Phases, not dates; the order is the
 order of the work, and each phase is releasable on its own.
 
 ## Working agreements
@@ -85,9 +85,41 @@ this operator running anywhere but CI.
 - *(Built 2026-10-05: the README Flux example, step 4 of the fast start, run on Kind with Flux
   `v2.8.6` from an `OCIRepository` — [flux.md](../operations/flux.md). Learned there: plain
   `healthChecks` pass before `Ready`, so the example uses `healthCheckExprs` with `wait: true`.)*
-- The owner migrates Home Assistant and Zigbee2MQTT onto the new broker through Flux.
-- **Done when** both clients run against it, a password rotated in Git reaches both without a
-  manual step, and what was run and observed is written into
+- *(Inventory 2026-11-12, in the owner's Flux repository.)* The existing broker serves Home
+  Assistant, AppDaemon, two fleets of devices (ESPresense nodes, Tasmota plugs), an ebusd heating
+  bridge and, through a bridge, two SBFspot pollers; there is no Zigbee2MQTT. Two findings bear on
+  this operator, neither needs a change of it:
+  - **Each fleet shares one login.** Under `use_username_as_clientid` (ADR 0008 D14) the devices of
+    a fleet would take each other's session in a loop. Since every client gets new credentials
+    anyway, every device gets a `MosquittoUser` of its own; D14 stays as decided.
+  - **The devices need a LAN address.** The operator renders no LoadBalancer (ADR 0008 D16); the
+    owner's repository carries its own `LoadBalancer` Service against the selector labels.
+- *(Built and run 2026-11-12.)* The operator installed by Flux from the published chart `0.2.18`
+  with `secretAccess.mode: namespaces` and `secretSecurity: true`; a second broker beside the
+  existing one, with one user and one SOPS Secret per client and ACLs derived from the observed
+  traffic; a script in the owner's repository that moves one client at a time and waits for its
+  login. Every client that was online moved the same day — Home Assistant, AppDaemon, eleven
+  ESPresense nodes, nine Tasmota plugs, an ebusd bridge on MQTT 3.1, two SBFspot pollers and an
+  exporter — and the broker's own exporter is scraped by Prometheus. Observed on the way:
+  - **A user added to a running broker is refused for about 90 seconds** — the kubelet's Secret
+    refresh plus the reloader, as [users.md](../operations/users.md) states; clients retry.
+  - **Through the relay, the old broker's will can overtake a moved device:** a device that reboots
+    without DISCONNECT is back on the new broker before the old one fires its retained `offline`,
+    which the relay then copies over. Restarting the device once more after its old session is gone
+    fixes it. A property of running two brokers through a relay, not of this operator.
+- *(Decided by the owner 2026-11-12, recorded in the owner's repository.)* A temporary relay — a
+  plain Mosquitto with two `topic # both` bridges, outside this operator — keeps both brokers in
+  sync while clients move one at a time. Measured locally on 2026-11-12 with the pinned image:
+  every message arrived exactly once on both sides, retained values in both directions; a
+  restarted broker replays its persisted retained values to the other side, which can revert a
+  value changed during the restart. Hence Home Assistant and AppDaemon move first, so a broker
+  roll by an operator release can only stale the old broker. Nothing in this operator changes.
+- **Left:** two devices that were offline; then the relay and the old broker off (the owner's
+  decision); a password rotated in Git, observed reaching the broker; and what was run and
+  observed written into [docs/operations/](../operations/README.md) as a page of its own.
+- **Done when** every client runs against it, a password rotated in Git reaches the broker without
+  a manual step (and the in-cluster clients that mount their Secret; a device keeps its password
+  in its own settings), and what was run and observed is written into
   [docs/operations/](../operations/README.md).
 
 ## Phase 8 — High availability

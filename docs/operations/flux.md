@@ -10,9 +10,18 @@ Secrets are [users.md](users.md).
 `kustomize-controller` only), the operator installed by Helm from this repository, and SOPS with
 an age key. The source was an `OCIRepository` pushed with `flux push artifact` to a registry on
 the Kind network, not a `GitRepository`; everything after the source — decryption, apply, prune,
-health checks — is the same `Kustomization`. It has not run on a production cluster, and no
-client application took part: the clients were `mosquitto_pub` in the broker pod, so the example's
-NetworkPolicy was applied but its effect was not tested.
+health checks — is the same `Kustomization`. No client application took part: the clients were
+`mosquitto_pub` in the broker pod, so the example's NetworkPolicy was applied but its effect was
+not tested there.
+
+**On a production cluster (2026-11-12):** the same pattern from a `GitRepository` — the operator
+from the published chart through a `HelmRelease`, then a `Kustomization` with SOPS decryption,
+`dependsOn` on the operator's `Kustomization` and the `healthCheckExprs` below, carrying one
+broker, its users and their Secrets, a NetworkPolicy and a `LoadBalancer` Service of the owner's.
+It turned `Ready` with the broker; a second `Kustomization` that added users to the running broker
+did too, and those users were refused for about 90 seconds until the kubelet refreshed the mounted
+Secret and the reloader reloaded the broker — expect `not authorised` in a client's log in that
+window.
 
 ## Health checks need `healthCheckExprs`
 

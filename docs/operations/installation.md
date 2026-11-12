@@ -14,8 +14,10 @@ in other ways, and the differences are listed below.
 Reference material lives in the README: the object names each path produces are in
 [README.md, Operator install](../../README.md#operator-install), and the chart values and the
 flags are in [Helm chart values](../../README.md#helm-chart-values) and
-[Operator flags](../../README.md#operator-flags). Neither path has been applied to a real cluster
-from this repository ([why](README.md)).
+[Operator flags](../../README.md#operator-flags). The Helm path, from the published chart, runs on
+one production cluster since 2026-11-12 with `secretAccess.mode: namespaces` and
+`secretSecurity: true`; the kustomize path has not been applied to a real cluster
+([why](README.md)).
 
 **Install exactly one operator per cluster.** The operator watches every namespace, and nothing
 in [`cmd/main.go`](../../cmd/main.go) narrows it to a list. It takes its leader-election Lease in
