@@ -158,8 +158,8 @@ graph.
 | `TestE2E_PodMetadata_ReachesAndLeavesThePods` | [`pod_metadata_test.go`](../../test/e2e/pod_metadata_test.go) | A label and an annotation of the CR are on the running pod; replacing them rolls the pod, the new key arrives and the removed one is gone |
 | `TestE2E_ConfigCheck_StopsATypoBeforeTheBroker` | [`config_check_test.go`](../../test/e2e/config_check_test.go) | A misspelled `spec.config` directive fails the `config-check` init container, the broker container never runs, and the init container's log carries `Error: Unknown configuration variable '…'.` and `Error found at /mosquitto/config/mosquitto.conf:<line>.`, the line read back from the ConfigMap |
 
-Why the reachability check exists: the readiness probe is a TCP connect, so a broker that accepts
-connections and rejects every CONNECT still reports Ready. Only a real MQTT session says otherwise.
+Why the reachability check exists: the readiness probe only checks the listener is in LISTEN (ADR
+0008 D17), so a broker that accepts connections and rejects every CONNECT still reports Ready. Only a real MQTT session says otherwise.
 
 | Fixture | Where | What it gives you |
 |---|---|---|
@@ -217,10 +217,17 @@ job does preload it, reading the tag out of `test/testimages/images.go`.
 `imagetools`, Docker and no cluster.
 
 - `TestImageProvidesEveryExecutedTool` runs `docker run --rm --entrypoint sh <pin> -c …` once and
-  checks with `command -v` that the image provides the broker binary — **read from the builder's
-  container command**, not written out again — and `clientTools` (`mosquitto_pub`,
-  `mosquitto_sub`, which the E2E suite executes). stdout and stderr are kept apart because a cold
-  pull writes its progress to stderr.
+  checks with `command -v` that the image provides the broker binary and the probe tool — **both
+  read from the builder's container**, not written out again — and `clientTools`
+  (`mosquitto_pub`, `mosquitto_sub`, which the E2E suite executes). stdout and stderr are kept apart
+  because a cold pull writes its progress to stderr.
+- `TestListenerProbeSeesTheBrokerWithoutConnecting`
+  ([`probe_test.go`](../../test/imagetools/probe_test.go)) starts the broker as `1883:1883` and runs
+  the readiness command the builder renders: it passes while the broker listens, leaves no `New
+  connection` line in the broker log after eleven runs, and fails for a port nobody listens on and
+  once the broker stopped ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+  D17, broker-behaviour.md M31). Observed failing with a connecting probe (`logged=11`) and with one
+  that matched any listening port (`other_port=0`).
 - `TestPinnedImageIsTheOperatorDefault` asserts `builder.DefaultImage == testimages.MosquittoImage`,
   because otherwise this tier would check an image no broker runs
   ([ADR 0007](../adr/0007-one-broker-image-pin-and-why-not-the-openssl-tag.md)).

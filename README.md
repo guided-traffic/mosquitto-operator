@@ -294,8 +294,9 @@ NAME          BROKER   USERNAME      READY   AGE
 zigbee2mqtt   broker   zigbee2mqtt   True    30s
 ```
 
-`PHASE=Ready` means the StatefulSet reports every requested pod ready — a TCP connect, not an MQTT
-session. To prove the broker speaks MQTT and checks the login, publish a retained message as the
+`PHASE=Ready` means the StatefulSet reports every requested pod ready — its listener's socket is in
+LISTEN (read from `/proc/net/tcp`, no connection is opened, so the probes leave no line in the broker
+log), not an MQTT session. To prove the broker speaks MQTT and checks the login, publish a retained message as the
 user and read it back with the client tools that ship in the broker image (this is what
 [`test/e2e/mosquitto_test.go`](test/e2e/mosquitto_test.go) does):
 

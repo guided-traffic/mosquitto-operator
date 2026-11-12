@@ -9,7 +9,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/utils/ptr"
 
 	mkov1 "github.com/guided-traffic/mosquitto-operator/api/v1"
@@ -436,6 +435,27 @@ func buildExporterContainer(m *mkov1.Mosquitto, opts PodOptions) corev1.Containe
 	}
 }
 
+// ProbeTool is the binary the broker's probes run inside the broker image
+// (test/imagetools checks the pinned image has it).
+const ProbeTool = "/bin/grep"
+
+// ListenerProbeCommand returns the readiness and liveness command of the broker
+// container: it succeeds while a socket on port is in LISTEN, read from
+// /proc/net/tcp and tcp6 of the pod's network namespace, and opens no
+// connection, so the broker logs nothing (ADR 0008 D17, M31).
+//
+// A /proc/net/tcp line reads "sl local rem st ...", addresses as hex ip:port; a
+// listening socket has the remote address all zeros and state 0A. Matching the
+// remote port 0000 and the state keeps an established connection on the same
+// local port from counting. -s silences a missing tcp6 on a kernel without
+// IPv6; with -q a match in either file exits 0, and no match exits non-zero
+// (measured with the pinned image, M31).
+func ListenerProbeCommand(port int32) []string {
+	return []string{
+		ProbeTool, "-qsE", fmt.Sprintf(":%04X [0-9A-F]+:0000 0A ", port), "/proc/net/tcp", "/proc/net/tcp6",
+	}
+}
+
 // buildBrokerContainer constructs the broker container of a broker pod.
 func buildBrokerContainer(m *mkov1.Mosquitto) corev1.Container {
 	volumeMounts := []corev1.VolumeMount{
@@ -451,7 +471,7 @@ func buildBrokerContainer(m *mkov1.Mosquitto) corev1.Container {
 
 	port := BrokerPort(m)
 	probeHandler := corev1.ProbeHandler{
-		TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromInt32(port)},
+		Exec: &corev1.ExecAction{Command: ListenerProbeCommand(port)},
 	}
 
 	return corev1.Container{
@@ -467,10 +487,12 @@ func buildBrokerContainer(m *mkov1.Mosquitto) corev1.Container {
 			Protocol:      corev1.ProtocolTCP,
 		}},
 		VolumeMounts: volumeMounts,
-		// A TCP probe is the whole readiness statement the operator can make
-		// without speaking MQTT: the listener accepts connections. It covers both
-		// the plain and the TLS listener, because a TLS handshake starts with the
-		// same accept.
+		// The probes state what a TCP connect stated before, without making one:
+		// the listener's socket is in LISTEN, so the kernel accepts connections on
+		// it (ADR 0008 D17). A TCP probe left two log lines per check in the broker
+		// log, indistinguishable from client logins by log level (M31). It covers
+		// the plain and the TLS listener alike, because both are the same socket
+		// state on another port.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler:        probeHandler,
 			InitialDelaySeconds: 5,

@@ -100,8 +100,8 @@ A switch that changes the operator's flags and its RBAC together — `secretSecu
 4. Address the API the way a user does: the literals `mko.gtrfc.com/v1`, `Mosquitto`,
    `mosquittoes`, the label keys, the ports. **Do not import `internal/`.** Use
    `testimages.Default()` for the broker image so `E2E_MOSQUITTO_IMAGE` keeps working.
-5. Assert something only a real cluster can answer. The readiness probe is a TCP connect, so the
-   existing suite publishes and subscribes with `mosquitto_pub` / `mosquitto_sub` inside the pod.
+5. Assert something only a real cluster can answer. The readiness probe only checks the listener is
+   in LISTEN (ADR 0008 D17), so the existing suite publishes and subscribes with `mosquitto_pub` / `mosquitto_sub` inside the pod.
    If you rely on another binary from the broker image, add it to `clientTools` in
    [`test/imagetools/image_tools_test.go`](../../test/imagetools/image_tools_test.go).
 6. Never assert on `secret.Data` — a red run would print a private key into the job log. Assert on

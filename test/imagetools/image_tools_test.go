@@ -132,7 +132,7 @@ func TestImageProvidesTheFilePlugins(t *testing.T) {
 func TestImageProvidesEveryExecutedTool(t *testing.T) {
 	t.Parallel()
 
-	required := append([]string{brokerCommand(t)[0]}, clientTools...)
+	required := append([]string{brokerCommand(t)[0], brokerProbeCommand(t)[0]}, clientTools...)
 
 	// One `command -v` per tool, reported in a single run, so a missing image is
 	// one pull rather than one per tool. `command -v` accepts an absolute path
