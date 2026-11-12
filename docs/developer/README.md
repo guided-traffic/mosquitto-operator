@@ -64,10 +64,13 @@ change.
   ([testing.md](testing.md)).
 - **A check is not a check until it has failed on purpose**
   ([ADR 0010](../adr/0010-a-check-is-not-a-check-until-it-has-failed-on-purpose.md)).
-- **The only cluster this operator runs on is Kind.** The unit, integration, image-tools and
-  RBAC-parity tiers need none; the E2E tier creates a Kind cluster per leg, on every pull request
-  and before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)). It was first
-  observed passing on 2026-10-05; nothing has been observed on a production cluster.
+- **The tests run on Kind; one production cluster runs the operator.** The unit, integration,
+  image-tools and RBAC-parity tiers need none; the E2E tier creates a Kind cluster per leg, on
+  every pull request and before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)).
+  It was first observed passing on 2026-10-05. Since 2026-11-12 the operator also runs on the
+  owner's production cluster (Helm through Flux, `secretAccess.mode: namespaces`,
+  `secretSecurity: true`); what was observed there is in phase 6 of
+  [the plan](../planning/project-plan.md). No test runs there.
 - **English only**, in code, comments, commits and documentation.
 
 | Page | Read it when |

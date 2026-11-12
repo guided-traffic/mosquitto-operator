@@ -3,8 +3,9 @@
 This page covers what the operator process does from start to stop, what one reconcile pass writes
 and what it leaves alone, which changes reach the running brokers and how, what the status says,
 and what the operator answers and logs. Every field and flag named here is listed in
-[README.md, Full reference](../../README.md#-full-reference). Nothing on this page has been
-observed on a real cluster ([why](README.md)).
+[README.md, Full reference](../../README.md#-full-reference). Of this page, only a user added to a
+running broker was observed on a production cluster (2026-11-12, about 90 seconds until the
+broker accepted it); the rest was observed on Kind or read from the code ([why](README.md)).
 
 ## At start
 

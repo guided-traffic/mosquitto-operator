@@ -5,10 +5,10 @@ E2E legs, and the environment variables the suites read. The Make targets themse
 [build-test-lint.md](build-test-lint.md); the CI jobs are [ci-and-release.md](ci-and-release.md).
 Read against the tree on 2026-10-05.
 
-**The only cluster this operator runs on is Kind.** The E2E tier runs on every pull request and
-before every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)) and was first observed
-passing on 2026-10-05, locally with `make e2e-local` on both legs; nothing has been observed on a
-production cluster.
+**The only cluster a test runs on is Kind.** The E2E tier runs on every pull request and before
+every release ([ci-and-release.md](ci-and-release.md#the-e2e-jobs)) and was first observed passing
+on 2026-10-05, locally with `make e2e-local` on both legs. The operator has run on one production
+cluster since 2026-11-12 (phase 6 of [the plan](../planning/project-plan.md)); no tier runs there.
 
 ## The tiers
 

@@ -42,8 +42,9 @@ and the rendered CRD [`config/crd/bases/mko.gtrfc.com_mosquittoes.yaml`](../../c
 `test/testimages/images.go`; and `docker manifest inspect` plus `docker run` against the upstream
 images (see Context for the numbers, and Residual risks for what the numbers do and do not mean).
 
-**Not verified:** no broker has been observed running on a production cluster from this
-repository; the E2E suite runs the pinned image on Kind (first observed 2026-10-05,
+**Not verified:** ~~no broker has been observed running on a production cluster from this
+repository~~ *(updated 2026-11-12: one broker on the pinned image runs on a production cluster,
+with clients speaking MQTT 3.1, 3.1.1 and 5)*; the E2E suite runs the pinned image on Kind (first observed 2026-10-05,
 [ADR 0004](0004-two-e2e-legs-and-no-version-matrix.md) `Status`). The
 image evidence below says what is *in* the image; it says nothing about how `mosquitto 2.1.2`
 behaves under load, and the 2.1 deprecation and `max_packet_size` claims come from upstream

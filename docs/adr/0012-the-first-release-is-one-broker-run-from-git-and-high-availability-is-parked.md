@@ -138,8 +138,11 @@ what it references. A failure of one user never makes the broker or another user
   the broker across `shareProcessNamespace` under PodSecurity `restricted`.~~ *(Measured 2026-10-05
   on Kind, [broker-behaviour.md](../developer/broker-behaviour.md) M22: it can; a container under
   another uid gets `Operation not permitted`.)*
-- Kind is the only cluster this operator has been observed on (the E2E tier, first observed
-  2026-10-05); D1's migration is the first production observation.
+- ~~Kind is the only cluster this operator has been observed on (the E2E tier, first observed
+  2026-10-05); D1's migration is the first production observation.~~ *(Updated 2026-11-12:)* D1's
+  migration ran on 2026-11-12: the Home Assistant broker runs from Git through Flux on the
+  owner's production cluster, every online client moved onto it; the plan's phase 6 records what
+  was observed and what is left.
 
 ## References
 

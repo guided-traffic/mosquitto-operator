@@ -42,8 +42,11 @@ targets in [`Makefile`](../../Makefile); and the `generated-manifests` job in
 both paths and collapsing them with the same `(kind, apiGroup, resource)` key the test uses,
 not by transcribing the YAML by eye.
 
-**Not verified.** Neither install path has ever been applied to a real cluster from this
-repository — no such run is recorded anywhere in the tree. The test therefore proves the two
+**Not verified.** ~~Neither install path has ever been applied to a real cluster from this
+repository — no such run is recorded anywhere in the tree.~~ *(Updated 2026-11-12: the Helm path
+runs on one production cluster with `secretAccess.mode: namespaces` — its grant was sufficient for
+one broker and its users there; the kustomize path and mode `all` have still not run on a real
+cluster.)* The test therefore proves the two
 paths are *equal*, and nothing here proves either one is *sufficient*: an operator that 403s at
 runtime would 403 identically on both. The pre-fix state of the defect in the Context is also
 not recoverable from git history — the repository has two commits and the corrected files are

@@ -17,10 +17,14 @@ restates the reference tables, which live in the README and nowhere else.
 **What these pages rest on.** Every statement about the operator was read from this repository's
 code, manifests and tests. The E2E suite in [`test/e2e/`](../../test/e2e/) installs the chart into
 a Kind cluster, runs brokers, speaks MQTT to them and watches their objects collected; it runs on
-every pull request and before every release, and was first observed passing on 2026-10-05. Kind is
-the only cluster any of it has run on: the Helm install path, a rollout and garbage collection have
-a recorded run behind them there, the kustomize path and every production-cluster property
-(CNI, storage driver, admission chain) do not. Where a page describes what Kubernetes itself does
+every pull request and before every release, and was first observed passing on 2026-10-05. The
+Helm install path, a rollout and garbage collection have a recorded run behind them there. Since
+2026-11-12 one production cluster runs the operator (Kubernetes v1.37.1, Cilium, Rook Ceph RBD;
+Helm through Flux with `secretAccess.mode: namespaces` and `secretSecurity: true`): there the
+install, a broker with persistent storage, users added to a running broker, the exporter scraped
+by Prometheus, and clients speaking MQTT 3.1, 3.1.1 and 5 were observed (phase 6 of
+[the plan](../planning/project-plan.md)). The kustomize path, TLS, an operator upgrade and garbage
+collection were not observed on it. Where a page describes what Kubernetes itself does
 with the objects the operator writes beyond what the suite checks, it says so.
 
 **What the brokers are.** One `Mosquitto` runs independent Mosquitto processes behind one Service.
