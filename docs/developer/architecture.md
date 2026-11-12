@@ -239,7 +239,8 @@ is written by `persistUserStatus` in the same pass, only when it changed.
 | a refusal of `refusePass`, before any write: the namespace grant, the `spec.config` allowlist, the TLS Secret's consent | `Failed` | `False` | `NamespaceNotGranted`, `ConfigDirectiveRefused`, `SecretNotFound` / `SecretNotConsumable` | names the setting, the line, or the Secret and the label |
 
 `readyReplicas` mirrors the StatefulSet's `status.readyReplicas`, which counts pods whose
-readiness probe passes — a TCP connect to the listener port, so "Ready" means "accepts TCP", not
+readiness probe passes — the listener's socket in LISTEN, read from `/proc/net/tcp` and `tcp6` by
+`ListenerProbeCommand` without connecting (ADR 0008 D17), so "Ready" means "accepts TCP", not
 "speaks MQTT". `Failed` describes the operator, not the brokers: pods that were already running
 keep running. `statusUnchanged` compares phase, `readyReplicas`, `observedGeneration`, `users` and
 the conditions with `reflect.DeepEqual`; because `meta.SetStatusCondition` keeps

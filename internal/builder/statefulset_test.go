@@ -57,6 +57,21 @@ func podVolume(spec corev1.PodSpec, name string) *corev1.Volume {
 	return nil
 }
 
+// assertListenerProbe: the broker's probes read the listening socket from
+// /proc/net/tcp and tcp6 and never connect to it, so a probe writes no line into
+// the broker log (ADR 0008 D17, broker-behaviour.md M31). portHex is the
+// listener port as /proc prints it: 075B for 1883, 22B3 for 8883.
+func assertListenerProbe(t *testing.T, probe *corev1.Probe, portHex string) {
+	t.Helper()
+	require.NotNil(t, probe)
+	assert.Nil(t, probe.TCPSocket, "a TCP probe opens a connection, and the broker logs every one")
+	assert.Nil(t, probe.HTTPGet)
+	require.NotNil(t, probe.Exec, "the probe reads the socket table instead of connecting")
+	assert.Equal(t, []string{
+		"/bin/grep", "-qsE", ":" + portHex + " [0-9A-F]+:0000 0A ", "/proc/net/tcp", "/proc/net/tcp6",
+	}, probe.Exec.Command)
+}
+
 func TestResolveImage(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -117,11 +132,8 @@ func TestBuildStatefulSet_Container(t *testing.T) {
 	assert.Equal(t, MQTTPortName, container.Ports[0].Name)
 	assert.Equal(t, MQTTPort, container.Ports[0].ContainerPort)
 
-	require.NotNil(t, container.ReadinessProbe)
-	require.NotNil(t, container.ReadinessProbe.TCPSocket)
-	assert.Equal(t, MQTTPort, container.ReadinessProbe.TCPSocket.Port.IntVal)
-	require.NotNil(t, container.LivenessProbe)
-	assert.Equal(t, MQTTPort, container.LivenessProbe.TCPSocket.Port.IntVal)
+	assertListenerProbe(t, container.ReadinessProbe, "075B")
+	assertListenerProbe(t, container.LivenessProbe, "075B")
 
 	require.NotNil(t, container.SecurityContext)
 	assert.Equal(t, ptr.To(false), container.SecurityContext.AllowPrivilegeEscalation)
@@ -279,7 +291,8 @@ func TestBuildStatefulSet_TLSOn(t *testing.T) {
 
 	assert.Equal(t, MQTTSPort, spec.Containers[0].Ports[0].ContainerPort)
 	assert.Equal(t, MQTTSPortName, spec.Containers[0].Ports[0].Name)
-	assert.Equal(t, MQTTSPort, spec.Containers[0].ReadinessProbe.TCPSocket.Port.IntVal)
+	assertListenerProbe(t, spec.Containers[0].ReadinessProbe, "22B3")
+	assertListenerProbe(t, spec.Containers[0].LivenessProbe, "22B3")
 
 	// A SIGHUP reloads the certificate too, so the reloader reads the same
 	// mount and checks the pair before it signals (ADR 0001 D10, M12).

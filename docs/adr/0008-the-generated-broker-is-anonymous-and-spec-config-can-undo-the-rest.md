@@ -35,6 +35,16 @@ listener is refused while the broker keeps serving. The pinned image's `--test-c
 generated file of both shapes with every allowed directive appended
 (`TestImageAcceptsTheGeneratedConfiguration`).
 
+**Amended 2026-11-12 — D17, decided by the owner and built the same day.** The broker's readiness
+and liveness probes no longer connect to the listener; they read its LISTEN state from
+`/proc/net/tcp` and `tcp6` (`ListenerProbeCommand`). On the first production broker the two TCP
+probes wrote 36 lines a minute into its log, on the same level as client logins, so no log filter
+could separate them (broker-behaviour.md M31). `TestBuildStatefulSet_Container` and
+`TestBuildStatefulSet_TLSOn` were observed failing against the TCP probes ("a TCP probe opens a
+connection, and the broker logs every one"); `TestListenerProbeSeesTheBrokerWithoutConnecting` runs
+the rendered command in the pinned image and was observed failing with a connecting probe
+(`logged=11`) and with one that matched any listening port (`other_port=0`).
+
 D11 and D12 are fulfilled by [ADR 0013](0013-a-client-is-a-mosquittouser-with-its-credentials-in-its-own-secret.md) and [ADR 0014](0014-credentials-reach-the-broker-as-one-rendered-secret-and-a-signal-never-as-a-restart.md): credentials are Secret
 references, rendered as the `password-file` and `acl-file` plugins. The measurements these rest
 on — M13 to M17 — are in [broker-behaviour.md](../developer/broker-behaviour.md); they were taken on 2026-10-05 against the pinned image and
@@ -64,7 +74,8 @@ Verified by reading, on 2026-09-01:
   `TestIntegration_TLS_MountsTheSecretAndMovesTheListener` and
   `TestIntegration_TLS_DoesNotWaitForTheSecret`.
 * [`internal/builder/statefulset.go`](../../internal/builder/statefulset.go) — the single container
-  port, the `TCPSocket` readiness and liveness probes, the read-only TLS mount.
+  port, the `TCPSocket` readiness and liveness probes *(exec probes on the socket table since
+  2026-11-12, D17)*, the read-only TLS mount.
 * [`internal/controller/mosquitto_controller.go`](../../internal/controller/mosquitto_controller.go)
   — `SetupWithManager` owns `StatefulSet`, `ConfigMap` and `Service` and **watches no `Secret`**;
   the kubebuilder RBAC markers grant nothing on `secrets`.
@@ -289,6 +300,21 @@ README shows a NetworkPolicy users write themselves against the stable selector 
 (`app.kubernetes.io/instance=<name>`, `app.kubernetes.io/managed-by=mosquitto-operator`), and the
 security documentation records the exposure. The ClusterRole gains no `networkpolicies` rule.
 
+### Group D — the probes look at the listener, they do not connect to it (2026-11-12)
+
+**D17 — The broker's readiness and liveness probes read the listening socket, never connect to
+it.** Both run `ListenerProbeCommand(port)` in the broker container: `/bin/grep -qsE` for the
+listener port in LISTEN state (`0A`, remote address all zeros) in `/proc/net/tcp` and
+`/proc/net/tcp6` of the pod's network namespace — `1883`, or `8883` under `spec.tls`. The
+statement is the one the TCP probe made: the kernel accepts connections on the listener; neither
+probe speaks MQTT, and neither notices a broker whose event loop hangs while its socket stays open.
+What changes is that a probe opens no connection, so it leaves no line in the broker log, where a
+TCP probe left two per check at `notice`, the level of every client login (M31). Timing and
+thresholds stay as they were (readiness every 5 s, three failures; liveness every 10 s, five
+failures). The command runs in the broker image: `/bin/grep` is part of the pinned image's
+busybox, and `make test-image-tools` checks it is there and runs the rendered command against a
+listening broker; an image without it fails both probes and never turns ready.
+
 ## Consequences
 
 * **Every broker this operator ships today is open to anything that can route to it.** With one
@@ -296,9 +322,13 @@ security documentation records the exposure. The ClusterRole gains no `networkpo
   pod in the cluster that has network access to that namespace — and this repository ships no
   NetworkPolicy, on purpose (a policy fitting one cluster's CNI and topology fits few others), so
   the operator provides nothing that narrows it. Network reach is the only boundary.
-* **`status.phase: Ready` is a statement about TCP, not about MQTT.** Both probes are `TCPSocket`.
-  That is what makes D1 preferable to the silent alternative, and it is also a permanent limit on
-  what the phase means.
+* **`status.phase: Ready` is a statement about TCP, not about MQTT.** ~~Both probes are
+  `TCPSocket`.~~ *(Since 2026-11-12, D17:)* Both probes check that the listener's socket is in
+  LISTEN, which is the same statement without a connection. That is what makes D1 preferable to the
+  silent alternative, and it is also a permanent limit on what the phase means.
+* **The probes depend on a tool in the broker image** (D17): `/bin/grep`. The pinned image has it,
+  and `make test-image-tools` fails when a Renovate bump drops it; an image of `spec.image`
+  without it never turns ready.
 * **A user who puts a credential into `spec.config` publishes it twice.** It stays in the CR spec —
   readable by anyone with `get mosquittoes` in the namespace, and in every GitOps diff and backup —
   and `BuildConfigMap` copies the rendered file into the ConfigMap `<name>-config`, readable by
@@ -396,6 +426,29 @@ what makes the single container port and the single Service port honest.
 Not taken, and it is a genuine hardening item rather than a rejected idea. It would force every
 client of every broker to hold issued material this operator does not manage, and there is no field
 in the API to opt into it.
+
+### For D17: keep the TCP probes and check less often
+
+Readiness every 30 s and liveness every 60 s would cut the log lines to a sixth with the smallest
+change, but a dead broker would leave its Services after about 90 s instead of about 15 s and be
+restarted after about five minutes instead of about one. It reduces the noise and keeps it.
+
+### For D17: `connection_messages false` in `spec.config`
+
+Allowed today and needs no release, and it silences the probes completely — together with every
+client login and logout, which sit on the same level (M31). Seeing which client is connected was
+how the first production migration was verified, client by client.
+
+### For D17: filter the probe lines where the logs are collected
+
+No change here, but the filter has to know the probing node's address, which moves with the pod,
+and every log consumer needs its own copy of it.
+
+### For D17: a health endpoint in the `reloader` sidecar
+
+The sidecar shares the process namespace and could report the broker's state over HTTP without
+touching its listener. It would tie the broker's readiness to the health of a second container and
+give the sidecar a port; the exec probe needs neither.
 
 ## Residual risks
 

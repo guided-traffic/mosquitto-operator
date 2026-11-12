@@ -608,10 +608,49 @@ can wait for that line instead of sleeping (`startBroker` in
 redirects into can be missing for the first milliseconds after the fork, so the wait uses
 `grep -s`.
 
+## M31 — A probe that reads `/proc/net/tcp` sees the listener and logs nothing; a TCP connect logs twice at `notice`
+
+*Measured 2026-11-12*, `eclipse-mosquitto:2.1.2-alpine`, run as `1883:1883`, one listener on
+`1883`. What a TCP probe writes, with one `log_type` at a time:
+
+```
+log_type notice   probe : New connection from 127.0.0.1:43329 on port 1883.
+                          Client 127.0.0.1 [127.0.0.1:43329] disconnected: connection closed by client.
+                  client: New connection from 127.0.0.1:36206 on port 1883.
+                          New client connected from 127.0.0.1:36206 as auto-… (p4, c1, k60, u'dev').
+log_type error, warning, information: nothing from either
+connection_messages false (with log_type all): nothing from the probe, and the client's login only
+                          as debug lines (Sending CONNACK, Received PUBLISH, Received DISCONNECT)
+```
+
+So no log filter separates a probe from a client login. On a production broker the two TCP probes
+(readiness every 5 s, liveness every 10 s) wrote 36 such lines a minute, from the node's address.
+
+The socket table instead, after the broker logged `running` (M30):
+
+```
+grep -h ':075B' /proc/net/tcp /proc/net/tcp6
+00000000:075B 00000000:0000 0A                                     # IPv4, LISTEN
+00000000000000000000000000000000:075B 00000000000000000000000000000000:0000 0A   # IPv6, LISTEN
+/bin/grep -qsE ':075B [0-9A-F]+:0000 0A ' /proc/net/tcp /proc/net/tcp6   -> rc=0
+/bin/grep -qsE ':22B3 [0-9A-F]+:0000 0A ' …   (no listener on 8883)       -> rc=1
+21 runs of the 1883 probe: 0 "New connection" lines; one nc -z 127.0.0.1 1883 as control: 1
+after the broker stopped                                                   -> rc=1
+```
+
+A client socket on the same port does not match: its line reads `0100007F:ADC3 0100007F:075B 06`
+(the client's own port first, a non-zero remote, a state other than `0A`). `/bin/grep` is
+busybox. With `-qs`, a match in either file exits 0 even when the other file is missing; no match
+with a missing file exits 2. This is what `ListenerProbeCommand` renders (ADR 0008 D17);
+`TestListenerProbeSeesTheBrokerWithoutConnecting` repeats it on every pull request.
+
 ## Not measured
 
 - Anything on a production cluster. M22 and M23 ran on Kind; the rest is single-container docker.
-- Bridge behaviour, loop handling, retained-message propagation across a bridge.
+- Bridge behaviour and loop handling inside the operator — it renders no bridge. A relay outside
+  it (two `topic # both 1` bridges, `try_private true`, this image) was measured on 2026-11-12 for
+  the Home Assistant migration and is recorded in the owner's repository: each message arrived once
+  on both sides, and a restarted broker replays its persisted retained values to the other side.
 - `persist-sqlite` under load or crash.
 - Whether SIGHUP reload is atomic with respect to a half-written file. The design avoids the
   question rather than answering it: the file is written to a temporary name and renamed

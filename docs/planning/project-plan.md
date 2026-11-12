@@ -107,6 +107,10 @@ this operator running anywhere but CI.
     without DISCONNECT is back on the new broker before the old one fires its retained `offline`,
     which the relay then copies over. Restarting the device once more after its old session is gone
     fixes it. A property of running two brokers through a relay, not of this operator.
+  - **The TCP probes wrote 36 lines a minute into the broker log**, on the level of client logins.
+    Fixed the same day: the probes read the listener's socket state instead of connecting
+    ([ADR 0008](../adr/0008-the-generated-broker-is-anonymous-and-spec-config-can-undo-the-rest.md)
+    D17, [broker-behaviour.md](../developer/broker-behaviour.md) M31).
 - *(Decided by the owner 2026-11-12, recorded in the owner's repository.)* A temporary relay — a
   plain Mosquitto with two `topic # both` bridges, outside this operator — keeps both brokers in
   sync while clients move one at a time. Measured locally on 2026-11-12 with the pinned image:
