@@ -3,7 +3,7 @@ module github.com/guided-traffic/mosquitto-operator
 go 1.27.4
 
 require (
-	github.com/eclipse/paho.mqtt.golang v1.5.1
+	github.com/eclipse/paho.mqtt.golang v1.5.2
 	github.com/prometheus/client_golang v1.25.0
 	github.com/stretchr/testify v1.12.1
 	k8s.io/api v0.37.2
